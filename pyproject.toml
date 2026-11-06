@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "privatecode"
+version = "0.1.0"
+description = "Claude Code on NanoGPT's end-to-end encrypted private models: a local proxy that seals each request to an attested enclave, and a switch to start Claude Code on it."
+readme = "README.md"
+license = "AGPL-3.0-or-later"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+dependencies = [
+    # The chat-completions stream types the private models reply in (llm/client.py)
+    "openai>=3.37",
+    # The proxy (proxy.py) and its clients
+    "starlette>=1.9",
+    "uvicorn>=0.54",
+    "httpx>=0.28.1",
+    # The NanoGPT key lives in the OS keyring (creds.py)
+    "keyring>=25.7",
+    # NanoGPT sends brotli-compressed replies; 1.2.1 fixes CVE-2026-111497, an out-of-bounds
+    # write in the Brotli decoder (Oct 2026)
+    "brotli>=1.2.1",
+    # The CA bundle httpx and tinfoil's requests trust. 2026.10.19 drops emSign ECC Root CA - G3,
+    # whose eMudhra intermediates had recoverable keys (Oct 2026)
+    "certifi>=2026.10.19",
+    # NanoGPT Private Mode (llm/private_mode.py): Tinfoil's attestation verifier and EHBP client.
+    # Pinned exactly: they hold the plaintext. tinfoil asks only for tinfoil-ehbp>=0.3.0, so the
+    # library that seals and opens the bodies, and the HPKE under it, are pinned too, at the
+    # versions DA Vibe Manager runs against the enclave (adopted there Oct 22 2026, after a live run)
+    "tinfoil==0.15.0",
+    "tinfoil-ehbp==0.4.1",
+    "pyhpke==0.6.5",
+]
+
+[dependency-groups]
+dev = ["pytest>=8", "pytest-asyncio>=0.23"]
+
+[project.scripts]
+privatecode = "privatecode.cli:main"
+claude-private = "privatecode.cli:claude_private"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]

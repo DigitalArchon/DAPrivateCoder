@@ -1,0 +1,403 @@
+"""Claude Code speaks the Anthropic Messages API; NanoGPT's private (end-to-end encrypted)
+models speak OpenAI chat completions, sealed on this machine by llm/private_mode.py. This
+translates between the two, so Claude Code can run on a private model while its requests are
+sealed to an attested enclave before they leave.
+
+From DA Vibe Manager's llm/anthropic_bridge.py, with these changes. Anthropic's server tools (its
+web search, run on Anthropic's side) are left out of the request: nothing here would run them, and
+so is the billing block Claude Code puts first in its system prompt for Anthropic. Its system
+messages within the conversation (its environment) go in the user's turn, which every chat
+template takes. The reply's usage says which input tokens came from the prompt cache, as
+Anthropic's does, so Claude Code's figures are right. And the stream is kept alive with a ping
+whenever the model is quiet (attestation, the preflight, a model that reasons without streaming
+it), not only between deltas.
+
+Images in a request (screenshots, PNGs Claude Code read) go as they are to a model that can see
+(`native`). A text-only model never gets them: a vision helper, a private model too, describes
+each one for what the assistant is doing, and the description takes the image's place.
+Descriptions are cached by the image's hash, since the whole conversation, images included, is
+sent again with every request.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import base64
+import hashlib
+import json
+import secrets
+import time
+from contextlib import aclosing
+from typing import AsyncIterator, Awaitable, Callable
+
+VISION_PROMPT = """\
+You are the eyes of an AI coding assistant that cannot see images. It is working on software on \
+the user's computer, and has just looked at this image. Describe what it needs to know to carry on: \
+transcribe all visible text exactly (titles, labels, menus, buttons, error messages, terminal \
+output, code), then describe the layout and the state of the controls (what is selected, enabled, \
+highlighted), anything that looks wrong or broken (missing icons, overlapping or cut-off text, \
+blank areas, error dialogs), and anything relevant to what it is doing. Be precise and factual; \
+say plainly what you can't make out. Do not give advice."""
+
+Describe = Callable[[str, str], Awaitable[str]]   # (data URL, context) -> description
+
+
+BILLING_BLOCK = "x-anthropic-billing-header:"
+
+
+def _text_of(content) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text")
+    return ""
+
+
+def _system_text(system) -> str:
+    """The system prompt, without Claude Code's billing block for Anthropic ("x-anthropic-billing-
+    header: cc_version=2.1.296.cf4; …"): it means nothing to another model, and its fingerprint,
+    first in the prompt, would differ between conversations that are otherwise the same."""
+    if isinstance(system, list):
+        system = [b for b in system if not (isinstance(b, dict) and str(b.get("text", "")).startswith(BILLING_BLOCK))]
+    return _text_of(system)
+
+
+def _add_user_text(messages: list[dict], text: str) -> None:
+    """`text` at the end of the user's turn: in the last message if that is the user's, else in one of its own."""
+    last = messages[-1] if messages else None
+    if last is not None and last.get("role") == "user":
+        if isinstance(last.get("content"), list):
+            last["content"] = [*last["content"], {"type": "text", "text": text}]
+        else:
+            last["content"] = f"{last.get('content') or ''}\n\n{text}" if last.get("content") else text
+    else:
+        messages.append({"role": "user", "content": text})
+
+
+def _data_url(block: dict) -> str | None:
+    src = block.get("source") or {}
+    if src.get("type") == "base64" and src.get("data"):
+        return f"data:{src.get('media_type', 'image/png')};base64,{src['data']}"
+    return None                          # a URL is never fetched: Claude Code's own images come as base64
+
+
+class ImageDescriber:
+    """Describes images through the vision helper, once per image."""
+
+    def __init__(self, describe: Describe | None, model: str = ""):
+        self._describe = describe
+        self.model = model
+        self._cache: dict[str, str] = {}
+
+    async def text_for(self, block: dict, context: str) -> str:
+        url = _data_url(block)
+        if url is None:
+            return "[An image was here, but it couldn't be read.]"
+        digest = hashlib.sha256(url.encode()).hexdigest()
+        if digest not in self._cache:
+            if self._describe is None:
+                return "[An image was here. You can't see images, and no vision helper is set up.]"
+            try:
+                self._cache[digest] = await self._describe(url, context)
+            except Exception as e:  # noqa: BLE001 - the assistant should know, and can carry on without it
+                return f"[An image was here, but the vision helper couldn't describe it: {e}]"
+        return f"[Image, described for you by a vision model ({self.model}):]\n{self._cache[digest]}"
+
+
+def _image_part(block: dict) -> dict | None:
+    """An Anthropic image block as a chat-completions content part (None: it has no data to send)."""
+    url = _data_url(block)
+    return {"type": "image_url", "image_url": {"url": url}} if url else None
+
+
+def _user_content(parts: list) -> str | list[dict]:
+    """A user message's content: plain text, or text and image parts when it carries images."""
+    if all(isinstance(p, str) for p in parts):
+        return "\n\n".join(parts)
+    return [{"type": "text", "text": p} if isinstance(p, str) else p for p in parts]
+
+
+def is_server_tool(tool: dict) -> bool:
+    """One of Anthropic's own tools (web_search_20250305, code_execution…), run on its servers:
+    it has a type of its own and no input schema. A tool Claude Code runs itself has neither, or
+    the type "custom"."""
+    kind = tool.get("type")
+    return bool(kind) and kind != "custom"
+
+
+async def to_openai(body: dict, images: ImageDescriber, native: bool = False) -> tuple[list[dict], list[dict] | None, dict]:
+    """An Anthropic Messages request as (messages, tools, params) for a chat-completions model;
+    `native`: the model reads images itself, so they go as image parts, not descriptions."""
+    messages: list[dict] = []
+    system = _system_text(body.get("system"))
+    if system:
+        messages.append({"role": "system", "content": system})
+    context = ""                          # what the assistant last said: the vision helper's brief
+    for m in body.get("messages", []):
+        role, content = m.get("role"), m.get("content")
+        if role == "system":
+            # Claude Code's system messages within the conversation (its environment: the working
+            # directory, the date). A model's chat template may refuse a system message anywhere but
+            # first, so each goes in the user's turn, as Claude Code tells a model without that beta
+            text = _text_of(content)
+            if text:
+                _add_user_text(messages, f"<system-reminder>\n{text}\n</system-reminder>")
+            continue
+        if isinstance(content, str):
+            messages.append({"role": role, "content": content})
+            if role == "assistant":
+                context = content[-1500:]
+            continue
+        if role == "assistant":
+            text, calls = [], []
+            for b in content or []:
+                if b.get("type") == "text":
+                    text.append(b.get("text", ""))
+                elif b.get("type") == "tool_use":
+                    calls.append({"id": b.get("id") or f"toolu_{secrets.token_hex(8)}", "type": "function",
+                                  "function": {"name": b.get("name", ""), "arguments": json.dumps(b.get("input") or {})}})
+            msg: dict = {"role": "assistant", "content": "\n\n".join(t for t in text if t) or None}
+            if calls:
+                msg["tool_calls"] = calls
+            if msg["content"] is None and not calls:
+                msg["content"] = ""
+            messages.append(msg)
+            context = (msg["content"] or context)[-1500:]
+            continue
+        # a user message: tool results become "tool" messages (OpenAI wants them right after the
+        # call), and everything else one user message after them. A tool message holds text only,
+        # so a model that sees gets a tool result's images in that user message, each labelled
+        rest: list[str | dict] = []
+        for b in content or []:
+            kind = b.get("type")
+            if kind == "tool_result":
+                parts = b.get("content")
+                if isinstance(parts, list):
+                    texts = []
+                    for p in parts:
+                        if p.get("type") == "image":
+                            part = _image_part(p) if native else None
+                            if part:
+                                texts.append("[An image: it follows the tool results, in the next message.]")
+                                rest += [f"[The image from the result of {b.get('tool_use_id', 'the tool call')}:]", part]
+                            else:
+                                texts.append(await images.text_for(p, context))
+                        elif p.get("type") == "text":
+                            texts.append(p.get("text", ""))
+                    out = "\n".join(texts)
+                else:
+                    out = str(parts or "")
+                if b.get("is_error"):
+                    out = f"[error] {out}"
+                messages.append({"role": "tool", "tool_call_id": b.get("tool_use_id", ""), "content": out or "(no output)"})
+            elif kind == "text":
+                rest.append(b.get("text", ""))
+            elif kind == "image":
+                part = _image_part(b) if native else None
+                rest.append(part or await images.text_for(b, context))
+            elif kind == "document":
+                rest.append("[A document was attached here; it can't be shown to this model.]")
+        if rest:
+            messages.append({"role": "user", "content": _user_content(rest)})
+    tools = [{"type": "function", "function": {"name": t["name"], "description": t.get("description", ""),
+                                               "parameters": t.get("input_schema") or {"type": "object"}}}
+             for t in body.get("tools") or [] if t.get("name") and not is_server_tool(t)]
+    params: dict = {}
+    if body.get("max_tokens"):
+        params["max_tokens"] = int(body["max_tokens"])
+    if body.get("temperature") is not None:
+        params["temperature"] = body["temperature"]
+    if body.get("top_p") is not None:
+        params["top_p"] = body["top_p"]
+    if body.get("stop_sequences"):
+        params["stop"] = body["stop_sequences"][:4]
+    choice = body.get("tool_choice") or {}
+    if tools and choice.get("type") == "any":
+        params["tool_choice"] = "required"
+    elif tools and choice.get("type") == "tool" and choice.get("name"):
+        params["tool_choice"] = {"type": "function", "function": {"name": choice["name"]}}
+    elif choice.get("type") == "none":
+        tools = []
+    # Claude Code's "thinking" setting isn't passed on: the proxy sets the effort (never "none":
+    # GLM with its thinking off reasons all the more, in its answer)
+    return messages, tools or None, params
+
+
+def estimate_tokens(body: dict) -> int:
+    """A rough count for /v1/messages/count_tokens (about four characters a token)."""
+    return max(1, len(json.dumps(body, ensure_ascii=False)) // 4)
+
+
+def anthropic_usage(usage: dict | None, input_estimate: int) -> dict:
+    """The provider's chat-completions usage as Anthropic reports it: input_tokens without the
+    part read from the prompt cache, which is cache_read_input_tokens (Claude Code adds the two up
+    for the context it shows). No usage from the provider: the estimate, as input."""
+    u = usage if isinstance(usage, dict) else {}
+
+    def n(v) -> int:
+        return v if isinstance(v, int) and not isinstance(v, bool) and v > 0 else 0
+    output = n(u.get("completion_tokens"))
+    if not isinstance(u.get("prompt_tokens"), int):
+        return {"input_tokens": input_estimate, "output_tokens": output}
+    prompt = n(u.get("prompt_tokens"))
+    cached = min(n((u.get("prompt_tokens_details") or {}).get("cached_tokens")), prompt)
+    return {"input_tokens": prompt - cached, "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": cached, "output_tokens": output}
+
+
+_STOP = {"stop": "end_turn", "tool_calls": "tool_use", "length": "max_tokens", "content_filter": "end_turn"}
+
+
+def _sse(event: str, data: dict) -> bytes:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n".encode()
+
+
+def _calls_and_stop(result) -> tuple[list, str]:
+    """The tool calls to hand over, and why the reply stopped. Cut off at its length ("length"), it says
+    so (max_tokens) whatever it holds: a call cut short in it, whose input can't be read, isn't handed
+    over as one with no input (run with nothing it fails, and the model, never told why, writes it again)."""
+    if result is None:
+        return [], "end_turn"
+    finish = result.finish_reason or "stop"
+    calls = list(result.tool_calls or [])
+    if finish == "length":
+        return [c for c in calls if _readable(c.arguments)], "max_tokens"
+    return calls, "tool_use" if calls else _STOP.get(finish, "end_turn")
+
+
+def _readable(raw: str) -> bool:
+    try:
+        return isinstance(json.loads(raw or "{}"), dict)
+    except ValueError:
+        return False
+
+
+def _arguments(raw: str) -> dict:
+    try:
+        value = json.loads(raw or "{}")
+        return value if isinstance(value, dict) else {"value": value}
+    except ValueError:
+        return {}
+
+
+async def _paced(events: AsyncIterator[tuple[str, object]], every: float) -> AsyncIterator[tuple[str, object]]:
+    """The events as they come, and ("quiet", None) each time `every` seconds pass without one.
+    The pending read is never cancelled to make the beat (that would end the stream), only when
+    the stream itself is closed early."""
+    it = events.__aiter__()
+    pending: asyncio.Future | None = None
+    try:
+        while True:
+            if pending is None:
+                pending = asyncio.ensure_future(it.__anext__())
+            done, _ = await asyncio.wait({pending}, timeout=every)
+            if not done:
+                yield "quiet", None
+                continue
+            task, pending = pending, None
+            try:
+                item = task.result()
+            except StopAsyncIteration:
+                return
+            yield item
+    finally:
+        if pending is not None:
+            pending.cancel()
+            try:
+                await pending
+            except BaseException:  # noqa: BLE001 - the stream is being closed; its end doesn't matter
+                pass
+        aclose = getattr(it, "aclose", None)
+        if aclose is not None:
+            await aclose()
+
+
+async def sse(events: AsyncIterator[tuple[str, object]], model: str, input_estimate: int,
+              ping_every: float = 5.0, stats: dict | None = None) -> AsyncIterator[bytes]:
+    """The private model's stream as Anthropic server-sent events. Reasoning isn't passed on
+    (Anthropic thinking blocks carry signatures this can't make); pings keep the stream alive."""
+    msg_id = f"msg_{secrets.token_hex(12)}"
+    yield _sse("message_start", {"type": "message_start", "message": {
+        "id": msg_id, "type": "message", "role": "assistant", "model": model, "content": [],
+        "stop_reason": None, "stop_sequence": None, "usage": {"input_tokens": input_estimate, "output_tokens": 0}}})
+    index, text_open, last_ping = 0, False, time.monotonic()
+    result = None
+    stats = stats if stats is not None else {}
+    started = time.monotonic()
+    stats.update(first_token=None, reasoning_chars=0, text_chars=0)
+    # closed as soon as Claude Code stops reading (gone mid-reply), and the sealed request with it
+    paced = _paced(events, max(ping_every, 0.5))
+    try:
+        async with aclosing(paced):
+            async for kind, val in paced:
+                if kind == "quiet":
+                    last_ping = time.monotonic()
+                    yield _sse("ping", {"type": "ping"})
+                    continue
+                if stats["first_token"] is None:
+                    stats["first_token"] = round(time.monotonic() - started, 1)
+                if kind == "reasoning":
+                    stats["reasoning_chars"] += len(val)
+                elif kind == "text":
+                    stats["text_chars"] += len(val)
+                if kind == "text" and val:
+                    if not text_open:
+                        yield _sse("content_block_start", {"type": "content_block_start", "index": index,
+                                                           "content_block": {"type": "text", "text": ""}})
+                        text_open = True
+                    yield _sse("content_block_delta", {"type": "content_block_delta", "index": index,
+                                                       "delta": {"type": "text_delta", "text": val}})
+                elif kind == "done":
+                    result = val
+                elif time.monotonic() - last_ping > ping_every:
+                    last_ping = time.monotonic()
+                    yield _sse("ping", {"type": "ping"})
+    except Exception as e:  # noqa: BLE001 - told to Claude Code the way Anthropic tells errors mid-stream
+        stats["error"] = str(e)
+        yield _sse("error", {"type": "error", "error": {"type": "api_error", "message": f"Private model: {e}"}})
+        return
+    if text_open:
+        yield _sse("content_block_stop", {"type": "content_block_stop", "index": index})
+        index += 1
+    calls, stop = _calls_and_stop(result)
+    for call in calls:
+        yield _sse("content_block_start", {"type": "content_block_start", "index": index, "content_block": {
+            "type": "tool_use", "id": call.id or f"toolu_{secrets.token_hex(8)}", "name": call.name, "input": {}}})
+        yield _sse("content_block_delta", {"type": "content_block_delta", "index": index, "delta": {
+            "type": "input_json_delta", "partial_json": json.dumps(_arguments(call.arguments))}})
+        yield _sse("content_block_stop", {"type": "content_block_stop", "index": index})
+        index += 1
+    usage = (result.usage if result else None) or {}
+    if usage:
+        stats["usage"] = usage
+    yield _sse("message_delta", {"type": "message_delta", "delta": {"stop_reason": stop, "stop_sequence": None},
+                                 "usage": anthropic_usage(usage, input_estimate)})
+    yield _sse("message_stop", {"type": "message_stop"})
+
+
+async def message(events: AsyncIterator[tuple[str, object]], model: str, input_estimate: int,
+                  stats: dict | None = None) -> dict:
+    """The private model's reply as one Anthropic message (for requests that don't stream). `stats` gets
+    the provider's own usage, as sse gives it (its cached tokens, what NanoGPT billed)."""
+    text, result = "", None
+    async for kind, val in events:
+        if kind == "text":
+            text += val
+        elif kind == "done":
+            result = val
+    content: list[dict] = [{"type": "text", "text": text}] if text else []
+    calls, stop = _calls_and_stop(result)
+    for call in calls:
+        content.append({"type": "tool_use", "id": call.id or f"toolu_{secrets.token_hex(8)}", "name": call.name,
+                        "input": _arguments(call.arguments)})
+    usage = (result.usage if result else None) or {}
+    if stats is not None and usage:
+        stats["usage"] = usage
+    return {"id": f"msg_{secrets.token_hex(12)}", "type": "message", "role": "assistant", "model": model,
+            "content": content, "stop_reason": stop, "stop_sequence": None,
+            "usage": anthropic_usage(usage, input_estimate)}
+
+
+def b64_image(data: bytes, media: str = "image/png") -> dict:
+    """An Anthropic image block (tests)."""
+    return {"type": "image", "source": {"type": "base64", "media_type": media, "data": base64.b64encode(data).decode()}}
