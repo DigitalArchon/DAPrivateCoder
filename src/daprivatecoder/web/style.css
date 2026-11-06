@@ -127,7 +127,7 @@ code { font-family: var(--mono); font-size: 12.5px; background: var(--code); pad
 .status.ok .dot { background: var(--private); }
 .status.wait .dot { background: var(--warn); }
 .status.bad .dot { background: var(--danger); }
-.icon-btn { background: transparent; border: none; font-size: 18px; padding: 2px 8px; color: var(--muted); }
+.icon-btn { background: transparent; border: none; font-size: 18px; padding: 4px 8px; color: var(--muted); display: flex; }
 .icon-btn:hover { color: var(--text); }
 .banner { padding: 6px 12px; font-size: 13px; background: var(--note-bg); color: var(--note-text); border-bottom: 1px solid var(--border); }
 .chip { font-size: 11.5px; border-radius: 10px; padding: 0 7px; border: 1px solid var(--border); white-space: nowrap; }
