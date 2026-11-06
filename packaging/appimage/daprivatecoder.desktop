@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=DA Private Coder
+GenericName=Private AI coding assistant
+Comment=Claude Code on end-to-end encrypted models: set it up, start it, and see what it costs
+Exec=daprivatecoder
+Icon=daprivatecoder
+StartupWMClass=daprivatecoder
+Terminal=false
+Categories=Development;
+Keywords=claude;code;ai;private;encrypted;nanogpt;assistant;programming;
+X-AppImage-Name=DA Private Coder
+X-AppImage-Version=@VERSION@

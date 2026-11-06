@@ -182,8 +182,7 @@ const ROLES = [
 
 function modelLabel(m) {
   const p = m.price ? ` · $${price(m.price.input)} / $${price(m.price.cache_read)} / $${price(m.price.output)}` : "";
-  const ctx = m.context ? ` · ${Math.round(m.context / 1000)}k` : "";
-  return `${m.id}${p}${ctx}${m.vision ? " · sees images" : ""}${m.tools === false ? " · no tool calls" : ""}`;
+  return `${m.id}${p}${m.vision ? " · sees images" : ""}${m.tools === false ? " · no tool calls" : ""}`;
 }
 
 function modelsSection(st) {

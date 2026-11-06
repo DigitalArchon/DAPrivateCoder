@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>au.com.digitalarchon.daprivatecoder</id>
+  <name>DA Private Coder</name>
+  <summary>Claude Code on end-to-end encrypted models</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>AGPL-3.0-or-later</project_license>
+  <developer id="au.com.digitalarchon"><name>Digital Archon</name></developer>
+  <description>
+    <p>Runs Claude Code, in a terminal or in VSCodium and VS Code, on NanoGPT's Private Mode models.
+    Every request is sealed on your computer to a confidential-computing enclave whose attestation
+    is checked first, so NanoGPT only relays it: your code, files and prompts stay between you and
+    the enclave. Plain Claude Code keeps running as usual.</p>
+    <p>Its window sets it up (your NanoGPT key, the command, the switch for your editor), lets you
+    choose the models and how it searches the web, checks the enclave, and shows what each request
+    cost, never what was said.</p>
+  </description>
+  <launchable type="desktop-id">daprivatecoder.desktop</launchable>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="@VERSION@" date="@DATE@"/>
+  </releases>
+</component>
