@@ -357,3 +357,13 @@ async def test_each_new_attestation_is_reported_once():
     await enclave.current()
     await enclave.current()                                     # kept: not attested again
     assert len(seen) == 1 and seen[0].enclave == "enclave.tinfoil.example"
+
+
+def test_the_appimage_locks_the_encryption_stack_as_pyproject_pins_it():
+    """The AppImage is built from packaging/appimage/requirements.lock, not uv.lock: the same exact versions."""
+    deps = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["dependencies"]
+    lock = (ROOT / "packaging/appimage/requirements.lock").read_text()
+    for name in ENCRYPTION_STACK:
+        locked = re.search(rf"^{re.escape(name)}==(\S+) \\$", lock, re.MULTILINE)
+        assert locked, f"{name} is not in the AppImage lock"
+        assert f"{name}=={locked.group(1)}" in deps, f"pyproject.toml pins {name} otherwise than the AppImage lock"
