@@ -6,8 +6,8 @@ import json
 
 from openai.types.chat import ChatCompletionChunk
 
-from privatecode.llm import anthropic_bridge as bridge
-from privatecode.llm.client import StreamAccumulator, ToolCall, TurnResult
+from daprivatecoder.llm import anthropic_bridge as bridge
+from daprivatecoder.llm.client import StreamAccumulator, ToolCall, TurnResult
 
 PNG = b"\x89PNG\r\n\x1a\n fake"
 

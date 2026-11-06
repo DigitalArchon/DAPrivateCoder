@@ -5,7 +5,7 @@ the switch is for every window of that editor; sessions started after the switch
 
 The settings file is JSON with comments, often edited by hand: only that one entry is changed, in
 place, and the rest of the text is kept as it was. The result is checked (every other setting the
-same) before it is written, and the file as it was is kept beside it (settings.json.privatecode-backup)."""
+same) before it is written, and the file as it was is kept beside it (settings.json.daprivatecoder-backup)."""
 
 from __future__ import annotations
 
@@ -191,14 +191,14 @@ def editors() -> list[tuple[str, Path]]:
 
 
 def wrapper_path() -> str:
-    """claude-private, as installed with this PrivateCode."""
+    """claude-private, as installed with this DA Private Coder."""
     beside = Path(sys.executable).parent / "claude-private"
     if beside.is_file() and os.access(beside, os.X_OK):
         return str(beside)
     found = shutil.which("claude-private")
     if found:
         return os.path.abspath(found)
-    raise EditorError("claude-private isn't installed where the editor could run it; install PrivateCode first "
+    raise EditorError("claude-private isn't installed where the editor could run it; install DA Private Coder first "
                       "(see the README).")
 
 
@@ -250,7 +250,7 @@ def switch(path: Path, wrapper: str | None) -> bool:
         raise EditorError(f"Editing {path} in place didn't give the settings it should, so it wasn't changed. "
                           f"Set {KEY} in the editor's Settings instead.")
     if text:
-        backup = path.with_name(path.name + ".privatecode-backup")
+        backup = path.with_name(path.name + ".daprivatecoder-backup")
         backup.write_text(text, encoding="utf-8")
     _write(path, new)
     return True

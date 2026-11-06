@@ -1,14 +1,14 @@
 """The commands.
 
   claude-private [Claude Code's arguments]      Claude Code on NanoGPT's private models
-  privatecode claude [--profile NAME] [...]     the same on any profile (nano: NanoGPT's other models)
-  privatecode editor on|off|status              the switch for Claude Code in VSCodium and VS Code
-  privatecode key set|clear|status              the NanoGPT API key, in your keyring
-  privatecode status                            what is set up here
-  privatecode check [--profile NAME]            attest the enclave, list the private models and prices
-  privatecode log [-n N]                        what each session asked of which model, and the cost
-  privatecode serve ...                         the proxy itself (claude-private starts it)
-  privatecode search-server ...                 the web search tool (Claude Code starts it)
+  daprivatecoder claude [--profile NAME] [...]     the same on any profile (nano: NanoGPT's other models)
+  daprivatecoder editor on|off|status              the switch for Claude Code in VSCodium and VS Code
+  daprivatecoder key set|clear|status              the NanoGPT API key, in your keyring
+  daprivatecoder status                            what is set up here
+  daprivatecoder check [--profile NAME]            attest the enclave, list the private models and prices
+  daprivatecoder log [-n N]                        what each session asked of which model, and the cost
+  daprivatecoder serve ...                         the proxy itself (claude-private starts it)
+  daprivatecoder search-server ...                 the web search tool (Claude Code starts it)
 """
 
 from __future__ import annotations
@@ -57,7 +57,7 @@ def _claude(argv: list[str]) -> int:
         profile, argv = argv[1], argv[2:]
     elif argv and argv[0].startswith("--profile="):
         profile, argv = argv[0].split("=", 1)[1], argv[1:]
-    return _launch("privatecode", profile, argv)
+    return _launch("daprivatecoder", profile, argv)
 
 
 # ---------------------------------------------------------------------- the key
@@ -67,7 +67,7 @@ def _key(args) -> int:
     if args.action == "status":
         key = creds.get_key()
         print(f"A NanoGPT key is stored in your keyring (ending {key[-4:]})." if key
-              else "No NanoGPT key is stored. Store one with: privatecode key set")
+              else "No NanoGPT key is stored. Store one with: daprivatecoder key set")
         return 0
     if args.action == "clear":
         creds.delete_key()
@@ -102,7 +102,7 @@ def _editor(args) -> int:
     if args.action == "status":
         for name, path in found:
             value = editor.current(path)
-            state = "on (PrivateCode)" if ours(value) else f"another wrapper: {value}" if value else "off"
+            state = "on (DA Private Coder)" if ours(value) else f"another wrapper: {value}" if value else "off"
             print(f"{name}: {state}")
         return 0
     wrapper = editor.wrapper_path() if args.action == "on" else None
@@ -115,7 +115,7 @@ def _editor(args) -> int:
         print(f"{name}: {'changed' if changed else 'already so'} ({path})")
     if wrapper:
         print("Claude Code sessions started in the editor from now on run on NanoGPT's private models "
-              "(open a new Claude Code tab, or reload the window).\nTo switch back: privatecode editor off")
+              "(open a new Claude Code tab, or reload the window).\nTo switch back: daprivatecoder editor off")
     else:
         print("Claude Code sessions started in the editor from now on run as usual, on Anthropic's models.")
     return 0
@@ -126,7 +126,7 @@ def _editor(args) -> int:
 def _status(args) -> int:
     from . import creds, editor, launcher
     cfg = config.load()
-    print(f"PrivateCode {__version__}\nSettings: {cfg.path}\nNanoGPT: {cfg.base_url}")
+    print(f"DA Private Coder {__version__}\nSettings: {cfg.path}\nNanoGPT: {cfg.base_url}")
     searches = {"zero-retention": "Linkup (keeps nothing)", "best": "Perplexity and Kagi (not zero retention)",
                 "off": "off"}
     for p in cfg.profiles.values():
@@ -139,7 +139,7 @@ def _status(args) -> int:
         print(f"Claude Code: {e}")
     try:
         key = creds.get_key()
-        print("NanoGPT key: stored in your keyring" if key else "NanoGPT key: none (privatecode key set)")
+        print("NanoGPT key: stored in your keyring" if key else "NanoGPT key: none (daprivatecoder key set)")
     except creds.KeyringUnavailable as e:
         print(f"NanoGPT key: {e}")
     for name, path in editor.editors():
@@ -245,10 +245,10 @@ def _serve(args) -> int:
         launcher.die_with_parent(args.parent)
     cfg = config.load(Path(args.config) if args.config else None)
     profile = cfg.profile(args.profile)
-    token = os.environ.pop("PRIVATECODE_TOKEN", "")
+    token = os.environ.pop("DAPRIVATECODER_TOKEN", "")
     if args.fd is not None:
         if not token:
-            raise CliError("serve --fd needs its token in PRIVATECODE_TOKEN.")
+            raise CliError("serve --fd needs its token in DAPRIVATECODER_TOKEN.")
         sock = socket.socket(fileno=args.fd)
     else:
         sock = proxy.listen(args.port)
@@ -261,18 +261,18 @@ def _serve(args) -> int:
 
     def ready(port: int) -> None:
         if args.fd is None:
-            print(f"PrivateCode's proxy for [{profile.name}] is on http://127.0.0.1:{port}\n"
+            print(f"DA Private Coder's proxy for [{profile.name}] is on http://127.0.0.1:{port}\n"
                   f"  ANTHROPIC_BASE_URL=http://127.0.0.1:{port}\n  ANTHROPIC_AUTH_TOKEN={token}", flush=True)
     asyncio.run(proxy.serve(p, sock, ready=ready, parent=args.parent))
     return 0
 
 
 def _parser() -> argparse.ArgumentParser:
-    ap = argparse.ArgumentParser(prog="privatecode", description="Claude Code on NanoGPT's end-to-end encrypted "
+    ap = argparse.ArgumentParser(prog="daprivatecoder", description="Claude Code on NanoGPT's end-to-end encrypted "
                                  "private models. Start it with: claude-private")
-    ap.add_argument("--version", action="version", version=f"PrivateCode {__version__}")
+    ap.add_argument("--version", action="version", version=f"DA Private Coder {__version__}")
     sub = ap.add_subparsers(dest="command", required=True)
-    sub.add_parser("claude", help="start Claude Code on a profile: privatecode claude [--profile NAME] [its arguments]")
+    sub.add_parser("claude", help="start Claude Code on a profile: daprivatecoder claude [--profile NAME] [its arguments]")
     k = sub.add_parser("key", help="the NanoGPT API key, in your keyring")
     k.add_argument("action", choices=("set", "clear", "status"))
     k.add_argument("--from-vibe-manager", action="store_true", help="set: copy the key DA Vibe Manager stored")
@@ -311,6 +311,6 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return args.func(args) or 0
     except (ConfigError, CliError, creds.KeyringUnavailable, editor.EditorError) as e:
-        return _fail("privatecode", e)
+        return _fail("daprivatecoder", e)
     except KeyboardInterrupt:
         return 130

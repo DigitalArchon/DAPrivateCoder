@@ -5,8 +5,8 @@ import json
 
 import pytest
 
-from privatecode import cli, creds, editor
-from privatecode.usagelog import UsageLog
+from daprivatecoder import cli, creds, editor
+from daprivatecoder.usagelog import UsageLog
 
 
 class Stdin(io.StringIO):
@@ -17,7 +17,7 @@ class Stdin(io.StringIO):
 def test_the_key_is_kept_in_the_keyring(ring, monkeypatch, capsys):
     monkeypatch.setattr("sys.stdin", Stdin("sk-nano-123456\n"))
     assert cli.main(["key", "set"]) == 0
-    assert ring.store[("privatecode", "nanogpt")] == "sk-nano-123456"
+    assert ring.store[("daprivatecoder", "nanogpt")] == "sk-nano-123456"
     assert cli.main(["key", "status"]) == 0 and "ending 3456" in capsys.readouterr().out
     assert cli.main(["key", "clear"]) == 0 and creds.get_key() is None
     monkeypatch.setattr("sys.stdin", Stdin("not a key\n"))
@@ -39,7 +39,7 @@ def test_the_editor_switch(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(editor, "wrapper_path", lambda: "/opt/pc/bin/claude-private")
     assert cli.main(["editor", "on"]) == 0
     assert editor.current(settings) == "/opt/pc/bin/claude-private" and "// mine" in settings.read_text()
-    assert "privatecode editor off" in capsys.readouterr().out
+    assert "daprivatecoder editor off" in capsys.readouterr().out
     assert cli.main(["editor", "status"]) == 0 and "VSCodium: on" in capsys.readouterr().out
     assert cli.main(["editor", "off"]) == 0 and editor.current(settings) is None
     settings.write_text('{"claudeCode.claudeProcessWrapper": "/corp/launcher"}')        # someone else's wrapper
@@ -49,7 +49,7 @@ def test_the_editor_switch(tmp_path, monkeypatch, capsys):
 
 
 def test_the_log_shows_tokens_and_cost(capsys):
-    from privatecode.config import state_dir
+    from daprivatecoder.config import state_dir
     log = UsageLog(state_dir() / "requests.log", "ab12")
     log.write("session", profile="private")
     log.write("request", model="private/glm-5-3", sealed=True, status=200, seconds=3.2,
@@ -64,7 +64,7 @@ def test_the_log_shows_tokens_and_cost(capsys):
 def test_status_says_what_is_set_up(monkeypatch, capsys):
     monkeypatch.setattr(editor, "EDITORS", ())
     monkeypatch.setenv("PATH", "/nonexistent")
-    monkeypatch.setattr("privatecode.launcher.EXTENSION_DIRS", ())
+    monkeypatch.setattr("daprivatecoder.launcher.EXTENSION_DIRS", ())
     assert cli.main(["status"]) == 0
     out = capsys.readouterr().out
     assert "[private] private: private/glm-5-3" in out and "NanoGPT key: none" in out
@@ -72,7 +72,7 @@ def test_status_says_what_is_set_up(monkeypatch, capsys):
 
 
 def test_a_broken_settings_file_is_said_plainly(capsys):
-    from privatecode.config import config_path
+    from daprivatecoder.config import config_path
     config_path().parent.mkdir(parents=True)
     config_path().write_text('[profiles.private]\nprivate = true\nmodel = "z-ai/glm-5.3"\n')
     assert cli.main(["status"]) == 1

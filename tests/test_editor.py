@@ -4,8 +4,8 @@ import json
 
 import pytest
 
-from privatecode import editor
-from privatecode.editor import KEY, EditorError, loads, remove_key, set_value
+from daprivatecoder import editor
+from daprivatecoder.editor import KEY, EditorError, loads, remove_key, set_value
 
 WRAPPER = "/home/user/.local/bin/claude-private"
 
@@ -58,7 +58,7 @@ def test_switch_keeps_a_backup_and_refuses_a_file_it_cant_read(tmp_path):
     path.parent.mkdir()
     path.write_text('{\n    "editor.fontSize": 14 // mine\n}\n')
     assert editor.switch(path, WRAPPER) is True
-    assert json.loads(path.with_name("settings.json.privatecode-backup").read_text().replace("// mine", "")) == \
+    assert json.loads(path.with_name("settings.json.daprivatecoder-backup").read_text().replace("// mine", "")) == \
         {"editor.fontSize": 14}
     assert editor.current(path) == WRAPPER and "// mine" in path.read_text()
     assert editor.switch(path, WRAPPER) is False                        # already so

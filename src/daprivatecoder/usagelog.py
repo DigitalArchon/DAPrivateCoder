@@ -1,5 +1,5 @@
 """What each session asked of which model, and what it cost: one JSON object a line in
-~/.local/state/privatecode/requests.log. Never what was said: no prompt, reply, file or image.
+~/.local/state/daprivatecoder/requests.log. Never what was said: no prompt, reply, file or image.
 
 Kinds of line: "session" (a proxy started: its profile and models), "attested" (the enclave's
 attestation: hardware, router release, key fingerprint), "request" (model, sealed or not, status,

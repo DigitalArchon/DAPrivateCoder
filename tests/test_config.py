@@ -2,9 +2,9 @@
 
 import pytest
 
-from privatecode import config
-from privatecode.config import ConfigError, parse
-from privatecode.netpolicy import InsecureURL, check_url, is_secure
+from daprivatecoder import config
+from daprivatecoder.config import ConfigError, parse
+from daprivatecoder.netpolicy import InsecureURL, check_url, is_secure
 
 
 def test_the_defaults_are_written_on_first_use_and_read_back():

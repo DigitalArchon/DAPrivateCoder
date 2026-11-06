@@ -7,13 +7,13 @@ import json
 import httpx
 import pytest
 
-from privatecode import proxy as proxy_mod
-from privatecode.config import Profile
-from privatecode.llm import anthropic_bridge as bridge
-from privatecode.llm import capabilities
-from privatecode.llm.client import TurnResult
-from privatecode.proxy import Proxy, upstream_url
-from privatecode.usagelog import UsageLog, read
+from daprivatecoder import proxy as proxy_mod
+from daprivatecoder.config import Profile
+from daprivatecoder.llm import anthropic_bridge as bridge
+from daprivatecoder.llm import capabilities
+from daprivatecoder.llm.client import TurnResult
+from daprivatecoder.proxy import Proxy, upstream_url
+from daprivatecoder.usagelog import UsageLog, read
 
 BASE = "https://nano-gpt.com/api/v1"
 TOKEN = "session-token-" + "x" * 30
@@ -150,7 +150,7 @@ async def test_a_reply_that_isnt_streamed_comes_whole():
 async def test_without_a_key_claude_code_is_told_how_to_store_one():
     p, fake = make(key=None)
     r = await call(p, "POST", "/v1/messages", message("private/glm-5-3"))
-    assert r.status_code == 403 and "privatecode key set" in r.json()["error"]["message"]
+    assert r.status_code == 403 and "daprivatecoder key set" in r.json()["error"]["message"]
     assert r.headers["x-should-retry"] == "false" and not fake.calls
 
 

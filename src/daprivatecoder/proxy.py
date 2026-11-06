@@ -188,7 +188,7 @@ class Proxy:
         except creds.KeyringUnavailable as e:
             raise Refused(403, str(e)) from None
         if not key:
-            raise Refused(403, "No NanoGPT API key is stored. Run `privatecode key set` in a terminal, then try again.")
+            raise Refused(403, "No NanoGPT API key is stored. Run `daprivatecoder key set` in a terminal, then try again.")
         return key
 
     def _private(self, model: str):
@@ -294,12 +294,12 @@ class Proxy:
                 or request.headers.get("x-api-key", "").strip()
             if not secrets.compare_digest(supplied.encode(), self.token.encode()):
                 return self._error(Refused(401, "This session's token doesn't match: only the Claude Code that "
-                                                "PrivateCode started can use this proxy.", "authentication_error"))
+                                                "DA Private Coder started can use this proxy.", "authentication_error"))
             if (request.method, path) == PROBE:
                 from starlette.responses import Response
                 return Response(status_code=200)
             if (request.method, path) not in MODEL_PATHS:
-                return self._error(Refused(404, f"PrivateCode passes on Claude Code's messages, not {request.method} {path}.",
+                return self._error(Refused(404, f"DA Private Coder passes on Claude Code's messages, not {request.method} {path}.",
                                            "not_found_error"))
             if path == "/v1/models":
                 return JSONResponse(await self.model_list())
@@ -469,8 +469,10 @@ async def serve(proxy: Proxy, sock: socket.socket, ready: Callable[[int], None] 
     """Serve until stopped (SIGTERM, SIGINT) or, given `parent`, until that process is gone."""
     import uvicorn
 
+    # its parts named, not whatever happens to import (a system's older websockets broke "auto")
     config = uvicorn.Config(proxy.app(), log_level="warning", lifespan="off", access_log=False,
-                            timeout_keep_alive=75, timeout_graceful_shutdown=3)
+                            timeout_keep_alive=75, timeout_graceful_shutdown=3, http="h11", ws="none",
+                            loop="asyncio")
     server = uvicorn.Server(config)
     task = asyncio.create_task(server.serve(sockets=[sock]))
     while not server.started:

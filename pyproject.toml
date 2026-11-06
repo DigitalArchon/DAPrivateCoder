@@ -3,7 +3,7 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "privatecode"
+name = "daprivatecoder"
 version = "0.1.0"
 description = "Claude Code on NanoGPT's end-to-end encrypted private models: a local proxy that seals each request to an attested enclave, and a switch to start Claude Code on it."
 readme = "README.md"
@@ -38,8 +38,8 @@ dependencies = [
 dev = ["pytest>=8", "pytest-asyncio>=0.23"]
 
 [project.scripts]
-privatecode = "privatecode.cli:main"
-claude-private = "privatecode.cli:claude_private"
+daprivatecoder = "daprivatecoder.cli:main"
+claude-private = "daprivatecoder.cli:claude_private"
 
 [tool.setuptools.packages.find]
 where = ["src"]

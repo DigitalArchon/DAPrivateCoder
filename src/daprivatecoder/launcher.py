@@ -1,8 +1,8 @@
-"""Starting Claude Code on the proxy: `claude-private`, `privatecode claude`, and the editor's
+"""Starting Claude Code on the proxy: `claude-private`, `daprivatecoder claude`, and the editor's
 process wrapper (claudeCode.claudeProcessWrapper), which runs this with the extension's own Claude
 Code binary as its first argument and Claude Code's arguments after it.
 
-The proxy is a child of this process (`privatecode serve`), and this process then becomes Claude
+The proxy is a child of this process (`daprivatecoder serve`), and this process then becomes Claude
 Code (exec), so the proxy lives exactly as long as Claude Code does: the kernel tells it when its
 parent dies (PR_SET_PDEATHSIG), and it checks besides. Its listening socket is made here and
 handed to it, so Claude Code starts at once: a connection waits in the socket's queue until the
@@ -82,13 +82,13 @@ def extension_binaries(dirs=None) -> list[Path]:
 
 def _is_ours(path: str) -> bool:
     name = os.path.basename(path)
-    return name in ("claude-private", "privatecode")
+    return name in ("claude-private", "daprivatecoder")
 
 
 def find_claude(configured: str = "", dirs=None) -> str:
     if configured:
         if not (os.path.isfile(configured) and os.access(configured, os.X_OK)):
-            raise LaunchError(f"The Claude Code program set in PrivateCode's settings ({configured}) isn't there, or "
+            raise LaunchError(f"The Claude Code program set in DA Private Coder's settings ({configured}) isn't there, or "
                               "can't be run.")
         return configured
     on_path = shutil.which("claude")
@@ -98,7 +98,7 @@ def find_claude(configured: str = "", dirs=None) -> str:
     if bundled:
         return str(bundled[0])
     raise LaunchError("Claude Code isn't installed: there's no `claude` on your PATH, and no Claude Code extension "
-                      "in VSCodium or VS Code. Install one, or set `claude` in PrivateCode's settings to its path.")
+                      "in VSCodium or VS Code. Install one, or set `claude` in DA Private Coder's settings to its path.")
 
 
 def split_wrapper_args(argv: list[str]) -> tuple[str | None, list[str]]:
@@ -129,7 +129,7 @@ def claude_env(profile: Profile, port: int, token: str) -> dict[str, str]:
         # /model lists what the proxy offers (for a private profile, every private model)
         "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
         **QUIET,
-        "PRIVATECODE_PROFILE": profile.name,
+        "DAPRIVATECODER_PROFILE": profile.name,
     }
     for tier, model in (("OPUS", profile.opus_model), ("SONNET", profile.model), ("HAIKU", profile.fast_model),
                         ("FABLE", profile.opus_model)):
@@ -179,7 +179,7 @@ def _model_ok(profile: Profile, model: str) -> bool:
     return not profile.private or is_private_mode(model) or model.strip().lower() in TIER_ALIASES
 
 
-# what PrivateCode's search server (search.py) needs of the environment Claude Code starts it with:
+# what DA Private Coder's search server (search.py) needs of the environment Claude Code starts it with:
 # the keyring's bus, and the settings and log folders
 SEARCH_ENV = ("DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_DATA_HOME",
               "PYTHON_KEYRING_BACKEND")
@@ -189,10 +189,10 @@ def mcp_config(profile: Profile, config_path: Path | None, base: dict[str, str])
     """The web search server for Claude Code's --mcp-config (None: the profile doesn't search)."""
     if profile.web_search == "off":
         return None
-    args = ["-m", "privatecode", "search-server", "--profile", profile.name]
+    args = ["-m", "daprivatecoder", "search-server", "--profile", profile.name]
     if config_path is not None:
         args += ["--config", str(config_path)]
-    return {"mcpServers": {"privatecode": {"type": "stdio", "command": sys.executable, "args": args,
+    return {"mcpServers": {"daprivatecoder": {"type": "stdio", "command": sys.executable, "args": args,
                                            "env": {k: base[k] for k in SEARCH_ENV if base.get(k)}}}}
 
 
@@ -252,7 +252,7 @@ def managed_conflicts(env: dict[str, str], path: Path = MANAGED_SETTINGS) -> lis
 
 def child_env(base: dict[str, str], env: dict[str, str]) -> dict[str, str]:
     """Claude Code's whole environment: the caller's, without what would take it elsewhere, and ours."""
-    out = {k: v for k, v in base.items() if k not in NEUTRALISED and not k.startswith("PRIVATECODE_")}
+    out = {k: v for k, v in base.items() if k not in NEUTRALISED and not k.startswith("DAPRIVATECODER_")}
     out.update(env)
     # an HTTP(S)_PROXY of the user's must not carry Claude Code's requests to this computer
     for key in ("NO_PROXY", "no_proxy"):
@@ -279,13 +279,13 @@ def start_proxy(profile: Profile, sock: socket.socket, token: str, config_path: 
             errors.unlink()
     except OSError:
         pass
-    command = [sys.executable, "-m", "privatecode", "serve", "--profile", profile.name, "--fd", str(sock.fileno()),
+    command = [sys.executable, "-m", "daprivatecoder", "serve", "--profile", profile.name, "--fd", str(sock.fileno()),
                "--parent", str(os.getpid())]
     if config_path is not None:
         command += ["--config", str(config_path)]
     with open(errors, "ab") as log:
         return subprocess.Popen(command, pass_fds=(sock.fileno(),), stdin=subprocess.DEVNULL, stdout=log, stderr=log,
-                                start_new_session=True, env={**os.environ, "PRIVATECODE_TOKEN": token})
+                                start_new_session=True, env={**os.environ, "DAPRIVATECODER_TOKEN": token})
 
 
 def run(cfg: Config, profile_name: str, argv: list[str]):
@@ -301,13 +301,13 @@ def run(cfg: Config, profile_name: str, argv: list[str]):
     clash = managed_conflicts(env)
     if clash:
         raise LaunchError(f"Your managed Claude Code settings ({MANAGED_SETTINGS}) set {', '.join(clash)}, which would "
-                          "override PrivateCode's, so Claude Code wasn't started.")
+                          "override DA Private Coder's, so Claude Code wasn't started.")
     full_args = claude_args(profile, env, args, mcp_config(profile, cfg.path, dict(os.environ)))
     start_proxy(profile, sock, token, cfg.path)
     sock.close()                                  # the proxy has it now
     notice = search_notice(profile)
     if notice and sys.stderr.isatty():
-        print(f"privatecode: {notice}", file=sys.stderr)
+        print(f"daprivatecoder: {notice}", file=sys.stderr)
     os.execve(binary, [binary, *full_args], child_env(dict(os.environ), env))
 
 

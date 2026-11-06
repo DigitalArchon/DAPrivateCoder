@@ -1,4 +1,4 @@
-"""Which addresses PrivateCode may talk to, and how (after DA Vibe Manager's netpolicy.py).
+"""Which addresses DA Private Coder may talk to, and how (after DA Vibe Manager's netpolicy.py).
 
 One rule for every client it builds (NanoGPT, the relay, attestation): https anywhere; plain
 http only to this machine, the local network or a Tor onion service. "Local" is exactly
@@ -21,7 +21,7 @@ _PRIVATE_NETS = tuple(ipaddress.ip_network(n) for n in (
 
 
 class InsecureURL(ValueError):
-    """A URL PrivateCode won't use: not https, and not local or an onion service."""
+    """A URL DA Private Coder won't use: not https, and not local or an onion service."""
 
 
 def _ip(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
@@ -67,13 +67,13 @@ def is_secure(url: str) -> bool:
 
 
 def check_url(url: str, what: str = "This address") -> str:
-    """Return `url` unchanged if PrivateCode may use it, else raise InsecureURL saying why."""
+    """Return `url` unchanged if DA Private Coder may use it, else raise InsecureURL saying why."""
     url = (url or "").strip()
     try:
         parsed = urlparse(url)
         host = parsed.hostname
     except ValueError as e:              # one urlparse can't take (http://[::1]@evil.example/)
-        raise InsecureURL(f"{what} isn't an address PrivateCode can use ({e}): {url[:80]!r}") from None
+        raise InsecureURL(f"{what} isn't an address DA Private Coder can use ({e}): {url[:80]!r}") from None
     if parsed.scheme not in ("http", "https") or not host:
         raise InsecureURL(f"{what} must be a full https:// URL (got {url[:80]!r})")
     if not is_secure(url):

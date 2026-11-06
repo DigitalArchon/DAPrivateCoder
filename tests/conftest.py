@@ -1,12 +1,12 @@
 """Every test gets its own settings and state folders and an in-memory keyring: nothing of the
-user's (their PrivateCode settings, request log or keyring) is read or written."""
+user's (their DA Private Coder settings, request log or keyring) is read or written."""
 
 import keyring
 import pytest
 from keyring.backend import KeyringBackend
 from keyring.errors import PasswordDeleteError
 
-from privatecode import creds
+from daprivatecoder import creds
 
 
 class MemoryKeyring(KeyringBackend):

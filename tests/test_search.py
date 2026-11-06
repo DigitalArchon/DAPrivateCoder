@@ -9,10 +9,10 @@ import sys
 import httpx
 import pytest
 
-from privatecode import identity, search
-from privatecode.llm import websearch
-from privatecode.search import SearchServer
-from privatecode.usagelog import UsageLog, read
+from daprivatecoder import identity, search
+from daprivatecoder.llm import websearch
+from daprivatecoder.search import SearchServer
+from daprivatecoder.usagelog import UsageLog, read
 
 BASE = "https://nano-gpt.com/api/v1"
 RESULTS = {"data": [{"title": "Async generators", "url": "https://docs.python.org/3/reference/expressions.html",
@@ -114,7 +114,7 @@ async def test_a_session_searches_at_most_so_often_and_needs_a_key(monkeypatch):
     assert failed and "most allowed" in text and len(nano.asked) == 2
     s, nano = server("zero-retention", key=None)
     text, failed = await s.search({"query": "rust borrow checker"})
-    assert failed and "privatecode key set" in text and not nano.asked
+    assert failed and "daprivatecoder key set" in text and not nano.asked
 
 
 async def test_searches_are_logged_with_their_cost_never_the_query(tmp_path):
@@ -130,7 +130,7 @@ async def test_claude_code_talks_to_it_as_an_mcp_server():
     s, _ = server("zero-retention")
     init = await s.handle({"jsonrpc": "2.0", "id": 1, "method": "initialize",
                            "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "claude-code"}}})
-    assert init["result"]["protocolVersion"] == "2025-06-18" and init["result"]["serverInfo"]["name"] == "privatecode"
+    assert init["result"]["protocolVersion"] == "2025-06-18" and init["result"]["serverInfo"]["name"] == "daprivatecoder"
     assert "tools" in init["result"]["capabilities"]
     newer = await s.handle({"jsonrpc": "2.0", "id": 2, "method": "initialize", "params": {"protocolVersion": "2099-01-01"}})
     assert newer["result"]["protocolVersion"] in search.PROTOCOL_VERSIONS
@@ -171,7 +171,7 @@ def test_a_whole_mcp_session_over_stdio(tmp_path):
         {"jsonrpc": "2.0", "id": 3, "method": "tools/call",
          "params": {"name": "web_search", "arguments": {"query": "write to jo@example.com"}}},
     ]
-    done = subprocess.run([sys.executable, "-m", "privatecode", "search-server", "--profile", "private"],
+    done = subprocess.run([sys.executable, "-m", "daprivatecoder", "search-server", "--profile", "private"],
                           input="".join(json.dumps(m) + "\n" for m in messages), capture_output=True, text=True,
                           env=env, timeout=30)
     replies = {r["id"]: r for r in map(json.loads, done.stdout.splitlines())}

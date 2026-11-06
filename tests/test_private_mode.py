@@ -13,9 +13,9 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
-from privatecode.llm import private_mode as MODULE
-from privatecode.llm.client import is_private_mode
-from privatecode.llm.private_mode import (
+from daprivatecoder.llm import private_mode as MODULE
+from daprivatecoder.llm.client import is_private_mode
+from daprivatecoder.llm.private_mode import (
     Attestation, Enclave, ModelRetired, PrivateModeClient, PrivateModeError, Verified, _NonEmptyBodyTransport,
     offered, offers_private_mode, relay_url, sealing_transport)
 

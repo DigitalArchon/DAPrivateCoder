@@ -13,9 +13,9 @@ import keyring
 import keyring.core
 from keyring.errors import PasswordDeleteError
 
-SERVICE = "privatecode"
+SERVICE = "daprivatecoder"
 USER = "nanogpt"
-# where DA Vibe Manager keeps the same key, for `privatecode key set --from-vibe-manager`
+# where DA Vibe Manager keeps the same key, for `daprivatecoder key set --from-vibe-manager`
 VIBE_MANAGER = ("davibemanager", "provider:NanoGPT")
 
 

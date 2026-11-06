@@ -1,4 +1,4 @@
-"""PrivateCode's settings: ~/.config/privatecode/config.toml, written with the defaults (and what
+"""DA Private Coder's settings: ~/.config/daprivatecoder/config.toml, written with the defaults (and what
 each one means) on first use. It never holds secrets: the NanoGPT key lives in the keyring
 (creds.py).
 
@@ -17,7 +17,7 @@ from pathlib import Path
 from .llm.client import is_private_mode, private_id
 from .netpolicy import InsecureURL, check_url
 
-APP_ID = "privatecode"
+APP_ID = "daprivatecoder"
 NANOGPT_BASE_URL = "https://nano-gpt.com/api/v1"
 # what the private models accept (Kimi K3 and GLM-5.3 take low, high and max; DeepSeek V4.1 Flash
 # all of these but xhigh); never "none": GLM with its thinking off reasons all the more, in its answer
@@ -27,8 +27,8 @@ WEB_SEARCH = ("zero-retention", "best", "off")
 PROFILE_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
 
 DEFAULT_TEXT = '''\
-# PrivateCode settings. The next Claude Code session started with PrivateCode uses what is saved here.
-# The NanoGPT API key isn't kept here but in your keyring: privatecode key set
+# DA Private Coder settings. The next Claude Code session started with DA Private Coder uses what is saved here.
+# The NanoGPT API key isn't kept here but in your keyring: daprivatecoder key set
 
 # NanoGPT's API (https only)
 base_url = "https://nano-gpt.com/api/v1"
@@ -59,7 +59,7 @@ reasoning = "low"
 #   "off"             no web search
 web_search = "zero-retention"
 
-# privatecode claude --profile nano: any NanoGPT model. Requests go to NanoGPT in the clear, as
+# daprivatecoder claude --profile nano: any NanoGPT model. Requests go to NanoGPT in the clear, as
 # with NanoGPT's own Claude Code setup; a private/ model you pick with /model is still sealed.
 [profiles.nano]
 private = false

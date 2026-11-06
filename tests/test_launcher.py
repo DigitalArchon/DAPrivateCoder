@@ -10,11 +10,11 @@ from pathlib import Path
 
 import pytest
 
-from privatecode import launcher
-from privatecode.config import Profile
-from privatecode.launcher import (LaunchError, child_env, claude_args, claude_env, extension_binaries, find_claude,
+from daprivatecoder import launcher
+from daprivatecoder.config import Profile
+from daprivatecoder.launcher import (LaunchError, child_env, claude_args, claude_env, extension_binaries, find_claude,
                                   managed_conflicts, split_wrapper_args)
-from privatecode.usagelog import read
+from daprivatecoder.usagelog import read
 
 PRIVATE = Profile("private", True, "private/glm-5-3", "private/kimi-k3", "private/deepseek-v4-1-flash",
                   "private/deepseek-v4-1-flash", "low")
@@ -114,8 +114,8 @@ def test_managed_settings_that_would_override_ours_stop_the_start(tmp_path):
 def test_claude_codes_environment():
     env = claude_env(PRIVATE, 4321, "tok")
     out = child_env({"PATH": "/usr/bin", "ANTHROPIC_API_KEY": "sk-ant-real", "NO_PROXY": "corp.example",
-                     "PRIVATECODE_TOKEN": "proxy's", "HTTPS_PROXY": "http://10.0.0.1:3128"}, env)
-    assert out["PATH"] == "/usr/bin" and out["ANTHROPIC_API_KEY"] == "" and "PRIVATECODE_TOKEN" not in out
+                     "DAPRIVATECODER_TOKEN": "proxy's", "HTTPS_PROXY": "http://10.0.0.1:3128"}, env)
+    assert out["PATH"] == "/usr/bin" and out["ANTHROPIC_API_KEY"] == "" and "DAPRIVATECODER_TOKEN" not in out
     assert out["NO_PROXY"] == "corp.example,127.0.0.1,localhost" and out["no_proxy"] == "127.0.0.1,localhost"
     assert out["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:4321"
 
@@ -148,7 +148,7 @@ def test_a_whole_session_with_a_stand_in_for_claude_code(tmp_path):
     """claude-private as the editor runs it: the proxy starts beside Claude Code (here a stand-in), serves
     it on 127.0.0.1 with the session's token, and stops when it exits. Nothing goes beyond this computer:
     the settings point at a NanoGPT that isn't one, on this machine."""
-    cfg = tmp_path / "config" / "privatecode" / "config.toml"
+    cfg = tmp_path / "config" / "daprivatecoder" / "config.toml"
     cfg.parent.mkdir(parents=True)
     cfg.write_text('base_url = "http://127.0.0.1:9/api/v1"\n[profiles.private]\nprivate = true\n'
                    'model = "private/glm-5-3"\nfast_model = "private/deepseek-v4-1-flash"\n')
@@ -163,7 +163,7 @@ def test_a_whole_session_with_a_stand_in_for_claude_code(tmp_path):
     out = json.loads(result.read_text())
     assert out["argv"][0] == "--mcp-config" and out["argv"][2] == "--settings"   # a private profile searches (Linkup)
     assert out["argv"][4:] == ["--output-format", "stream-json"]
-    assert json.loads(out["argv"][1])["mcpServers"]["privatecode"]["args"][2:5] == ["search-server", "--profile", "private"]
+    assert json.loads(out["argv"][1])["mcpServers"]["daprivatecoder"]["args"][2:5] == ["search-server", "--profile", "private"]
     assert json.loads(out["argv"][3])["env"]["ANTHROPIC_AUTH_TOKEN"] == out["env"]["ANTHROPIC_AUTH_TOKEN"]
     assert out["env"]["ANTHROPIC_MODEL"] == "private/glm-5-3" and out["env"]["ANTHROPIC_API_KEY"] == ""
     assert out["probe"] == 200 and out["intruder"] == 401
@@ -171,7 +171,7 @@ def test_a_whole_session_with_a_stand_in_for_claude_code(tmp_path):
     assert out["models"][0] == 200 and json.loads(out["models"][1])["data"][0]["id"] == "private/glm-5-3"
     status, body = out["message"]
     assert status == 403 and "isn't NanoGPT" in body               # sealed or nothing: here, nothing
-    session = next(r for r in read(tmp_path / "state" / "privatecode" / "requests.log") if r["kind"] == "session")
+    session = next(r for r in read(tmp_path / "state" / "daprivatecoder" / "requests.log") if r["kind"] == "session")
     assert session["profile"] == "private" and session["private"] is True
     while True:                                                   # the proxy goes with Claude Code
         try:
@@ -183,12 +183,12 @@ def test_a_whole_session_with_a_stand_in_for_claude_code(tmp_path):
 
 
 def test_the_search_server_comes_first_with_what_it_needs(tmp_path):
-    from privatecode.launcher import mcp_config, search_notice
+    from daprivatecoder.launcher import mcp_config, search_notice
     base = {"XDG_STATE_HOME": "/s", "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1000/bus", "SECRET": "x"}
     mcp = mcp_config(PRIVATE_SEARCH, tmp_path / "c.toml", base)
-    server = mcp["mcpServers"]["privatecode"]
+    server = mcp["mcpServers"]["daprivatecoder"]
     assert server["command"] == sys.executable and server["type"] == "stdio"
-    assert server["args"] == ["-m", "privatecode", "search-server", "--profile", "private", "--config", str(tmp_path / "c.toml")]
+    assert server["args"] == ["-m", "daprivatecoder", "search-server", "--profile", "private", "--config", str(tmp_path / "c.toml")]
     assert server["env"] == {"XDG_STATE_HOME": "/s", "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1000/bus"}
     args = claude_args(PRIVATE_SEARCH, claude_env(PRIVATE_SEARCH, 1, "t"), ["fix the build"], mcp)
     assert args[0] == "--mcp-config" and args[2] == "--settings" and args[4:] == ["fix the build"]

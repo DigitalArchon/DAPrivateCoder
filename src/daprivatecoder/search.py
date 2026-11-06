@@ -1,6 +1,6 @@
 """Web search for Claude Code, through NanoGPT: a small MCP server (stdio) that claude-private adds
 to the session, with one tool, web_search. Claude Code's own search runs on Anthropic's servers,
-so it is switched off in a PrivateCode session.
+so it is switched off in a DA Private Coder session.
 
 No search is end-to-end encrypted: NanoGPT and the search provider read every query. What a
 profile searches with is its choice (`web_search` in the settings):
@@ -36,7 +36,7 @@ MODES = ("zero-retention", "best", "off")
 ZERO_RETENTION = websearch.ZDR_FALLBACK
 BEST = {"answer": "perplexity", "links": "kagi"}
 MAX_SEARCHES = 40                          # a search costs money: a runaway session stops here
-SERVER = "privatecode"
+SERVER = "daprivatecoder"
 TOOL = "web_search"
 PROTOCOL_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
 NAMES = {"linkup": "Linkup", "perplexity": "Perplexity", "kagi": "Kagi", "valyu": "Valyu"}
@@ -103,7 +103,7 @@ class SearchServer:
     async def search(self, args: dict) -> tuple[str, bool]:
         """(the tool's reply, whether it is an error)."""
         if self.mode not in ("zero-retention", "best"):
-            return "Web search is switched off in PrivateCode's settings. Use what you know.", True
+            return "Web search is switched off in DA Private Coder's settings. Use what you know.", True
         query = " ".join(str(args.get("query") or "").split())[:400]
         if len(query) < 2:
             return "Not searched: the query is empty.", True
@@ -123,7 +123,7 @@ class SearchServer:
         except creds.KeyringUnavailable as e:
             return f"Not searched: {e}", True
         if not key:
-            return "Not searched: no NanoGPT API key is stored (privatecode key set).", True
+            return "Not searched: no NanoGPT API key is stored (daprivatecoder key set).", True
         self.count += 1
         want = ZERO_RETENTION if self.mode == "zero-retention" else BEST[purpose]
         narrow = {"sites": sites, "after": after}
