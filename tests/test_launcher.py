@@ -163,7 +163,7 @@ def test_a_whole_session_with_a_stand_in_for_claude_code(tmp_path):
     out = json.loads(result.read_text())
     assert out["argv"][0] == "--mcp-config" and out["argv"][2] == "--settings"   # a private profile searches (Linkup)
     assert out["argv"][4:] == ["--output-format", "stream-json"]
-    assert json.loads(out["argv"][1])["mcpServers"]["daprivatecoder"]["args"][2:5] == ["search-server", "--profile", "private"]
+    assert json.loads(out["argv"][1])["mcpServers"]["daprivatecoder"]["args"][3:6] == ["search-server", "--profile", "private"]
     assert json.loads(out["argv"][3])["env"]["ANTHROPIC_AUTH_TOKEN"] == out["env"]["ANTHROPIC_AUTH_TOKEN"]
     assert out["env"]["ANTHROPIC_MODEL"] == "private/glm-5-3" and out["env"]["ANTHROPIC_API_KEY"] == ""
     assert out["probe"] == 200 and out["intruder"] == 401
@@ -188,7 +188,7 @@ def test_the_search_server_comes_first_with_what_it_needs(tmp_path):
     mcp = mcp_config(PRIVATE_SEARCH, tmp_path / "c.toml", base)
     server = mcp["mcpServers"]["daprivatecoder"]
     assert server["command"] == sys.executable and server["type"] == "stdio"
-    assert server["args"] == ["-m", "daprivatecoder", "search-server", "--profile", "private", "--config", str(tmp_path / "c.toml")]
+    assert server["args"] == ["-I", "-m", "daprivatecoder", "search-server", "--profile", "private", "--config", str(tmp_path / "c.toml")]
     assert server["env"] == {"XDG_STATE_HOME": "/s", "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1000/bus"}
     args = claude_args(PRIVATE_SEARCH, claude_env(PRIVATE_SEARCH, 1, "t"), ["fix the build"], mcp)
     assert args[0] == "--mcp-config" and args[2] == "--settings" and args[4:] == ["fix the build"]
@@ -200,3 +200,18 @@ def test_the_search_server_comes_first_with_what_it_needs(tmp_path):
 
 PRIVATE_SEARCH = Profile("private", True, "private/glm-5-3", "private/kimi-k3", "private/deepseek-v4-1-flash",
                          "private/deepseek-v4-1-flash", "low", "zero-retention")
+
+
+def test_claude_code_gets_nothing_the_appimage_set_for_itself():
+    env = claude_env(PRIVATE, 4321, "tok")
+    base = {"PATH": "/usr/bin", "APPIMAGE": "/home/u/Apps/DAPrivateCoder.AppImage", "APPDIR": "/tmp/.mount_DAPriv",
+            "ARGV0": "x", "OWD": "/home/u", "SSL_CERT_FILE": "/etc/ssl/certs/ca-certificates.crt",
+            "REQUESTS_CA_BUNDLE": "/etc/ssl/certs/ca-certificates.crt", "DAPRIVATECODER_APPRUN_SET": "SSL_CERT_FILE REQUESTS_CA_BUNDLE"}
+    out = child_env(base, env)
+    for gone in ("APPIMAGE", "APPDIR", "ARGV0", "OWD", "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "DAPRIVATECODER_APPRUN_SET"):
+        assert gone not in out, gone
+    mine = child_env({"SSL_CERT_FILE": "/my/ca.pem"}, env)              # the user's own: kept
+    assert mine["SSL_CERT_FILE"] == "/my/ca.pem"
+    from daprivatecoder.launcher import mcp_config
+    server = mcp_config(PRIVATE_SEARCH, None, base)["mcpServers"]["daprivatecoder"]
+    assert server["env"]["SSL_CERT_FILE"] == "/etc/ssl/certs/ca-certificates.crt"   # the search server's TLS: the host's store

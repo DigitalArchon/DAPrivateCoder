@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- DA Private Coder: a padlock with code on it (Claude Code, sealed), in DA Toolkit's colours, with private's purple -->
+  <rect x="8" y="8" width="240" height="240" rx="48" fill="#161b22"/>
+  <rect x="8" y="8" width="240" height="240" rx="48" fill="none" stroke="#a371f7" stroke-width="8"/>
+  <path d="M86 114 v-26 a42 42 0 0 1 84 0 v26" fill="none" stroke="#e6edf3" stroke-width="16" stroke-linecap="round"/>
+  <rect x="56" y="108" width="144" height="104" rx="20" fill="#e6edf3"/>
+  <path d="M108 138 l-22 22 l22 22 M148 138 l22 22 l-22 22" fill="none" stroke="#7c4ddb" stroke-width="12"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M136 134 l-16 52" stroke="#7c4ddb" stroke-width="10" stroke-linecap="round"/>
+</svg>

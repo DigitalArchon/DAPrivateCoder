@@ -1,14 +1,16 @@
 """The commands.
 
-  claude-private [Claude Code's arguments]      Claude Code on NanoGPT's private models
-  daprivatecoder claude [--profile NAME] [...]     the same on any profile (nano: NanoGPT's other models)
-  daprivatecoder editor on|off|status              the switch for Claude Code in VSCodium and VS Code
-  daprivatecoder key set|clear|status              the NanoGPT API key, in your keyring
-  daprivatecoder status                            what is set up here
-  daprivatecoder check [--profile NAME]            attest the enclave, list the private models and prices
-  daprivatecoder log [-n N]                        what each session asked of which model, and the cost
-  daprivatecoder serve ...                         the proxy itself (claude-private starts it)
-  daprivatecoder search-server ...                 the web search tool (Claude Code starts it)
+  daprivatecoder                                    the window (--browser: in the web browser)
+  claude-private [Claude Code's arguments]          Claude Code on NanoGPT's private models
+  daprivatecoder claude-private [...]               the same (what the claude-private command runs)
+  daprivatecoder claude [--profile NAME] [...]      the same on any profile (nano: NanoGPT's other models)
+  daprivatecoder editor on|off|status               the switch for Claude Code in VSCodium and VS Code
+  daprivatecoder key set|clear|status               the NanoGPT API key, in your keyring
+  daprivatecoder status                             what is set up here
+  daprivatecoder check [--profile NAME]             attest the enclave, list the private models and prices
+  daprivatecoder log [-n N]                         what each session asked of which model, and the cost
+  daprivatecoder serve ...                          the proxy itself (claude-private starts it)
+  daprivatecoder search-server ...                  the web search tool (Claude Code starts it)
 """
 
 from __future__ import annotations
@@ -24,6 +26,8 @@ from . import __version__, config
 from .config import ConfigError, state_dir
 
 PRIVATE = "private"
+# the window's own options (app.py): with none of the commands, they open it
+WINDOW_OPTIONS = ("--browser", "--window", "--no-open", "--port")
 
 
 class CliError(Exception):
@@ -304,6 +308,12 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
+    if not argv or argv[0] in WINDOW_OPTIONS:
+        from . import app
+        app.main(argv)
+        return 0
+    if argv[:1] == ["claude-private"]:
+        return _launch("claude-private", PRIVATE, argv[1:])
     if argv[:1] == ["claude"]:
         return _claude(argv[1:])
     args = _parser().parse_args(argv)

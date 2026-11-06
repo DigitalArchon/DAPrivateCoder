@@ -180,16 +180,26 @@ def _model_ok(profile: Profile, model: str) -> bool:
 
 
 # what DA Private Coder's search server (search.py) needs of the environment Claude Code starts it with:
-# the keyring's bus, and the settings and log folders
+# the keyring's bus, the settings and log folders, and the CA store the AppImage's AppRun chose
 SEARCH_ENV = ("DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_DATA_HOME",
-              "PYTHON_KEYRING_BACKEND")
+              "PYTHON_KEYRING_BACKEND", "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE")
+# what the AppImage runtime sets about its own mount: nothing to Claude Code or the programs it runs
+# (another AppImage started from its shell would misread them)
+APPIMAGE_VARS = ("APPIMAGE", "APPDIR", "ARGV0", "OWD", "APPIMAGE_EXTRACT_AND_RUN")
+# AppRun names here the variables it set itself (the CA store), so they aren't passed on either
+APPRUN_SET = "DAPRIVATECODER_APPRUN_SET"
+
+
+def python_argv(*args: str) -> list[str]:
+    """This app's Python, running DA Private Coder with `args`: isolated (-I), as the AppImage runs it."""
+    return [sys.executable, "-I", "-m", "daprivatecoder", *args]
 
 
 def mcp_config(profile: Profile, config_path: Path | None, base: dict[str, str]) -> dict | None:
     """The web search server for Claude Code's --mcp-config (None: the profile doesn't search)."""
     if profile.web_search == "off":
         return None
-    args = ["-m", "daprivatecoder", "search-server", "--profile", profile.name]
+    args = python_argv("search-server", "--profile", profile.name)[1:]
     if config_path is not None:
         args += ["--config", str(config_path)]
     return {"mcpServers": {"daprivatecoder": {"type": "stdio", "command": sys.executable, "args": args,
@@ -251,8 +261,10 @@ def managed_conflicts(env: dict[str, str], path: Path = MANAGED_SETTINGS) -> lis
 
 
 def child_env(base: dict[str, str], env: dict[str, str]) -> dict[str, str]:
-    """Claude Code's whole environment: the caller's, without what would take it elsewhere, and ours."""
-    out = {k: v for k, v in base.items() if k not in NEUTRALISED and not k.startswith("DAPRIVATECODER_")}
+    """Claude Code's whole environment: the caller's, without what would take it elsewhere or what the
+    AppImage set for itself, and ours."""
+    drop = set(NEUTRALISED) | set(APPIMAGE_VARS) | set((base.get(APPRUN_SET) or "").split())
+    out = {k: v for k, v in base.items() if k not in drop and not k.startswith("DAPRIVATECODER_")}
     out.update(env)
     # an HTTP(S)_PROXY of the user's must not carry Claude Code's requests to this computer
     for key in ("NO_PROXY", "no_proxy"):
@@ -279,8 +291,7 @@ def start_proxy(profile: Profile, sock: socket.socket, token: str, config_path: 
             errors.unlink()
     except OSError:
         pass
-    command = [sys.executable, "-m", "daprivatecoder", "serve", "--profile", profile.name, "--fd", str(sock.fileno()),
-               "--parent", str(os.getpid())]
+    command = python_argv("serve", "--profile", profile.name, "--fd", str(sock.fileno()), "--parent", str(os.getpid()))
     if config_path is not None:
         command += ["--config", str(config_path)]
     with open(errors, "ab") as log:

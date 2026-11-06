@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Everything is served from this origin: nothing remote, no inline script. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<title>DA Private Coder</title>
+<link rel="icon" href="/static/icon.svg">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header id="top">
+  <img src="/static/icon.svg" alt="" class="logo">
+  <div class="title">
+    <div class="name">DA Private Coder</div>
+    <div id="status" class="status"><span class="dot"></span><span id="status-text">Starting…</span></div>
+  </div>
+  <button id="refresh-btn" class="icon-btn" title="Look again">⟳</button>
+</header>
+<div id="banner" class="banner hidden"></div>
+<main id="page"></main>
+<div id="toasts"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,23 +1,29 @@
-"""DA Private Coder's settings: ~/.config/daprivatecoder/config.toml, written with the defaults (and what
-each one means) on first use. It never holds secrets: the NanoGPT key lives in the keyring
-(creds.py).
+"""DA Private Coder's settings: ~/.config/daprivatecoder/config.toml, written with the defaults (and
+what each one means) on first use. It never holds secrets: the NanoGPT key lives in the keyring
+(creds.py). The window saves them by writing the whole file again, with the same notes (render).
 
 A profile is a way to start Claude Code: the models it uses, and whether it is private. A private
 profile takes NanoGPT Private Mode models only (private/…), so every request is sealed to an
-attested enclave; a model that isn't one is a mistake in the file, and nothing starts with it."""
+attested enclave; a model that isn't one is a mistake in the file, and nothing starts with it.
+
+PrivateCode, this app's earlier name, kept its settings in ~/.config/privatecode: they are taken
+over (copied) the first time, while there are none here."""
 
 from __future__ import annotations
 
+import json
 import os
 import re
+import tempfile
 import tomllib
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from .llm.client import is_private_mode, private_id
 from .netpolicy import InsecureURL, check_url
 
 APP_ID = "daprivatecoder"
+EARLIER_APP_ID = "privatecode"
 NANOGPT_BASE_URL = "https://nano-gpt.com/api/v1"
 # what the private models accept (Kimi K3 and GLM-5.3 take low, high and max; DeepSeek V4.1 Flash
 # all of these but xhigh); never "none": GLM with its thinking off reasons all the more, in its answer
@@ -25,51 +31,6 @@ REASONING = ("low", "medium", "high", "max")
 # web search (search.py): Linkup, which keeps nothing; Perplexity and Kagi; or none
 WEB_SEARCH = ("zero-retention", "best", "off")
 PROFILE_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
-
-DEFAULT_TEXT = '''\
-# DA Private Coder settings. The next Claude Code session started with DA Private Coder uses what is saved here.
-# The NanoGPT API key isn't kept here but in your keyring: daprivatecoder key set
-
-# NanoGPT's API (https only)
-base_url = "https://nano-gpt.com/api/v1"
-
-# The Claude Code program to start. Empty: the one on your PATH, else the newest one bundled with
-# the Claude Code extension of VSCodium or VS Code.
-claude = ""
-
-# claude-private: NanoGPT Private Mode models only. Each request is sealed on this computer to a
-# Tinfoil enclave whose attestation was checked first; NanoGPT relays ciphertext.
-[profiles.private]
-private = true
-# Claude Code's default model, and what /model sonnet picks
-model = "private/glm-5-3"
-# what /model opus picks
-opus_model = "private/kimi-k3"
-# what /model haiku picks, and what Claude Code uses for quick background tasks
-fast_model = "private/deepseek-v4-1-flash"
-# describes images for a model that can't see them (GLM-5.3); empty: such a model is told it can't see
-vision_model = "private/deepseek-v4-1-flash"
-# how hard the model reasons before it answers: low, medium, high or max
-reasoning = "low"
-# Web search, through NanoGPT. No search is end-to-end encrypted: NanoGPT and the search provider
-# read every query (Claude Code asks you before each one, and refuses one naming this computer).
-#   "zero-retention"  Linkup only, which keeps nothing (zero data retention). Finds less.
-#   "best"            Perplexity to learn things, Kagi to find sites: better results, but not zero
-#                     data retention: what they keep is up to their own policies.
-#   "off"             no web search
-web_search = "zero-retention"
-
-# daprivatecoder claude --profile nano: any NanoGPT model. Requests go to NanoGPT in the clear, as
-# with NanoGPT's own Claude Code setup; a private/ model you pick with /model is still sealed.
-[profiles.nano]
-private = false
-model = "z-ai/glm-5.3"
-opus_model = "moonshotai/kimi-k3"
-fast_model = "z-ai/glm-5.3-flash"
-vision_model = ""
-reasoning = "low"
-web_search = "best"
-'''
 
 
 class ConfigError(Exception):
@@ -88,6 +49,10 @@ def state_dir() -> Path:
 
 def config_path() -> Path:
     return config_dir() / "config.toml"
+
+
+def earlier_config_path() -> Path:
+    return config_dir().parent / EARLIER_APP_ID / "config.toml"
 
 
 @dataclass(frozen=True)
@@ -125,6 +90,70 @@ class Config:
             known = ", ".join(sorted(self.profiles)) or "none"
             where = f" in {self.path}" if self.path else ""
             raise ConfigError(f"There's no profile called {name!r}{where} (there are: {known}).") from None
+
+    def with_profile(self, profile: Profile) -> Config:
+        return replace(self, profiles={**self.profiles, profile.name: profile})
+
+
+DEFAULTS = Config(profiles={
+    "private": Profile("private", True, "private/glm-5-3", "private/kimi-k3", "private/deepseek-v4-1-flash",
+                       "private/deepseek-v4-1-flash", "low", "zero-retention"),
+    "nano": Profile("nano", False, "z-ai/glm-5.3", "moonshotai/kimi-k3", "z-ai/glm-5.3-flash", "", "low", "best"),
+})
+
+# ---------------------------------------------------------------------- the file, written
+
+_HEADER = """\
+# DA Private Coder settings: its window's Settings, or this file. The next Claude Code session it
+# starts uses what is saved here. Saved from the window, the file is written again with these notes
+# (notes of your own aren't kept). The NanoGPT API key isn't here but in your keyring.
+"""
+_PROFILE_INTRO = {
+    "private": ("claude-private: NanoGPT Private Mode models only. Each request is sealed on this computer to a\n"
+                "# Tinfoil enclave whose attestation was checked first; NanoGPT relays ciphertext."),
+    "nano": ("daprivatecoder claude --profile nano: any NanoGPT model. Requests go to NanoGPT in the clear, as\n"
+             "# with NanoGPT's own Claude Code setup; a private/ model you pick with /model is still sealed."),
+}
+_NOTES = {
+    "model": "Claude Code's default model, and what /model sonnet picks",
+    "opus_model": "what /model opus picks",
+    "fast_model": "what /model haiku picks, and what Claude Code uses for quick background tasks",
+    "vision_model": "describes images for a model that can't see them; empty: such a model is told it can't see",
+    "reasoning": "how hard the model reasons before it answers: low, medium, high or max",
+    "web_search": """\
+Web search, through NanoGPT. No search is end-to-end encrypted: NanoGPT and the search provider
+# read every query (Claude Code asks you before each one, and refuses one naming this computer).
+#   "zero-retention"  Linkup only, which keeps nothing (zero data retention). Finds less.
+#   "best"            Perplexity to learn things, Kagi to find sites: better results, but not zero
+#                     data retention: what they keep is up to their own policies.
+#   "off"             no web search""",
+}
+
+
+def _q(text: str) -> str:
+    return json.dumps(text, ensure_ascii=False)        # a TOML basic string
+
+
+def render(cfg: Config) -> str:
+    """The settings file for `cfg`, with what each setting means."""
+    out = [_HEADER,
+           "# NanoGPT's API (https only)", f"base_url = {_q(cfg.base_url)}", "",
+           "# The Claude Code program to start. Empty: the one on your PATH, else the newest one bundled with",
+           "# the Claude Code extension of VSCodium or VS Code.", f"claude = {_q(cfg.claude)}"]
+    for p in cfg.profiles.values():
+        intro = _PROFILE_INTRO.get(p.name) or ("A private profile: NanoGPT Private Mode models only." if p.private
+                                               else "A profile that isn't private: requests go to NanoGPT in the clear.")
+        out += ["", f"# {intro}", f"[profiles.{p.name}]", f"private = {'true' if p.private else 'false'}"]
+        for key in ("model", "opus_model", "fast_model", "vision_model", "reasoning", "web_search"):
+            if p.private or key == "web_search":
+                out.append(f"# {_NOTES[key]}")
+            out.append(f"{key} = {_q(getattr(p, key))}")
+    return "\n".join(out) + "\n"
+
+
+DEFAULT_TEXT = render(DEFAULTS)
+
+# ---------------------------------------------------------------------- the file, read
 
 
 def _text(table: dict, key: str, where: str, default: str = "") -> str:
@@ -186,14 +215,33 @@ def parse(text: str, path: Path | None = None) -> Config:
 
 
 def load(path: Path | None = None) -> Config:
-    """The settings, from `path` (default: config_path()); the defaults are written there first if
-    there is no file yet."""
+    """The settings, from `path` (default: config_path()). With no file there yet, PrivateCode's
+    are copied to it, or else the defaults written."""
+    default = path is None
     path = path or config_path()
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(DEFAULT_TEXT)
+        earlier = earlier_config_path()
+        path.write_text(earlier.read_text() if default and earlier.is_file() else DEFAULT_TEXT)
     try:
         text = path.read_text()
     except OSError as e:
         raise ConfigError(f"{path} couldn't be read: {e}") from None
     return parse(text, path)
+
+
+def save(cfg: Config, path: Path | None = None) -> Config:
+    """Write `cfg` (checked first: what is written is read back the same) and return it as read."""
+    path = path or cfg.path or config_path()
+    text = render(cfg)
+    saved = parse(text, path)                    # refuses what it couldn't load again
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        os.unlink(tmp)
+        raise
+    return saved

@@ -12,7 +12,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -191,15 +190,19 @@ def editors() -> list[tuple[str, Path]]:
 
 
 def wrapper_path() -> str:
-    """claude-private, as installed with this DA Private Coder."""
+    """The claude-private the editor should run: DA Private Coder's command in ~/.local/bin (written now
+    if it isn't there), which stays where it is; from source, the one beside this Python will do too.
+    Never one inside the AppImage, which is mounted somewhere new each time it runs."""
+    from . import commands
+    if commands.state("claude-private") in ("missing", "stale"):
+        commands.install(["claude-private"])
+    if commands.state("claude-private") == "current":
+        return str(commands.path_of("claude-private"))
     beside = Path(sys.executable).parent / "claude-private"
-    if beside.is_file() and os.access(beside, os.X_OK):
+    if not os.environ.get("APPIMAGE") and beside.is_file() and os.access(beside, os.X_OK):
         return str(beside)
-    found = shutil.which("claude-private")
-    if found:
-        return os.path.abspath(found)
-    raise EditorError("claude-private isn't installed where the editor could run it; install DA Private Coder first "
-                      "(see the README).")
+    raise EditorError(f"{commands.path_of('claude-private')} is someone else's program, so DA Private Coder's "
+                      "claude-private couldn't be put there for the editor to run.")
 
 
 def current(path: Path) -> str | None:

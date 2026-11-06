@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "daprivatecoder"
 version = "0.1.0"
-description = "Claude Code on NanoGPT's end-to-end encrypted private models: a local proxy that seals each request to an attested enclave, and a switch to start Claude Code on it."
+description = "Claude Code on NanoGPT's end-to-end encrypted private models: a small window to set it up and start it, a local proxy that seals each request to an attested enclave, and a switch for Claude Code in VSCodium and VS Code."
 readme = "README.md"
 license = "AGPL-3.0-or-later"
 license-files = ["LICENSE"]
@@ -13,7 +13,7 @@ requires-python = ">=3.11"
 dependencies = [
     # The chat-completions stream types the private models reply in (llm/client.py)
     "openai>=3.37",
-    # The proxy (proxy.py) and its clients
+    # The proxy (proxy.py), the window's server (server.py) and their clients
     "starlette>=1.9",
     "uvicorn>=0.54",
     "httpx>=0.28.1",
@@ -32,6 +32,9 @@ dependencies = [
     "tinfoil==0.15.0",
     "tinfoil-ehbp==0.4.1",
     "pyhpke==0.6.5",
+    # The window (app.py), on the host's GTK and WebKitGTK through PyGObject (built from source into the
+    # AppImage, packaging/appimage/sdists.lock; from source, the system's)
+    "pywebview>=6.2",
 ]
 
 [dependency-groups]
@@ -43,6 +46,9 @@ claude-private = "daprivatecoder.cli:claude_private"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+daprivatecoder = ["web/*.html", "web/*.js", "web/*.css", "web/*.svg"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

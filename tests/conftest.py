@@ -1,5 +1,5 @@
-"""Every test gets its own settings and state folders and an in-memory keyring: nothing of the
-user's (their DA Private Coder settings, request log or keyring) is read or written."""
+"""Every test gets its own home, settings and state folders and an in-memory keyring: nothing of
+the user's (their DA Private Coder settings, request log, ~/.local/bin or keyring) is read or written."""
 
 import keyring
 import pytest
@@ -30,6 +30,9 @@ class MemoryKeyring(KeyringBackend):
 
 @pytest.fixture(autouse=True)
 def ring(tmp_path, monkeypatch):
+    (tmp_path / "home").mkdir()
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("APPIMAGE", raising=False)
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     memory = MemoryKeyring()

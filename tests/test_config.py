@@ -1,5 +1,7 @@
 """The settings file, and the https rule for the addresses in it."""
 
+from dataclasses import replace
+
 import pytest
 
 from daprivatecoder import config
@@ -74,3 +76,26 @@ def test_web_search_is_linkup_in_a_private_profile_unless_chosen_otherwise():
     assert p.private and p.web_search == "best"
     with pytest.raises(ConfigError, match="web_search must be one of zero-retention, best, off"):
         parse('[profiles.p]\nmodel = "x"\nweb_search = "kagi"\n')
+
+
+def test_settings_saved_from_the_window_keep_their_notes_and_read_back_the_same():
+    cfg = config.load()
+    changed = cfg.with_profile(replace(cfg.profile("private"), model="private/kimi-k3", web_search="best"))
+    saved = config.save(changed)
+    assert saved.profile("private").model == "private/kimi-k3" and saved.profile("private").web_search == "best"
+    text = config.config_path().read_text()
+    assert "# Web search, through NanoGPT" in text and 'model = "private/kimi-k3"' in text
+    assert config.load().profiles == saved.profiles
+    with pytest.raises(ConfigError, match="isn't a NanoGPT Private Mode model"):
+        config.save(cfg.with_profile(replace(cfg.profile("private"), opus_model="z-ai/glm-5.3")))
+    assert config.load().profiles == saved.profiles                     # nothing written
+
+
+def test_privatecodes_settings_are_taken_over_once():
+    earlier = config.earlier_config_path()
+    earlier.parent.mkdir(parents=True)
+    earlier.write_text('[profiles.private]\nprivate = true\nmodel = "private/kimi-k3"\n')
+    assert config.load().profile("private").model == "private/kimi-k3"
+    earlier.write_text('[profiles.private]\nprivate = true\nmodel = "private/gemma4-31b"\n')
+    assert config.load().profile("private").model == "private/kimi-k3"   # once: its own from then on
+    assert earlier.read_text().endswith('"private/gemma4-31b"\n')         # PrivateCode's left as it is
