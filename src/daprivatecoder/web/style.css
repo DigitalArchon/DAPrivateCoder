@@ -149,6 +149,8 @@ code { font-family: var(--mono); font-size: 12.5px; background: var(--code); pad
 .section { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; }
 .section h3 { font-size: 14px; margin: 0 0 8px; display: flex; align-items: center; gap: 8px; }
 .section.start { border-left: 3px solid var(--private); }
+/* the folder keeps room for a path: in a narrow window the buttons go on the next line */
+.start .row > input.folder { min-width: 190px; }
 .lead { margin: 0 0 8px; color: var(--muted); font-size: 13px; }
 /* the setup checklist: what each thing is, whether it's done, and what to do */
 .check { display: flex; gap: 10px; align-items: flex-start; padding: 8px 0; border-top: 1px solid var(--border); }
@@ -156,13 +158,14 @@ code { font-family: var(--mono); font-size: 12.5px; background: var(--code); pad
 .check .mark { width: 20px; flex: none; text-align: center; font-weight: 700; }
 .check .mark.ok { color: var(--ok); }
 .check .mark.todo { color: var(--warn); }
+.check .mark.opt { color: var(--muted); }
 .check .body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 .check .what { font-weight: 600; }
 .check .detail { font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
 .recent { display: flex; flex-direction: column; margin-top: 8px; }
 .recent .item { display: flex; gap: 6px; align-items: center; padding: 3px 0; }
 .recent .item .path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 12.5px; direction: rtl; text-align: left; }
-.model-row { display: grid; grid-template-columns: 112px 1fr; gap: 6px 10px; align-items: center; margin-bottom: 6px; }
+.model-row { display: grid; grid-template-columns: 84px 1fr; gap: 6px 10px; align-items: center; margin-bottom: 6px; }
 .model-row label { font-size: 12.5px; color: var(--muted); }
 .model-row select { width: 100%; }
 .totals { display: flex; gap: 18px; flex-wrap: wrap; margin-bottom: 6px; }
@@ -173,6 +176,9 @@ table.usage th { text-align: left; font-weight: 600; color: var(--muted); paddin
 table.usage td { padding: 3px 4px; border-bottom: 1px solid var(--border); white-space: nowrap; }
 table.usage td.num { text-align: right; font-variant-numeric: tabular-nums; }
 table.usage tr.bad td { color: var(--danger); }
+/* a failed request's reason, on a line of its own under it */
+table.usage tr.has-note td { border-bottom: none; }
+table.usage tr.note td { white-space: normal; overflow-wrap: anywhere; padding-top: 0; font-size: 11.5px; }
 .attest { display: flex; flex-direction: column; gap: 3px; font-size: 13px; }
 .fingerprint { font-family: var(--mono); font-size: 11.5px; color: var(--muted); overflow-wrap: anywhere; }
 .paths { font-size: 12.5px; color: var(--muted); display: flex; flex-direction: column; gap: 2px; overflow-wrap: anywhere; }

@@ -16,6 +16,7 @@ from . import __version__, commands, config, creds, editor, hostenv, launch, usa
 from .config import ConfigError
 from .llm import capabilities
 from .llm.private_mode import Enclave, list_private_models, offers_private_mode, relay_url
+from .search import NAMES as SEARCH_NAMES
 
 PROFILE_FIELDS = ("model", "opus_model", "fast_model", "vision_model", "reasoning", "web_search")
 THEMES = ("dark", "light", "system")
@@ -26,6 +27,19 @@ SHOWN = 40                                  # requests shown in Usage
 
 class UserError(Exception):
     """Something the user can fix, said as it is."""
+
+
+def _sent(record: dict) -> str:
+    """How a logged request or search left this computer: "sealed", "clear", or "" (it didn't: refused
+    here first). A request the proxy sent says which ("sealed"); one it refused doesn't."""
+    kind = record.get("kind")
+    if kind == "search":
+        return "" if record.get("status") == "refused" else "clear"
+    if kind == "vision":
+        return "sealed"                       # only ever a private model's
+    if "sealed" not in record:
+        return ""
+    return "sealed" if record["sealed"] else "clear"
 
 
 def prefs_path() -> Path:
@@ -86,9 +100,9 @@ class Manager:
         out["editors"] = []
         for name, path in editor.editors():
             value = editor.current(path)
-            ours = isinstance(value, str) and os.path.basename(value) == "claude-private"
-            out["editors"].append({"name": name, "path": str(path), "value": value or "",
-                                   "state": "on" if ours else "other" if value else "off"})
+            # on, off, other (another program's), or earlier (PrivateCode's: still the old app)
+            state = {"ours": "on", "": "off"}.get(editor.owner(value), editor.owner(value))
+            out["editors"].append({"name": name, "path": str(path), "value": value or "", "state": state})
         out["usage"] = self.usage()
         out["attestation"] = self.last_attestation()
         out["ready"] = bool(cfg) and key["stored"] and bool(out["claude"]["path"])
@@ -109,11 +123,16 @@ class Manager:
                 spent_month += cost if day.startswith(month) else 0
                 spent_today += cost if day == today else 0
             asked_today += day == today
+            sent = _sent(r)
             rows.append({"t": str(r.get("t", ""))[:19].replace("T", " "), "kind": kind,
-                         "what": r.get("provider") if kind == "search" else r.get("model", ""),
-                         "asked_for": r.get("asked_for", ""), "sealed": kind != "search" and bool(r.get("sealed", kind == "vision")),
-                         "status": r.get("status", ""), "input": u.get("input", 0) + u.get("cache_read", 0),
-                         "cached": u.get("cache_read", 0), "output": u.get("output", 0), "results": r.get("results"),
+                         "what": SEARCH_NAMES.get(r.get("provider"), r.get("provider") or "") if kind == "search"
+                         else r.get("model", ""),
+                         "asked_for": r.get("asked_for", ""), "sent": sent, "sealed": sent == "sealed",
+                         "status": r.get("status", ""),
+                         # no usage (refused, failed, a search): no tokens, rather than none
+                         "input": u.get("input", 0) + u.get("cache_read", 0) if u else None,
+                         "cached": u.get("cache_read", 0) if u else None, "output": u.get("output", 0) if u else None,
+                         "results": r.get("results"),
                          "cost": cost if isinstance(cost, (int, float)) else None, "estimated": bool(u.get("cost_estimated")),
                          "seconds": r.get("seconds"), "error": r.get("error") or r.get("reason") or ""})
         return {"today": round(spent_today, 4), "month": round(spent_month, 4), "requests_today": asked_today,
@@ -160,7 +179,7 @@ class Manager:
             raise UserError(f"{name}'s settings weren't found here.")
         path = found[name]
         value = editor.current(path)
-        if value and os.path.basename(value) != "claude-private":
+        if editor.owner(value) == "other":
             raise UserError(f"{name}'s Claude Code already runs through another program ({value}): it was left as it is.")
         editor.switch(path, editor.wrapper_path() if on else None)
 

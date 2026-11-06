@@ -209,3 +209,48 @@ def test_the_command_opens_the_window_or_starts_claude_code(monkeypatch):
     assert opened == [[], ["--browser", "--port", "8790"]]
     assert cli.main(["claude-private", "-p", "hi"]) == 0
     assert launched == [("claude-private", "private", ["-p", "hi"])]
+
+
+# ---------------------------------------------------------------------- what the window says
+
+async def test_usage_says_how_each_request_left_and_blanks_what_wasnt_counted(window, capsys):
+    from daprivatecoder import usagelog
+    log = usagelog.UsageLog(config.state_dir() / "requests.log", "s1")
+    log.write("request", model="private/glm-5-3", sealed=True, status=200, usage={"input": 10, "cache_read": 90,
+                                                                                    "output": 5, "cost": 0.001})
+    log.write("request", model="z-ai/glm-5.3", sealed=False, status=200, usage={"input": 7, "output": 3})   # nano
+    log.write("request", model="claude-opus-4", status=403, error="refused here")                         # never sent
+    log.write("vision", model="private/deepseek-v4-1-flash", status=502, error="enclave down")
+    log.write("search", mode="zero-retention", status="refused", reason="names this computer or holds a secret")
+    log.write("search", mode="best", provider="kagi", status=200, results=8, cost=0.006)
+    app, *_ = window
+    rows = (await call(app, "GET", "/api/state"))[1]["usage"]["last"][::-1]
+    assert [r["sent"] for r in rows] == ["sealed", "clear", "", "sealed", "", "clear"]
+    assert [r["sealed"] for r in rows] == [True, False, False, True, False, False]
+    assert (rows[0]["input"], rows[0]["cached"], rows[0]["output"]) == (100, 90, 5)
+    assert all(rows[i][k] is None for i in (2, 3, 4, 5) for k in ("input", "cached", "output"))
+    assert rows[5]["what"] == "Kagi" and rows[5]["results"] == 8 and rows[4]["what"] == ""
+    assert rows[2]["error"] == "refused here" and rows[4]["error"].startswith("names this computer")
+
+    import argparse
+    assert cli._log(argparse.Namespace(n=10)) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert [line.split()[2] for line in lines[:6]] == ["sealed", "clear", "unsent", "sealed", "unsent", "clear"]
+
+
+async def test_an_editor_left_on_privatecodes_wrapper_is_said_and_switched_over(window, capsys):
+    app, started, settings, _ = window
+    old = "/home/u/.local/share/privatecode/venv/bin/claude-private"     # PrivateCode's editor switch
+    settings.write_text('{\n    "claudeCode.claudeProcessWrapper": "%s" // on\n}\n' % old)
+    assert [editor.owner(v) for v in (None, "", old, "/home/u/.local/bin/claude-private", "/opt/wrap", 3)] == \
+        ["", "", "earlier", "ours", "other", "other"]
+    st = (await call(app, "GET", "/api/state"))[1]
+    assert st["editors"][0]["state"] == "earlier" and st["editors"][0]["value"] == old
+    assert cli.main(["editor", "status"]) == 0
+    assert "VSCodium: PrivateCode's" in capsys.readouterr().out
+    st = (await call(app, "POST", "/api/editor", {"name": "VSCodium", "on": True}))[1]
+    assert st["editors"][0]["state"] == "on"
+    assert editor.current(settings) == str(commands.path_of("claude-private")) and "// on" in settings.read_text()
+    settings.write_text('{"claudeCode.claudeProcessWrapper": "/opt/wrap"}')
+    status, said = await call(app, "POST", "/api/editor", {"name": "VSCodium", "on": True})
+    assert status == 400 and "another program" in said["error"] and editor.current(settings) == "/opt/wrap"

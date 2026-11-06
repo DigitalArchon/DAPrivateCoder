@@ -5,7 +5,8 @@
 
 const TOKEN = new URLSearchParams(location.search).get("t") || "";
 const $ = (sel) => document.querySelector(sel);
-const S = { state: null, models: null, modelsError: "", checking: false, folder: "" };
+// replacing: the key's Replace field is open (kept across renders, as the folder typed is)
+const S = { state: null, models: null, modelsError: "", checking: false, folder: "", replacing: false };
 
 function h(tag, attrs = {}, ...children) {
   const el = document.createElement(tag);
@@ -45,12 +46,16 @@ async function guarded(fn) {
   try { return await fn(); } catch (e) { toast(e.message, "error", 9000); }
 }
 
-// an action that returns the new state, and what to say when it's done
+// an action that returns the new state, and what to say when it's done (true when it was). If it
+// fails, the page is drawn again from the state as it was, so a choice that wasn't saved (a model,
+// a search) doesn't look as if it was.
 async function act(method, path, body, said) {
   return guarded(async () => {
-    const st = await api(method, path, body);
+    let st;
+    try { st = await api(method, path, body); } catch (e) { render(); throw e; }
     if (st && st.version) { S.state = st; render(); }
     if (said) toast(said, "ok", 3000);
+    return true;
   });
 }
 
@@ -60,8 +65,11 @@ function applyTheme(theme) {
 
 // a total in cents; one request's cost to a hundredth of a cent (most cost less than one)
 const money = (n, exact = false) => (n === null || n === undefined) ? "" : `$${exact && n < 1 ? n.toFixed(4) : n.toFixed(2)}`;
-const price = (n) => n.toFixed(2);
-const tokens = (n) => n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n || 0);
+// to the cent, a half cent up (1.575 is $1.58, as the README and the check command say)
+const price = (n) => (Math.round(n * 100) / 100).toFixed(2);
+// none: a request without usage (refused, failed), which is no tokens to show rather than 0
+const tokens = (n) => (n === null || n === undefined) ? ""
+  : n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n);
 
 // ------------------------------------------------------------------ the top bar
 
@@ -83,13 +91,16 @@ function renderTop(st) {
 // ------------------------------------------------------------------ start
 
 function startSection(st) {
-  const folder = h("input", { type: "text", class: "mono", placeholder: "The folder of the project to work on", value: S.folder,
-    oninput: (e) => { S.folder = e.target.value; } });
   const open = (f) => act("POST", "/api/open", { folder: f, profile: "private" },
     "Claude Code is starting in a terminal window, on private models.");
   const ready = st.ready;
+  const folder = h("input", { type: "text", class: "mono folder", placeholder: "The project's folder", value: S.folder,
+    oninput: (e) => { S.folder = e.target.value; },
+    onkeydown: (e) => { if (e.key === "Enter" && ready) open(S.folder); } });
   const recent = (st.recent || []).map((f) => h("div", { class: "item" },
-    h("span", { class: "path", title: f }, f),
+    // cut at the start when it's too long (direction: rtl), the path itself kept left to right:
+    // otherwise its first "/" is drawn at its end
+    h("span", { class: "path", title: f }, h("bdi", { dir: "ltr" }, f)),
     h("button", { class: "small", disabled: !ready, onclick: () => open(f) }, "Open"),
     h("button", { class: "small ghost", title: "Forget this folder", onclick: () => act("POST", "/api/forget", { folder: f }) }, "×")));
   const installed = st.commands["claude-private"].state === "current";
@@ -104,15 +115,17 @@ function startSection(st) {
       h("button", { class: "private", disabled: !ready, onclick: () => open(S.folder) }, "Open in a terminal")),
     ready ? null : h("div", { class: "small muted" }, "Set it up first (below)."),
     recent.length ? h("div", { class: "recent" }, h("div", { class: "small muted" }, "Recent folders"), recent) : null,
-    installed ? h("div", { class: "small muted" }, "In a terminal, ", h("code", {}, "claude-private"),
+    installed && st.commands_on_path ? h("div", { class: "small muted" }, "In a terminal, ", h("code", {}, "claude-private"),
       " does the same in the folder you're in; ", h("code", {}, "claude"), " still runs as usual.") : null);
 }
 
 // ------------------------------------------------------------------ setup
 
+// done: true (✓), false (• still to do), or "optional" (– up to the user: an editor's switch)
 function check(done, what, detail, ...actions) {
+  const [cls, mark] = done === "optional" ? ["opt", "–"] : done ? ["ok", "✓"] : ["todo", "•"];
   return h("div", { class: "check" },
-    h("div", { class: `mark ${done ? "ok" : "todo"}` }, done ? "✓" : "•"),
+    h("div", { class: `mark ${cls}` }, mark),
     h("div", { class: "body" }, h("div", { class: "what" }, what),
       // what the commands say for a terminal (`claude`), as plain words here
       detail ? h("div", { class: "detail" }, typeof detail === "string" ? detail.replace(/`/g, "") : detail) : null,
@@ -121,12 +134,14 @@ function check(done, what, detail, ...actions) {
 
 function setupSection(st) {
   const k = st.key;
-  const keyInput = h("input", { type: "password", placeholder: "Paste your NanoGPT API key", autocomplete: "off" });
-  const saveKey = () => act("POST", "/api/key", { key: keyInput.value }, "The key is stored in your keyring.");
+  const saveKey = () => act("POST", "/api/key", { key: keyInput.value }, "The key is stored in your keyring.")
+    .then((done) => { if (done && S.replacing) { S.replacing = false; render(); } });
+  const keyInput = h("input", { type: "password", placeholder: "Paste your NanoGPT API key", autocomplete: "off",
+    onkeydown: (e) => { if (e.key === "Enter") saveKey(); } });
   const saveButton = () => h("button", { class: "primary small", onclick: saveKey }, "Save");
   let keyRow;
   if (k.stored) {
-    const replacing = h("div", { class: "row hidden" }, keyInput, saveButton());
+    const replacing = h("div", { class: `row${S.replacing ? "" : " hidden"}` }, keyInput, saveButton());
     // removing takes a second click: a slip would stop every session until the key is pasted again
     const remove = h("button", { class: "small ghost", onclick: () => {
       if (remove.dataset.sure) act("POST", "/api/key", { clear: true }, "The key was removed from your keyring.");
@@ -136,7 +151,11 @@ function setupSection(st) {
       }
     } }, "Remove");
     keyRow = check(true, "NanoGPT API key", `Stored in your keyring (ending ${k.ending}).`,
-      h("button", { class: "small", onclick: () => replacing.classList.toggle("hidden") }, "Replace"), remove);
+      h("button", { class: "small", onclick: () => {
+        S.replacing = !S.replacing;
+        replacing.classList.toggle("hidden", !S.replacing);
+        if (S.replacing) keyInput.focus();
+      } }, "Replace"), remove);
     keyRow.querySelector(".body").append(replacing);
   } else {
     keyRow = check(false, "NanoGPT API key", k.error || "Private Mode is paid per use from your NanoGPT balance: get a key at nano-gpt.com/api.",
@@ -158,16 +177,23 @@ function setupSection(st) {
         : "For a terminal (claude-private), and for the editor's switch, which runs it.",
     allIn ? null : h("button", { class: "small primary", onclick: () => act("POST", "/api/commands", {}, "Installed.") }, "Install"));
 
-  const editors = st.editors.length ? st.editors.map((e) => check(e.state === "on", `Claude Code in ${e.name}`,
+  // on, off, other (another program's wrapper: left alone), or earlier (PrivateCode's: still the old app)
+  const switchOn = (e, label) => h("button", { class: "small private", disabled: !st.ready,
+    title: st.ready ? "" : "Set up the key and Claude Code first", onclick: () => act("POST", "/api/editor",
+      { name: e.name, on: true }, `${e.name}'s new Claude Code tabs run on private models.`) }, label);
+  const switchOff = (e) => h("button", { class: "small", onclick: () => act("POST", "/api/editor", { name: e.name, on: false },
+    `${e.name}'s Claude Code runs as usual again (open a new Claude Code tab).`) }, "Back to normal");
+  const editors = st.editors.length ? st.editors.map((e) => check(
+    e.state === "on" ? true : e.state === "earlier" ? false : "optional", `Claude Code in ${e.name}`,
     e.state === "on" ? "Runs on private models (new Claude Code tabs). The extension takes this for the whole editor."
-      : e.state === "other" ? `Runs through another program (${e.value}), so this is left as it is.`
-        : "Runs as usual, on Anthropic's models.",
-    e.state === "on"
-      ? h("button", { class: "small", onclick: () => act("POST", "/api/editor", { name: e.name, on: false },
-        `${e.name}'s Claude Code runs as usual again (open a new Claude Code tab).`) }, "Back to normal")
-      : e.state === "off" ? h("button", { class: "small private", disabled: !st.ready, onclick: () => act("POST", "/api/editor",
-        { name: e.name, on: true }, `${e.name}'s new Claude Code tabs run on private models.`) }, "Use private models") : null))
-    : [check(true, "Claude Code in your editor", "No VSCodium or VS Code here: use claude-private in a terminal.")];
+      : e.state === "earlier" ? `Runs PrivateCode's claude-private (${e.value}), this app's earlier version, not DA Private Coder's.`
+        : e.state === "other" ? `Runs through another program (${e.value}), so this is left as it is.`
+          : "Runs as usual, on Anthropic's models.",
+    e.state === "on" ? switchOff(e) : null,
+    e.state === "off" ? switchOn(e, "Use private models") : null,
+    e.state === "earlier" ? switchOn(e, "Use DA Private Coder's") : null,
+    e.state === "earlier" ? switchOff(e) : null))
+    : [check("optional", "Claude Code in your editor", "No VSCodium or VS Code here: use claude-private in a terminal.")];
 
   return h("div", { class: "section" }, h("h3", {}, "Setup"), keyRow, claude, commandsRow, ...editors);
 }
@@ -181,9 +207,10 @@ const ROLES = [
   ["vision_model", "Images", "Describes screenshots for a model that can't see them"],
 ];
 
+// without "private/": every model here is one, and the label then fits the window's width
 function modelLabel(m) {
   const p = m.price ? ` · $${price(m.price.input)} / $${price(m.price.cache_read)} / $${price(m.price.output)}` : "";
-  return `${m.id}${p}${m.vision ? " · sees images" : ""}${m.tools === false ? " · no tool calls" : ""}`;
+  return `${m.id.replace(/^private\//, "")}${p}${m.vision ? " · sees images" : ""}${m.tools === false ? " · no tool calls" : ""}`;
 }
 
 function modelsSection(st) {
@@ -259,24 +286,35 @@ function verifySection(st) {
 
 // ------------------------------------------------------------------ usage
 
+// how each request left this computer (manager.py's "sent"): sealed to the enclave, in the clear
+// (a search, or the nano profile's models), or not at all (refused here first)
+const SENT = { sealed: ["private", "sealed"], clear: ["warn", "clear"], "": ["", "not sent"] };
+
 function usageSection(st) {
   const u = st.usage;
-  const rows = u.last.map((r) => h("tr", { class: r.error ? "bad" : "" },
-    h("td", {}, r.t.slice(5, 16)),
-    h("td", {}, r.kind === "search" ? `search, ${r.what || ""}` : r.what + (r.kind === "vision" ? " (image)" : "")),
-    h("td", {}, r.kind === "search" ? h("span", { class: "chip warn" }, "clear") : h("span", { class: "chip private" }, "sealed")),
-    h("td", { class: "num" }, r.kind === "search" ? (r.results ?? "") : tokens(r.input)),
-    h("td", { class: "num" }, r.kind === "search" ? "" : tokens(r.cached)),
-    h("td", { class: "num" }, r.kind === "search" ? "" : tokens(r.output)),
-    h("td", { class: "num", title: r.estimated ? "estimated from NanoGPT's listed prices" : "" },
-      money(r.cost, true) + (r.estimated ? "~" : "")),
-    h("td", {}, r.error ? r.error.slice(0, 60) : "")));
+  const rows = u.last.flatMap((r) => {
+    const [chip, how] = SENT[r.sent] || SENT[""];
+    const what = r.kind === "search"
+      ? `web search${r.what ? `, ${r.what}` : ""}${r.results !== null && r.results !== undefined ? ` · ${r.results} results` : ""}`
+      : r.what + (r.kind === "vision" ? " (image)" : "");
+    const row = h("tr", { class: r.error ? "bad has-note" : "" },
+      h("td", {}, r.t.slice(5, 16)),
+      h("td", { title: r.asked_for ? `Claude Code asked for ${r.asked_for}` : "" }, what),
+      h("td", {}, h("span", { class: `chip ${chip}` }, how)),
+      h("td", { class: "num" }, tokens(r.input)),
+      h("td", { class: "num" }, tokens(r.cached)),
+      h("td", { class: "num" }, tokens(r.output)),
+      h("td", { class: "num", title: r.estimated ? "estimated from NanoGPT's listed prices" : "" },
+        money(r.cost, true) + (r.estimated ? "~" : "")));
+    // what went wrong, under it and wrapped: a column of its own would be off the window's edge
+    return r.error ? [row, h("tr", { class: "bad note" }, h("td", { colspan: "7" }, r.error))] : [row];
+  });
   return h("div", { class: "section" }, h("h3", {}, "Usage"),
     h("div", { class: "totals" },
       h("div", {}, h("div", { class: "big" }, money(u.today) || "$0.00"), h("div", { class: "small muted" }, `today, ${u.requests_today} requests`)),
       h("div", {}, h("div", { class: "big" }, money(u.month) || "$0.00"), h("div", { class: "small muted" }, "this month"))),
     rows.length ? h("div", { class: "usage-box" }, h("table", { class: "usage" },
-      h("thead", {}, h("tr", {}, ["When", "Model", "", "In", "Cached", "Out", "Cost", ""].map((c) => h("th", {}, c)))),
+      h("thead", {}, h("tr", {}, ["When", "Model", "", "In", "Cached", "Out", "Cost"].map((c) => h("th", {}, c)))),
       h("tbody", {}, rows))) : h("p", { class: "lead" }, "Nothing yet. What each request costs shows here; never what was said."));
 }
 
@@ -327,6 +365,14 @@ async function loadModels(fresh = false) {
 }
 
 $("#refresh-btn").addEventListener("click", () => guarded(async () => { await refresh(); await loadModels(true); }));
+// whether the user is in the middle of something the page would lose if drawn again: a field or a
+// list with the focus, or a key typed and not yet saved
+function editing() {
+  const a = document.activeElement;
+  if (a && $("#page").contains(a) && a.matches("input, select, textarea")) return true;
+  return [...document.querySelectorAll("#page input[type=password]")].some((i) => i.value);
+}
+
 // usage and the editor's settings can change outside the window: looked at again now and then
-setInterval(() => { if (!document.hidden) guarded(refresh); }, 20000);
+setInterval(() => { if (!document.hidden && !editing()) guarded(refresh); }, 20000);
 guarded(async () => { await refresh(); await loadModels(); });

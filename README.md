@@ -52,7 +52,8 @@ In a session, `/status` shows the base URL as `http://127.0.0.1:…`: that is DA
 the other models NanoGPT's Private Mode offers now.
 
 DA Private Coder was called PrivateCode before: its settings and its key in your keyring are taken
-over the first time.
+over the first time. An editor PrivateCode switched on still runs PrivateCode: the window says so,
+and **Use DA Private Coder's** switches it over (or `daprivatecoder editor on`).
 
 ## Models and cost
 

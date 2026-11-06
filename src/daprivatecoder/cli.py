@@ -95,6 +95,13 @@ def _key(args) -> int:
 
 # ---------------------------------------------------------------------- the editor switch
 
+def _wrapper_state(value) -> str:
+    from . import editor
+    return {"ours": "on (DA Private Coder)", "": "off",
+            "earlier": f"PrivateCode's ({value}): daprivatecoder editor on switches it to DA Private Coder",
+            }.get(editor.owner(value), f"another wrapper: {value}")
+
+
 def _editor(args) -> int:
     from . import editor
     found = [(name, path) for name, path in editor.editors()
@@ -102,17 +109,14 @@ def _editor(args) -> int:
     if not found:
         raise CliError("No VSCodium or VS Code settings were found here." if not args.which
                        else f"No settings of {args.which} were found here.")
-    ours = lambda v: isinstance(v, str) and os.path.basename(v) == "claude-private"   # noqa: E731
     if args.action == "status":
         for name, path in found:
-            value = editor.current(path)
-            state = "on (DA Private Coder)" if ours(value) else f"another wrapper: {value}" if value else "off"
-            print(f"{name}: {state}")
+            print(f"{name}: {_wrapper_state(editor.current(path))}")
         return 0
     wrapper = editor.wrapper_path() if args.action == "on" else None
     for name, path in found:
         value = editor.current(path)
-        if value and not ours(value):
+        if editor.owner(value) == "other":
             print(f"{name}: left as it is: its Claude Code already runs through another program ({value}).")
             continue
         changed = editor.switch(path, wrapper)
@@ -148,9 +152,7 @@ def _status(args) -> int:
         print(f"NanoGPT key: {e}")
     for name, path in editor.editors():
         value = editor.current(path)
-        state = "on" if value and os.path.basename(value) == "claude-private" else f"another wrapper ({value})" if value \
-            else "off"
-        print(f"Editor, {name}: {state}")
+        print(f"Editor, {name}: {_wrapper_state(value)}")
     print(f"Request log: {state_dir() / 'requests.log'}")
     return 0
 
@@ -205,7 +207,8 @@ def _log(args) -> int:
             total += cost or 0
             what = f"web search, {r.get('provider', '')}" if r.get("provider") else "web search"
             extra = f" {r['error']}" if r.get("error") else f" {r['reason']}" if r.get("reason") else ""
-            print(f"{r.get('t', '')[:19]} {r.get('session', '')} clear  {str(r.get('status', '')):>3} {what:<30} "
+            how = "unsent" if r.get("status") == "refused" else "clear "
+            print(f"{r.get('t', '')[:19]} {r.get('session', '')} {how} {str(r.get('status', '')):>3} {what:<30} "
                   f"{str(r.get('results', '')) + ' results' if 'results' in r else '':<36} "
                   f"{f'${cost:.4f}' if cost is not None else '':>9} {r.get('seconds', '')}s{extra}")
             continue
@@ -215,7 +218,8 @@ def _log(args) -> int:
         tokens = f"{u.get('input', 0) + u.get('cache_read', 0):>7} in ({u.get('cache_read', 0)} cached) {u.get('output', 0):>6} out" \
             if u else " " * 20
         price = (f"${cost:.4f}{'~' if u.get('cost_estimated') else ''}" if cost is not None else "")
-        how = "sealed" if r.get("sealed") or r.get("kind") == "vision" else "clear "
+        # a request refused here (no "sealed" in its record) never left this computer
+        how = "sealed" if r.get("sealed") or r.get("kind") == "vision" else "clear " if "sealed" in r else "unsent"
         what = r.get("model", "") + (" (vision)" if r.get("kind") == "vision" else "")
         extra = f" {r['error']}" if r.get("error") else ""
         print(f"{r.get('t', '')[:19]} {r.get('session', '')} {how} {r.get('status', ''):>3} {what:<30} {tokens} "
