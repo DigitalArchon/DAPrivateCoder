@@ -114,7 +114,8 @@ function check(done, what, detail, ...actions) {
   return h("div", { class: "check" },
     h("div", { class: `mark ${done ? "ok" : "todo"}` }, done ? "✓" : "•"),
     h("div", { class: "body" }, h("div", { class: "what" }, what),
-      detail ? h("div", { class: "detail" }, detail) : null,
+      // what the commands say for a terminal (`claude`), as plain words here
+      detail ? h("div", { class: "detail" }, typeof detail === "string" ? detail.replace(/`/g, "") : detail) : null,
       actions.some(Boolean) ? h("div", { class: "row" }, ...actions) : null));
 }
 
