@@ -64,7 +64,7 @@ class Profile:
     opus_model: str
     fast_model: str
     vision_model: str = ""
-    reasoning: str = "low"
+    reasoning: str = "high"         # none is recommended: for coding it's up to the use case
     web_search: str = "off"
     provider: str = "nanogpt"       # a standard profile's: nanogpt, openrouter or custom (PROVIDERS)
     base_url: str = ""              # custom: its OpenAI-compatible endpoint
@@ -114,11 +114,11 @@ class Config:
 
 DEFAULTS = Config(profiles={
     "private": Profile("private", "private", "private/glm-5-3", "private/kimi-k3", "private/deepseek-v4-1-flash",
-                       "private/deepseek-v4-1-flash", "low", "zero-retention"),
-    "tee": Profile("tee", "tee", "TEE/glm-5.3", "TEE/kimi-k3", "TEE/glm-5.3-flash", "TEE/glm-5.3-flash", "low",
+                       "private/deepseek-v4-1-flash", "high", "zero-retention"),
+    "tee": Profile("tee", "tee", "TEE/glm-5.3", "TEE/kimi-k3", "TEE/glm-5.3-flash", "TEE/glm-5.3-flash", "high",
                    "zero-retention"),
     "standard": Profile("standard", "standard", "z-ai/glm-5.3", "moonshotai/kimi-k3", "z-ai/glm-5.3-flash",
-                        "z-ai/glm-5.3-flash", "low", "best"),
+                        "z-ai/glm-5.3-flash", "high", "best"),
 })
 
 # ---------------------------------------------------------------------- the file, written
@@ -242,7 +242,7 @@ def _profile(name: str, table: dict, where: str) -> Profile:
     opus = _text(table, "opus_model", where) or model
     fast = _text(table, "fast_model", where) or model
     vision = _text(table, "vision_model", where)
-    reasoning = _text(table, "reasoning", where, "low").lower()
+    reasoning = _text(table, "reasoning", where, "high").lower()
     if reasoning not in REASONING:
         raise ConfigError(f"{where}: reasoning must be one of {', '.join(REASONING)} (not {reasoning!r}).")
     # a profile searches with Linkup unless told otherwise (a standard one, with the best results): of the

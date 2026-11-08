@@ -413,7 +413,7 @@ function modelsSection(st) {
     // in a session, and the model runs at whatever Claude Code says (proxy.py)
     h("div", { class: "model-row" }, h("label", {}, "Effort"),
       h("select", { onchange: (e) => save({ reasoning: e.target.value }) },
-        [["low", "Low (fast; recommended)"], ["medium", "Medium"], ["high", "High (slow)"], ["max", "Max (slowest)"]]
+        [["low", "Low (fastest)"], ["medium", "Medium"], ["high", "High (slow)"], ["max", "Max (slowest)"]]
           .map(([v, l]) => h("option", { value: v, selected: p.reasoning === v }, l)))),
     h("div", { class: "model-row" }, h("span", {}), h("div", { class: "small muted" },
       "How hard the models think as each session starts. In a session, Claude Code's own Effort (in the editor, or ",

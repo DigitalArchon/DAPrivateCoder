@@ -14,7 +14,7 @@ def test_the_defaults_are_written_on_first_use_and_read_back():
     assert cfg.path == config.config_path() and cfg.path.read_text() == config.DEFAULT_TEXT
     private, tee, standard = cfg.profile("private"), cfg.profile("tee"), cfg.profile("standard")
     assert private.private and private.models == ("private/glm-5-3", "private/kimi-k3", "private/deepseek-v4-1-flash")
-    assert private.vision_model == "private/deepseek-v4-1-flash" and private.reasoning == "low"
+    assert private.vision_model == "private/deepseek-v4-1-flash" and private.reasoning == "high"
     assert tee.kind == "tee" and tee.models == ("TEE/glm-5.3", "TEE/kimi-k3", "TEE/glm-5.3-flash")
     assert not standard.private and standard.model == "z-ai/glm-5.3" and standard.provider == "nanogpt"
     assert cfg.base_url == "https://nano-gpt.com/api/v1" and cfg.claude == ""
