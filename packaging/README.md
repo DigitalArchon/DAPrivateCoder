@@ -79,7 +79,8 @@ If they differ, `diffoscope` on the two files shows where.
 
 1. Update the version in `pyproject.toml` and `src/daprivatecoder/__init__.py`, commit, tag.
 2. `packaging/build-appimage.sh check` (reproducible), then `packaging/test-appimage.sh`.
-3. Attach the AppImage and its `.sha256` to the release.
+3. Write the release notes in `dist/release-notes-v<version>.md` (beside the AppImage, not in git).
+4. Attach the AppImage and its `.sha256` to the release, with those notes.
 
 Rebuild and re-release when a pinned dependency has a security fix: the locks don't move by
 themselves. WebKitGTK and GTK update with the system.
