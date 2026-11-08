@@ -265,6 +265,8 @@ class Proxy:
         try:
             key = self._key() if provider == "nanogpt" else self._provider_key()
         except creds.KeyringUnavailable as e:
+            if provider == "custom":
+                return None                                  # a server of your own may need none: it says if it does
             raise Refused(403, str(e)) from None
         if key or provider == "custom":                      # a server of your own may need none
             return key

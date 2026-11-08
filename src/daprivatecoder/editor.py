@@ -189,11 +189,14 @@ def editors() -> list[tuple[str, Path]]:
     return [(name, Path(os.path.expanduser(p))) for name, p in EDITORS if Path(os.path.expanduser(p)).parent.is_dir()]
 
 
-def wrapper_path() -> str:
-    """The claude-private the editor should run: DA Private Coder's command in ~/.local/bin (written now
-    if it isn't there), which stays where it is; from source, the one beside this Python will do too.
-    Never one inside the AppImage, which is mounted somewhere new each time it runs."""
+def wrapper_path(profile: str = "private") -> str:
+    """The program the editor should run for `profile`'s sessions. For the private one, claude-private:
+    DA Private Coder's command in ~/.local/bin (written now if it isn't there), which stays where it is;
+    from source, the one beside this Python will do too. For another, its script out of the PATH
+    (commands.wrapper_dir). Never one inside the AppImage, which is mounted somewhere new each run."""
     from . import commands
+    if profile != "private":
+        return str(commands.write_wrapper(profile))
     if commands.state("claude-private") in ("missing", "stale"):
         commands.install(["claude-private"])
     if commands.state("claude-private") == "current":
@@ -207,10 +210,23 @@ def wrapper_path() -> str:
 
 def owner(value) -> str:
     """Whose program the process wrapper setting `value` names: "ours" (DA Private Coder's
-    claude-private), "other" (another program), or "" (none: the usual)."""
+    claude-private, or its script for another profile), "other" (another program), or "" (none: the usual)."""
     if not value:
         return ""
-    return "ours" if isinstance(value, str) and os.path.basename(value) == "claude-private" else "other"
+    return "ours" if profile_of(value) else "other"
+
+
+def profile_of(value) -> str:
+    """The profile a process wrapper of DA Private Coder's runs ("private" for claude-private), or ""."""
+    from . import commands
+    if not isinstance(value, str):
+        return ""
+    if os.path.basename(value) == "claude-private":
+        return "private"
+    path = Path(os.path.expanduser(value))
+    if path.parent == commands.wrapper_dir() and path.name.startswith("claude-"):
+        return path.name.removeprefix("claude-")
+    return ""
 
 
 def current(path: Path) -> str | None:

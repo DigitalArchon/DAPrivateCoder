@@ -3,11 +3,11 @@
   daprivatecoder                                    the window (--browser: in the web browser)
   claude-private [Claude Code's arguments]          Claude Code on NanoGPT's private models
   daprivatecoder claude-private [...]               the same (what the claude-private command runs)
-  daprivatecoder claude [--profile NAME] [...]      the same on any profile (nano: NanoGPT's other models)
-  daprivatecoder editor on|off|status               the switch for Claude Code in VSCodium and VS Code
-  daprivatecoder key set|clear|status               the NanoGPT API key, in your keyring
+  daprivatecoder claude [--profile NAME] [...]      the same on any profile (tee, standard: not end-to-end encrypted)
+  daprivatecoder editor on|off|status [--profile]   the switch for Claude Code in VSCodium and VS Code
+  daprivatecoder key set|clear|status [--provider]  an API key (NanoGPT's, OpenRouter's…), in your keyring
   daprivatecoder status                             what is set up here
-  daprivatecoder check [--profile NAME]             attest the enclave, list the private models and prices
+  daprivatecoder check [--profile NAME]             attest the enclave(s), list the profile's models and prices
   daprivatecoder log [-n N]                         what each session asked of which model, and the cost
   daprivatecoder serve ...                          the proxy itself (claude-private starts it)
   daprivatecoder search-server ...                  the web search tool (Claude Code starts it)
@@ -68,28 +68,39 @@ def _claude(argv: list[str]) -> int:
 
 def _key(args) -> int:
     from . import creds
+    provider, base_url = args.provider, ""
+    name = config.PROVIDERS[provider]
+    if provider == "custom":
+        cfg = config.load()
+        base_url = cfg.provider_url(cfg.profile("standard"))
+        if not base_url:
+            raise CliError("The standard profile's provider isn't a custom one: set provider and base_url first.")
+        name = f"the provider at {base_url}"
+    flag = "" if provider == "nanogpt" else f" --provider {provider}"
     if args.action == "status":
-        key = creds.get_key()
-        print(f"A NanoGPT key is stored in your keyring (ending {key[-4:]})." if key
-              else "No NanoGPT key is stored. Store one with: daprivatecoder key set")
+        key = creds.get_key(provider, base_url)
+        print(f"A key for {name} is stored in your keyring (ending {key[-4:]})." if key
+              else f"No key for {name} is stored. Store one with: daprivatecoder key set{flag}")
         return 0
     if args.action == "clear":
-        creds.delete_key()
-        print("The NanoGPT key was removed from your keyring.")
+        creds.delete_key(provider, base_url)
+        print(f"The key for {name} was removed from your keyring.")
         return 0
     if args.from_vibe_manager:
+        if provider != "nanogpt":
+            raise CliError("DA Vibe Manager's key is NanoGPT's.")
         key = creds.vibe_manager_key() or ""
         if not key:
             raise CliError("DA Vibe Manager has no NanoGPT key in your keyring.")
     elif sys.stdin.isatty():
-        key = getpass.getpass("NanoGPT API key (it isn't shown as you type): ")
+        key = getpass.getpass(f"API key for {name} (it isn't shown as you type): ")
     else:
         key = sys.stdin.readline()
     key = key.strip()
     if not key or any(c.isspace() for c in key):
         raise CliError("That isn't an API key: nothing was stored.")
-    creds.set_key(key)
-    print("The NanoGPT key is stored in your keyring.")
+    creds.set_key(key, provider, base_url)
+    print(f"The key for {name} is stored in your keyring.")
     return 0
 
 
@@ -97,7 +108,9 @@ def _key(args) -> int:
 
 def _wrapper_state(value) -> str:
     from . import editor
-    return {"ours": "on (DA Private Coder)", "": "off"}.get(editor.owner(value), f"another wrapper: {value}")
+    if editor.owner(value) == "ours":
+        return f"on (DA Private Coder, its {editor.profile_of(value)} profile)"
+    return "off" if not value else f"another wrapper: {value}"
 
 
 def _editor(args) -> int:
@@ -111,7 +124,9 @@ def _editor(args) -> int:
         for name, path in found:
             print(f"{name}: {_wrapper_state(editor.current(path))}")
         return 0
-    wrapper = editor.wrapper_path() if args.action == "on" else None
+    if args.action == "on":
+        config.load().profile(args.profile)              # said now if there's no such profile
+    wrapper = editor.wrapper_path(args.profile) if args.action == "on" else None
     for name, path in found:
         value = editor.current(path)
         if editor.owner(value) == "other":
@@ -120,7 +135,9 @@ def _editor(args) -> int:
         changed = editor.switch(path, wrapper)
         print(f"{name}: {'changed' if changed else 'already so'} ({path})")
     if wrapper:
-        print("Claude Code sessions started in the editor from now on run on NanoGPT's private models "
+        what = {"private": "NanoGPT's private models", "tee": "NanoGPT's TEE models (attested, NOT end-to-end encrypted)",
+                }.get(args.profile, f"the {args.profile} profile's models (NOT private: in the clear)")
+        print(f"Claude Code sessions started in the editor from now on run on {what} "
               "(open a new Claude Code tab, or reload the window).\nTo switch back: daprivatecoder editor off")
     else:
         print("Claude Code sessions started in the editor from now on run as usual, on Anthropic's models.")
@@ -136,7 +153,8 @@ def _status(args) -> int:
     searches = {"zero-retention": "Linkup (keeps nothing)", "best": "Perplexity and Kagi (not zero retention)",
                 "off": "off"}
     for p in cfg.profiles.values():
-        kind = "private" if p.private else "not private"
+        kind = {"private": "private", "tee": "TEE, not end-to-end encrypted"}.get(
+            p.kind, f"standard, not private, on {config.PROVIDERS[p.provider]}")
         print(f"  [{p.name}] {kind}: {p.model} (opus {p.opus_model}, quick {p.fast_model}); "
               f"vision {p.vision_model or 'none'}; reasoning {p.reasoning}; web search {searches[p.web_search]}")
     try:
@@ -159,13 +177,21 @@ def _check(args) -> int:
     import asyncio
 
     from .llm import capabilities
+    from .llm.client import is_tee
     from .llm.private_mode import Enclave, list_private_models, offered, offers_private_mode, relay_url
     cfg = config.load()
     profile = cfg.profile(args.profile)
-    if not offers_private_mode(cfg.base_url):
-        raise CliError(f"{cfg.base_url} isn't NanoGPT, so it has no Private Mode.")
+    if profile.kind != "standard" and not offers_private_mode(cfg.base_url):
+        raise CliError(f"{cfg.base_url} isn't NanoGPT, so it has no Private Mode or TEE models.")
 
-    async def go() -> int:
+    def line(m: str, c: dict, markup: float = 1.0) -> str:
+        price = c.get("pricing")
+        cost = (" ${:.2f} / ${:.2f} / ${:.2f}".format(*(price[k] * markup for k in ("input", "cache_read", "output")))
+                if price else "")
+        ctx = f" {c['context'] // 1000}k context" if c.get("context") else ""
+        return f"  {m}{cost}{ctx}{', sees images' if c.get('vision') else ''}{', no tool calls' if c and not c.get('tools') else ''}"
+
+    async def private() -> int:
         ids = await list_private_models(cfg.base_url)
         try:
             caps = await capabilities.fetch_nanogpt(cfg.base_url)
@@ -173,13 +199,7 @@ def _check(args) -> int:
             caps = {}
         print("NanoGPT Private Mode models now (prices per million tokens, input / cached input / output):")
         for m in ids:
-            c = capabilities.lookup(caps, m) or {}
-            price = c.get("pricing")
-            cost = (" ${:.2f} / ${:.2f} / ${:.2f}".format(*(price[k] * capabilities.PRIVATE_MARKUP
-                                                           for k in ("input", "cache_read", "output")))
-                    if price else "")
-            ctx = f" {c['context'] // 1000}k context" if c.get("context") else ""
-            print(f"  {m}{cost}{ctx}{', sees images' if c.get('vision') else ''}{', no tool calls' if c and not c.get('tools') else ''}")
+            print(line(m, capabilities.lookup(caps, m) or {}, capabilities.PRIVATE_MARKUP))
         bad = [m for m in (*profile.models, profile.vision_model) if m and offered(m, ids) is False]
         for m in bad:
             print(f"Profile [{profile.name}] uses {m}, which NanoGPT no longer offers: change it in {cfg.path}")
@@ -187,7 +207,43 @@ def _check(args) -> int:
         att = (await Enclave(relay_url(cfg.base_url)).current()).attestation
         print(f"Verified: {att.summary}\n  key fingerprint (sha256) {att.hpke_key_sha256}")
         return 1 if bad else 0
-    return asyncio.run(go())
+
+    async def tee() -> int:
+        from . import creds
+        from .proxy import attest_tee
+        caps = await capabilities.fetch_nanogpt(cfg.base_url)
+        print("NanoGPT TEE models now (prices per million tokens, input / cached input / output). Not end-to-end "
+              "encrypted: NanoGPT's gateway reads what is sent to them.")
+        for m in sorted(m for m in caps if is_tee(m)):
+            print(line(m, caps[m]))
+        key = creds.get_key()
+        if not key:
+            raise CliError("NanoGPT shows a TEE model's attestation only with your API key: daprivatecoder key set")
+        failed = 0
+        for m in dict.fromkeys(x for x in (*profile.models, profile.vision_model) if is_tee(x)):
+            print(f"Attesting {m}...")
+            try:
+                att = await asyncio.to_thread(attest_tee, cfg.base_url, key, m)
+            except Exception as e:  # noqa: BLE001 - said as it is
+                print(f"  NOT verified: {e}")
+                failed += 1
+                continue
+            print(f"  {'Verified' if att.get('level') == 'full' else 'Verified in part'}: {att.get('summary')}")
+        return 1 if failed else 0
+
+    async def standard() -> int:
+        url = cfg.provider_url(profile)
+        caps = await capabilities.fetch(profile.provider, url)
+        if caps is None:
+            print(f"{url} lists nothing of what its models can do or cost.")
+            return 0
+        print(f"{config.PROVIDERS[profile.provider]}: the profile's models (prices per million tokens, input / cached "
+              "input / output). Not private: they're sent in the clear.")
+        missing = [m for m in (*profile.models, profile.vision_model) if m and capabilities.lookup(caps, m) is None]
+        for m in dict.fromkeys(x for x in (*profile.models, profile.vision_model) if x):
+            print(line(m, capabilities.lookup(caps, m) or {}) + ("  (not offered now)" if m in missing else ""))
+        return 1 if missing else 0
+    return asyncio.run({"private": private, "tee": tee}.get(profile.kind, standard)())
 
 
 def _log(args) -> int:
@@ -279,16 +335,20 @@ def _parser() -> argparse.ArgumentParser:
     ap.add_argument("--version", action="version", version=f"DA Private Coder {__version__}")
     sub = ap.add_subparsers(dest="command", required=True)
     sub.add_parser("claude", help="start Claude Code on a profile: daprivatecoder claude [--profile NAME] [its arguments]")
-    k = sub.add_parser("key", help="the NanoGPT API key, in your keyring")
+    k = sub.add_parser("key", help="an API key, in your keyring: NanoGPT's, or a standard profile's provider's")
     k.add_argument("action", choices=("set", "clear", "status"))
+    k.add_argument("--provider", choices=tuple(config.PROVIDERS), default="nanogpt",
+                   help="whose key (default nanogpt; custom: the standard profile's own endpoint)")
     k.add_argument("--from-vibe-manager", action="store_true", help="set: copy the key DA Vibe Manager stored")
     k.set_defaults(func=_key)
     e = sub.add_parser("editor", help="the switch for Claude Code in VSCodium and VS Code")
     e.add_argument("action", choices=("on", "off", "status"))
     e.add_argument("which", nargs="?", help="only this editor: vscodium or code")
+    e.add_argument("--profile", default=PRIVATE, help="on: the profile its sessions run on (default private; tee, "
+                   "standard: not end-to-end encrypted)")
     e.set_defaults(func=_editor)
     sub.add_parser("status", help="what is set up here").set_defaults(func=_status)
-    c = sub.add_parser("check", help="attest the enclave, and list NanoGPT's private models and their prices")
+    c = sub.add_parser("check", help="attest the profile's enclaves, and list its models and their prices")
     c.add_argument("--profile", default=PRIVATE)
     c.set_defaults(func=_check)
     lg = sub.add_parser("log", help="what each session asked of which model, and what it cost")

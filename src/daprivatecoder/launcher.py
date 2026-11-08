@@ -29,7 +29,7 @@ import sys
 from pathlib import Path
 
 from .config import PROVIDERS, Config, Profile, state_dir
-from .llm.client import RANK, is_private_mode, tier_of
+from .llm.client import RANK, tier_of
 
 # Claude Code's own model names that resolve through the tier variables set below
 TIER_ALIASES = frozenset({"opus", "sonnet", "haiku", "fable", "opusplan", "default", "inherit"})

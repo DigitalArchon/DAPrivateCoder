@@ -19,6 +19,7 @@
   --danger: #e5534b;
   --danger-fill: #5a1f1c;
   --private: #a371f7;
+  --tee: #2fb3a0;
   --code: #0b0d10;
   --note-bg: #3a2f12;
   --note-text: #f0d48a;
@@ -43,6 +44,7 @@
   --danger: #c7362f;
   --danger-fill: #c7362f;
   --private: #7c4ddb;
+  --tee: #12806f;
   --code: #eef1f5;
   --note-bg: #fff4d6;
   --note-text: #6b4b00;
@@ -67,6 +69,7 @@
     --danger: #c7362f;
     --danger-fill: #c7362f;
     --private: #7c4ddb;
+  --tee: #12806f;
     --code: #eef1f5;
     --note-bg: #fff4d6;
     --note-text: #6b4b00;
@@ -94,6 +97,8 @@ button:disabled { opacity: .5; cursor: default; }
 button.primary { background: var(--accent-2); border-color: var(--accent-2); color: var(--accent-text); }
 button.primary:hover:not(:disabled) { background: var(--accent); border-color: var(--accent); }
 button.private { background: var(--private); border-color: var(--private); color: #fff; }
+button.tee { background: var(--tee); border-color: var(--tee); color: #fff; }
+button.standard { background: var(--panel-2); border-color: var(--warn); color: var(--text); }
 button.ghost { background: transparent; border-color: transparent; color: var(--muted); }
 button.ghost:hover { color: var(--text); }
 button.small { padding: 2px 9px; font-size: 13px; }
@@ -134,6 +139,8 @@ code { font-family: var(--mono); font-size: 12.5px; background: var(--code); pad
 .chip.ok { border-color: var(--ok); color: var(--ok); }
 .chip.warn { border-color: var(--warn); color: var(--warn); }
 .chip.private { border-color: var(--private); color: var(--private); }
+.chip.tee { border-color: var(--tee); color: var(--tee); }
+.chip.bad { border-color: var(--danger); color: var(--danger); }
 .warnbox { background: var(--note-bg); color: var(--note-text); border-radius: 8px; padding: 6px 9px; font-size: 12.5px; margin-top: 6px; }
 .radio { display: flex; gap: 8px; align-items: flex-start; padding: 4px 0; cursor: pointer; }
 .radio input { margin-top: 3px; }
@@ -149,6 +156,8 @@ code { font-family: var(--mono); font-size: 12.5px; background: var(--code); pad
 .section { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; }
 .section h3 { font-size: 14px; margin: 0 0 8px; display: flex; align-items: center; gap: 8px; }
 .section.start { border-left: 3px solid var(--private); }
+.section.start.tee { border-left-color: var(--tee); }
+.section.start.standard { border-left-color: var(--warn); }
 /* the folder keeps room for a path: in a narrow window the buttons go on the next line */
 .start .row > input.folder { min-width: 190px; }
 .lead { margin: 0 0 8px; color: var(--muted); font-size: 13px; }
@@ -184,3 +193,22 @@ table.usage tr.note td { white-space: normal; overflow-wrap: anywhere; padding-t
 .paths { font-size: 12.5px; color: var(--muted); display: flex; flex-direction: column; gap: 2px; overflow-wrap: anywhere; }
 /* the same radio button whatever the system's GTK theme draws */
 input[type=radio] { accent-color: var(--private); width: 15px; height: 15px; flex: none; }
+/* the kinds of session: three buttons, the one chosen pressed in its colour */
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin: 0 0 8px; }
+.seg-btn { border: none; border-radius: 0; background: transparent; color: var(--muted); padding: 3px 14px; }
+.seg-btn + .seg-btn { border-left: 1px solid var(--border); }
+.seg-btn:hover:not(:disabled) { color: var(--text); border-color: var(--border); }
+.seg-btn.on { color: #fff; }
+.seg-btn.kind-private.on { background: var(--private); }
+.seg-btn.kind-tee.on { background: var(--tee); }
+.seg-btn.kind-standard.on { background: var(--warn); color: #1b1300; }
+.check .body .warnbox { margin-top: 2px; }
+select.inline { padding-top: 2px; padding-bottom: 2px; font-size: 13px; }
+.col { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.model-row.route { margin-top: -2px; }
+.model-row.route > label { font-size: 11.5px; padding-left: 10px; }
+.model-row.route .row { min-width: 0; }
+.model-row.route select { width: auto; min-width: 0; max-width: 100%; flex: 1 1 140px; font-size: 12.5px; padding-top: 3px; padding-bottom: 3px; }
+label.tick { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+label.tick input { margin: 0; }
+.spaced { margin-top: 10px; }

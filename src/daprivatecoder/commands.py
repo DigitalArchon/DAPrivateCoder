@@ -7,7 +7,9 @@ each time it runs. The scripts are written again when the window starts, so they
 that has moved. A file there that isn't DA Private Coder's is never overwritten.
 
 They are only for typing in a terminal: the window runs the app itself, and the editor's switch
-writes claude-private when it is turned on (editor.wrapper_path)."""
+writes claude-private when it is turned on (editor.wrapper_path). For a TEE or standard profile, the
+editor runs a script of the same kind kept out of the PATH (wrapper_dir: claude-tee, claude-standard),
+which DA Private Coder rewrites the same way."""
 
 from __future__ import annotations
 
@@ -64,25 +66,55 @@ def install(names=tuple(COMMANDS)) -> dict[str, str]:
     for name in names:
         now = state(name)
         if now in ("missing", "stale"):
-            path = path_of(name)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            if path.is_symlink():
-                path.unlink()
-            tmp = path.with_name(f".{name}.tmp")
-            tmp.write_text(script(name))
-            tmp.chmod(0o755)
-            os.replace(tmp, path)
+            _write(path_of(name), script(name))
             now = "current"
         out[name] = now
     return out
 
 
 def refresh() -> None:
-    """Write again the commands DA Private Coder installed that no longer run it as it runs now (an
-    AppImage moved); never install ones the user hasn't."""
+    """Write again the commands and editor scripts DA Private Coder installed that no longer run it as
+    it runs now (an AppImage moved); never install ones the user hasn't."""
     stale = [name for name in COMMANDS if state(name) == "stale" and MARK in _text(path_of(name))]
     if stale:
         install(stale)
+    folder = wrapper_dir()
+    if folder.is_dir():
+        for path in sorted(folder.glob("claude-*")):
+            profile = path.name.removeprefix("claude-")
+            if MARK in _text(path) and _text(path) != wrapper_script(profile):
+                _write(path, wrapper_script(profile))
+
+
+# ---------------------------------------------------------------------- the editor's, for other profiles
+
+def wrapper_dir() -> Path:
+    """Where the editor's scripts for profiles other than the private one are: out of the PATH."""
+    base = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
+    return Path(base) / "daprivatecoder" / "editor"
+
+
+def wrapper_script(profile: str) -> str:
+    argv = target_argv() + ["claude", "--profile", profile]
+    return f'#!/bin/sh\n{MARK}: Claude Code on its {profile} profile, for the editor.\nexec {shlex.join(argv)} "$@"\n'
+
+
+def write_wrapper(profile: str) -> Path:
+    """The editor's script for `profile` (a TEE or standard one), written if it isn't as it should be."""
+    path = wrapper_dir() / f"claude-{profile}"
+    if _text(path) != wrapper_script(profile):
+        _write(path, wrapper_script(profile))
+    return path
+
+
+def _write(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.is_symlink():
+        path.unlink()
+    tmp = path.with_name(f".{path.name}.tmp")
+    tmp.write_text(text)
+    tmp.chmod(0o755)
+    os.replace(tmp, path)
 
 
 def _text(path: Path) -> str:

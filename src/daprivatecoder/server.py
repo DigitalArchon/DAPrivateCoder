@@ -23,6 +23,17 @@ WEB_DIR = Path(__file__).resolve().parent / "web"
 HEADERS = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "X-Content-Type-Options": "nosniff"}
 
 
+class _Static(StaticFiles):
+    """The page's script and styles, asked for again each time (revalidated, not taken from a cache): a
+    browser that kept an older version would show an older window with the newer app."""
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
+
+
 def create_app(token: str, manager: Manager, desktop=None, on_quit: Callable[[], None] | None = None) -> Starlette:
     """`desktop` (app.Desktop, in the app window only) opens the folder chooser; `on_quit` ends the app."""
 
@@ -50,12 +61,13 @@ def create_app(token: str, manager: Manager, desktop=None, on_quit: Callable[[],
         return await in_thread(manager.state)
 
     async def key(request, body):
+        provider = str(body.get("provider") or "nanogpt")
         if body.get("from") == "vibe-manager":
             await in_thread(manager.import_key)
         elif body.get("clear"):
-            await in_thread(manager.clear_key)
+            await in_thread(manager.clear_key, provider)
         else:
-            await in_thread(manager.set_key, str(body.get("key") or ""))
+            await in_thread(manager.set_key, str(body.get("key") or ""), provider)
         return await in_thread(manager.state)
 
     async def install(request, body):
@@ -63,7 +75,8 @@ def create_app(token: str, manager: Manager, desktop=None, on_quit: Callable[[],
         return await in_thread(manager.state)
 
     async def editor_switch(request, body):
-        await in_thread(manager.set_editor, str(body.get("name") or ""), bool(body.get("on")))
+        await in_thread(manager.set_editor, str(body.get("name") or ""), bool(body.get("on")),
+                        str(body.get("profile") or "private"))
         return await in_thread(manager.state)
 
     async def profile(request, body):
@@ -75,10 +88,23 @@ def create_app(token: str, manager: Manager, desktop=None, on_quit: Callable[[],
         return {"ok": True}
 
     async def models(request, body):
-        return {"models": await manager.models(fresh=bool(request.query_params.get("fresh")))}
+        return {"models": await manager.models(str(request.query_params.get("profile") or "private"),
+                                               fresh=bool(request.query_params.get("fresh")))}
+
+    async def hosts(request, body):
+        return await manager.hosts(str(body.get("profile") or "standard"), str(body.get("model") or ""))
+
+    async def route(request, body):
+        await in_thread(manager.save_route, str(body.get("profile") or "standard"), str(body.get("model") or ""),
+                        body.get("route"))
+        return await in_thread(manager.state)
+
+    async def start(request, body):
+        await in_thread(manager.set_start, str(body.get("session") or ""))
+        return await in_thread(manager.state)
 
     async def check(request, body):
-        return {"attestation": await manager.check()}
+        return {"attestation": await manager.check(str(body.get("model") or ""))}
 
     async def open_folder(request, body):
         await in_thread(manager.open, str(body.get("folder") or ""), str(body.get("profile") or "private"))
@@ -109,12 +135,15 @@ def create_app(token: str, manager: Manager, desktop=None, on_quit: Callable[[],
         Route("/api/editor", api(editor_switch), methods=["POST"]),
         Route("/api/profile", api(profile), methods=["POST"]),
         Route("/api/theme", api(theme), methods=["POST"]),
+        Route("/api/hosts", api(hosts), methods=["POST"]),
+        Route("/api/route", api(route), methods=["POST"]),
+        Route("/api/start", api(start), methods=["POST"]),
         Route("/api/models", api(models)),
         Route("/api/check", api(check), methods=["POST"]),
         Route("/api/open", api(open_folder), methods=["POST"]),
         Route("/api/forget", api(forget), methods=["POST"]),
         Route("/api/choose-folder", api(choose), methods=["POST"]),
         Route("/api/quit", api(quit_app), methods=["POST"]),
-        Mount("/static", StaticFiles(directory=WEB_DIR)),
+        Mount("/static", _Static(directory=WEB_DIR)),
     ]
     return Starlette(routes=routes)

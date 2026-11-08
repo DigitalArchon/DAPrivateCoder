@@ -1,12 +1,16 @@
 "use strict";
-// DA Private Coder's window: what is set up (the key, Claude Code, the commands, the editor switch),
-// the private profile's models and web search, the enclave's attestation, and what it cost. Every
-// change goes through the local server (server.py), which writes the same files the commands do.
+// DA Private Coder's window: what is set up (the keys, Claude Code, the commands, the editor switch),
+// the private, TEE and standard profiles' models, the hosts that run them, and their web search, the
+// enclaves' attestations, and what it cost. Every change goes through the local server (server.py),
+// which writes the same files the commands do.
 
 const TOKEN = new URLSearchParams(location.search).get("t") || "";
 const $ = (sel) => document.querySelector(sel);
-// replacing: the key's Replace field is open (kept across renders, as the folder typed is)
-const S = { state: null, models: null, modelsError: "", checking: false, folder: "", replacing: false };
+// kept across renders, as the folder typed is: the Models tab shown (a profile), each profile's models and
+// the hosts listed for a model, the key whose Replace field is open, the session picked for an editor not
+// yet switched on, a route being chosen, a custom provider's address being typed, what is being checked
+const S = { state: null, folder: "", tab: "", models: {}, modelsError: {}, hosts: {}, routeHost: {}, routeFp8: true,
+  editorPick: {}, customUrl: false, replacing: "", checking: "" };
 
 function h(tag, attrs = {}, ...children) {
   const el = document.createElement(tag);
@@ -71,16 +75,64 @@ const price = (n) => (Math.round(n * 100) / 100).toFixed(2);
 const tokens = (n) => (n === null || n === undefined) ? ""
   : n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n);
 
+// ------------------------------------------------------------------ the three kinds of session
+
+// how each kind's requests travel, and what the window says of it (config.py's kinds; a profile of each name)
+const SESSIONS = ["private", "tee", "standard"];
+const KINDS = {
+  private: { label: "Private", chip: ["private", "end-to-end encrypted"], models: "private models" },
+  tee: { label: "TEE", chip: ["tee", "TEE: not end-to-end encrypted"], models: "TEE models (not end-to-end encrypted)" },
+  standard: { label: "Standard", chip: ["warn", "not private"], models: "standard models (not private)" },
+};
+const PROVIDERS = { nanogpt: "NanoGPT", openrouter: "OpenRouter", custom: "Another provider (OpenAI-compatible)" };
+
+const chipOf = (kind) => h("span", { class: `chip ${KINDS[kind].chip[0]}` }, KINDS[kind].chip[1]);
+
+function providerName(st, profile) {
+  const p = st.config && st.config.profiles[profile];
+  if (!p || p.kind !== "standard") return "NanoGPT";
+  return p.provider === "custom" ? (p.base_url || "your provider") : PROVIDERS[p.provider];
+}
+
+// what a session of `kind` is, in a sentence; and for one that isn't private, what it gives away
+function leadOf(st, kind) {
+  if (kind === "private") return "Each request is sealed on this computer to an enclave whose attestation is checked first; NanoGPT only relays it.";
+  if (kind === "tee") return "NanoGPT's TEE models. Each runs in an enclave this app attests before it sends it anything (Intel TDX, NVIDIA GPUs), and again every 15 minutes.";
+  return `Any model of ${providerName(st, "standard")}, as you choose it below (Models).`;
+}
+
+function warningOf(st, kind) {
+  if (kind === "tee") return h("div", { class: "warnbox" }, h("b", {}, "Not end-to-end encrypted. "),
+    "NanoGPT's gateway reads every prompt, the files Claude Code sends and every reply, in the clear: the enclave protects them only from the host that runs the model. For that too, choose Private.");
+  if (kind === "standard") return h("div", { class: "warnbox" }, h("b", {}, "Not private. "),
+    `Every prompt, the files Claude Code reads and every reply go in the clear to ${providerName(st, "standard")} and the host that runs the model, and what they keep is up to them.`);
+  return null;
+}
+
+// why a session of `kind` can't start yet, or "" when it can
+function notReady(st, kind) {
+  if (st.ready[kind]) return "";
+  if (!st.claude.path) return "Claude Code isn't found here (Setup).";
+  if (kind === "standard" && st.provider_key) return `Store your ${providerName(st, "standard")} API key first (Models, Standard).`;
+  return "Store your NanoGPT API key first (Setup).";
+}
+
+// three buttons, one pressed: the kinds of session
+function seg(current, pick) {
+  return h("div", { class: "seg" }, SESSIONS.map((k) => h("button", {
+    class: `seg-btn kind-${k}${k === current ? " on" : ""}`, "aria-pressed": k === current ? "true" : "false",
+    onclick: () => pick(k) }, KINDS[k].label)));
+}
+
 // ------------------------------------------------------------------ the top bar
 
 function renderTop(st) {
   const bar = $("#status");
-  const p = st.config && st.config.profiles.private;
   let text = "Ready", cls = "ok";
   if (st.config_error) { text = "The settings file has a mistake"; cls = "bad"; }
-  else if (!st.key.stored) { text = "Needs your NanoGPT API key"; cls = "wait"; }
   else if (!st.claude.path) { text = "Needs Claude Code"; cls = "wait"; }
-  else if (p) text = "Ready: sessions run on private models only";
+  else if (!SESSIONS.some((k) => st.ready[k])) { text = "Needs an API key"; cls = "wait"; }
+  else text = `Ready: Start opens ${KINDS[st.start].label} sessions`;
   bar.className = `status ${cls}`;
   $("#status-text").textContent = text;
   const notes = [st.ui_notice, st.config_error].filter(Boolean);
@@ -91,31 +143,35 @@ function renderTop(st) {
 // ------------------------------------------------------------------ start
 
 function startSection(st) {
-  const open = (f) => act("POST", "/api/open", { folder: f, profile: "private" },
-    "Claude Code is starting in a terminal window, on private models.");
-  const ready = st.ready;
+  const kind = st.start;
+  const why = notReady(st, kind);
+  const open = (f) => act("POST", "/api/open", { folder: f, profile: kind },
+    `Claude Code is starting in a terminal window, on ${KINDS[kind].models}.`);
   const folder = h("input", { type: "text", class: "mono folder", placeholder: "The project's folder", value: S.folder,
     oninput: (e) => { S.folder = e.target.value; },
-    onkeydown: (e) => { if (e.key === "Enter" && ready) open(S.folder); } });
+    onkeydown: (e) => { if (e.key === "Enter" && !why) open(S.folder); } });
   const recent = (st.recent || []).map((f) => h("div", { class: "item" },
     // cut at the start when it's too long (direction: rtl), the path itself kept left to right:
     // otherwise its first "/" is drawn at its end
     h("span", { class: "path", title: f }, h("bdi", { dir: "ltr" }, f)),
-    h("button", { class: "small", disabled: !ready, onclick: () => open(f) }, "Open"),
+    h("button", { class: "small", disabled: Boolean(why), onclick: () => open(f) }, "Open"),
     h("button", { class: "small ghost", title: "Forget this folder", onclick: () => act("POST", "/api/forget", { folder: f }) }, "×")));
   const installed = st.commands["claude-private"].state === "current";
-  return h("div", { class: "section start" },
-    h("h3", {}, "Start Claude Code", h("span", { class: "chip private" }, "private")),
-    h("p", { class: "lead" }, "Each request it makes is sealed on this computer to an enclave whose attestation is checked first; NanoGPT only relays it."),
+  const command = kind === "private" ? "claude-private" : `daprivatecoder claude --profile ${kind}`;
+  return h("div", { class: `section start ${kind}` },
+    h("h3", {}, "Start Claude Code", chipOf(kind)),
+    seg(kind, (pick) => { if (pick !== kind) act("POST", "/api/start", { session: pick }); }),
+    h("p", { class: "lead" }, leadOf(st, kind)),
+    warningOf(st, kind),
     h("div", { class: "row" }, folder,
       st.can_choose_folder ? h("button", { onclick: () => guarded(async () => {
         const { folder: picked } = await api("POST", "/api/choose-folder", { start: S.folder });
         if (picked) { S.folder = picked; render(); }
       }) }, "Choose…") : null,
-      h("button", { class: "private", disabled: !ready, onclick: () => open(S.folder) }, "Open in a terminal")),
-    ready ? null : h("div", { class: "small muted" }, "Set it up first (below)."),
+      h("button", { class: kind, disabled: Boolean(why), onclick: () => open(S.folder) }, "Open in a terminal")),
+    why ? h("div", { class: "small muted" }, why) : null,
     recent.length ? h("div", { class: "recent" }, h("div", { class: "small muted" }, "Recent folders"), recent) : null,
-    installed && st.commands_on_path ? h("div", { class: "small muted" }, "In a terminal, ", h("code", {}, "claude-private"),
+    installed && st.commands_on_path ? h("div", { class: "small muted" }, "In a terminal, ", h("code", {}, command),
       " does the same in the folder you're in; ", h("code", {}, "claude"), " still runs as usual.") : null);
 }
 
@@ -132,37 +188,42 @@ function check(done, what, detail, ...actions) {
       actions.some(Boolean) ? h("div", { class: "row" }, ...actions) : null));
 }
 
+// a key in the keyring: stored (Replace, Remove: a second click), or a field to paste it in. `slot` keeps
+// the Replace field open across renders (S.replacing)
+function keyControls(slot, state, provider, label, said) {
+  const saveKey = () => act("POST", "/api/key", { key: keyInput.value, provider }, said)
+    .then((done) => { if (done && S.replacing === slot) { S.replacing = ""; render(); } });
+  const keyInput = h("input", { type: "password", placeholder: `Paste your ${label} API key`, autocomplete: "off",
+    onkeydown: (e) => { if (e.key === "Enter") saveKey(); } });
+  const saveButton = h("button", { class: "primary small", onclick: saveKey }, "Save");
+  if (!state.stored) return { stored: false, controls: [keyInput, saveButton], extra: null };
+  const replacing = h("div", { class: `row${S.replacing === slot ? "" : " hidden"}` }, keyInput, saveButton);
+  // removing takes a second click: a slip would stop every session until the key is pasted again
+  const remove = h("button", { class: "small ghost", onclick: () => {
+    if (remove.dataset.sure) act("POST", "/api/key", { clear: true, provider }, "The key was removed from your keyring.");
+    else {
+      remove.dataset.sure = "1"; remove.textContent = "Click again to remove it";
+      setTimeout(() => { delete remove.dataset.sure; remove.textContent = "Remove"; }, 4000);
+    }
+  } }, "Remove");
+  const replace = h("button", { class: "small", onclick: () => {
+    S.replacing = S.replacing === slot ? "" : slot;
+    replacing.classList.toggle("hidden", S.replacing !== slot);
+    if (S.replacing === slot) keyInput.focus();
+  } }, "Replace");
+  return { stored: true, controls: [replace, remove], extra: replacing };
+}
+
 function setupSection(st) {
   const k = st.key;
-  const saveKey = () => act("POST", "/api/key", { key: keyInput.value }, "The key is stored in your keyring.")
-    .then((done) => { if (done && S.replacing) { S.replacing = false; render(); } });
-  const keyInput = h("input", { type: "password", placeholder: "Paste your NanoGPT API key", autocomplete: "off",
-    onkeydown: (e) => { if (e.key === "Enter") saveKey(); } });
-  const saveButton = () => h("button", { class: "primary small", onclick: saveKey }, "Save");
-  let keyRow;
-  if (k.stored) {
-    const replacing = h("div", { class: `row${S.replacing ? "" : " hidden"}` }, keyInput, saveButton());
-    // removing takes a second click: a slip would stop every session until the key is pasted again
-    const remove = h("button", { class: "small ghost", onclick: () => {
-      if (remove.dataset.sure) act("POST", "/api/key", { clear: true }, "The key was removed from your keyring.");
-      else {
-        remove.dataset.sure = "1"; remove.textContent = "Click again to remove it";
-        setTimeout(() => { delete remove.dataset.sure; remove.textContent = "Remove"; }, 4000);
-      }
-    } }, "Remove");
-    keyRow = check(true, "NanoGPT API key", `Stored in your keyring (ending ${k.ending}).`,
-      h("button", { class: "small", onclick: () => {
-        S.replacing = !S.replacing;
-        replacing.classList.toggle("hidden", !S.replacing);
-        if (S.replacing) keyInput.focus();
-      } }, "Replace"), remove);
-    keyRow.querySelector(".body").append(replacing);
-  } else {
-    keyRow = check(false, "NanoGPT API key", k.error || "Private Mode is paid per use from your NanoGPT balance: get a key at nano-gpt.com/api.",
-      keyInput, saveButton(),
-      k.vibe_manager ? h("button", { class: "small", onclick: () => act("POST", "/api/key", { from: "vibe-manager" },
-        "DA Vibe Manager's key is stored for DA Private Coder too.") }, "Use DA Vibe Manager's") : null);
-  }
+  const nano = keyControls("nanogpt", k, "nanogpt", "NanoGPT", "The key is stored in your keyring.");
+  const keyRow = check(nano.stored, "NanoGPT API key",
+    nano.stored ? `Stored in your keyring (ending ${k.ending}).`
+      : k.error || "For private and TEE sessions, a standard one on NanoGPT, and web search: paid per use from your NanoGPT balance. Get a key at nano-gpt.com/api.",
+    ...nano.controls,
+    !nano.stored && k.vibe_manager ? h("button", { class: "small", onclick: () => act("POST", "/api/key", { from: "vibe-manager" },
+      "DA Vibe Manager's key is stored for DA Private Coder too.") }, "Use DA Vibe Manager's") : null);
+  if (nano.extra) keyRow.querySelector(".body").append(nano.extra);
 
   const claude = check(Boolean(st.claude.path), "Claude Code",
     st.claude.path ? h("span", { class: "mono" }, st.claude.path) : st.claude.error);
@@ -171,65 +232,182 @@ function setupSection(st) {
   const allIn = cmds.every(([, c]) => c.state === "current");
   const taken = cmds.filter(([, c]) => c.state === "taken").map(([, c]) => c.path);
   // only for typing them in a terminal: this window runs the app itself, and the editor's switch puts
-  // claude-private there when it's turned on
+  // what it runs in place when it's turned on
   const commandsRow = check(allIn || "optional", "Terminal commands",
     allIn ? (st.commands_on_path ? "claude-private and daprivatecoder are in ~/.local/bin: type them in any terminal."
       : "In ~/.local/bin, which isn't on your PATH: add it to run claude-private and daprivatecoder by name.")
       : taken.length ? `${taken.join(", ")} is someone else's program, so it's left as it is.`
         : "Optional: puts claude-private and daprivatecoder in ~/.local/bin, to type in any terminal. Opening Claude Code "
-          + "from this window doesn't need them, and the editor's switch puts claude-private there itself.",
+          + "from this window doesn't need them, and the editor's switch puts what it runs in place itself.",
     allIn ? null : h("button", { class: "small", onclick: () => act("POST", "/api/commands", {}, "Installed.") }, "Install"));
 
-  // on, off, or other (another program's wrapper: left alone)
-  const switchOn = (e) => h("button", { class: "small private", disabled: !st.ready,
-    title: st.ready ? "" : "Set up the key and Claude Code first", onclick: () => act("POST", "/api/editor",
-      { name: e.name, on: true }, `${e.name}'s new Claude Code tabs run on private models.`) }, "Use private models");
-  const switchOff = (e) => h("button", { class: "small", onclick: () => act("POST", "/api/editor", { name: e.name, on: false },
-    `${e.name}'s Claude Code runs as usual again (open a new Claude Code tab).`) }, "Back to normal");
-  const editors = st.editors.length ? st.editors.map((e) => check(e.state === "on" || "optional", `Claude Code in ${e.name}`,
-    e.state === "on" ? "Runs on private models (new Claude Code tabs). The extension takes this for the whole editor."
-      : e.state === "other" ? `Runs through another program (${e.value}), so this is left as it is.`
-        : "Runs as usual, on Anthropic's models.",
-    e.state === "on" ? switchOff(e) : e.state === "off" ? switchOn(e) : null))
-    : [check("optional", "Claude Code in your editor", "No VSCodium or VS Code here: use claude-private in a terminal.")];
+  // each editor's switch: off, on (with the kind of session it runs), or another program's (left alone)
+  const switchTo = (e, kind) => act("POST", "/api/editor", { name: e.name, on: true, profile: kind },
+    `${e.name}'s new Claude Code tabs run on ${KINDS[kind].models}.`).then(() => { delete S.editorPick[e.name]; });
+  const editors = st.editors.length ? st.editors.map((e) => {
+    const on = e.state === "on" && SESSIONS.includes(e.profile);
+    const pick = on ? e.profile : (S.editorPick[e.name] || "private");
+    const kinds = h("select", { class: "inline", onchange: (ev) => {
+      if (on) switchTo(e, ev.target.value);
+      else { S.editorPick[e.name] = ev.target.value; render(); }
+    } }, SESSIONS.map((kind) => h("option", { value: kind, selected: kind === pick }, `${KINDS[kind].label} models`)));
+    const why = notReady(st, pick);
+    const row = check(on || "optional", `Claude Code in ${e.name}`,
+      on ? `Runs on ${KINDS[e.profile].models} (new Claude Code tabs). The extension takes this for the whole editor.`
+        : e.state === "other" ? `Runs through another program (${e.value}), so this is left as it is.`
+          : "Runs as usual, on Anthropic's models.",
+      e.state === "other" ? null : kinds,
+      e.state === "off" ? h("button", { class: `small ${pick}`, disabled: Boolean(why), title: why,
+        onclick: () => switchTo(e, pick) }, "Switch on") : null,
+      on ? h("button", { class: "small", onclick: () => act("POST", "/api/editor", { name: e.name, on: false },
+        `${e.name}'s Claude Code runs as usual again (open a new Claude Code tab).`) }, "Back to normal") : null);
+    const warning = e.state !== "other" ? warningOf(st, pick) : null;
+    if (warning) row.querySelector(".body").append(warning);
+    return row;
+  }) : [check("optional", "Claude Code in your editor", "No VSCodium or VS Code here: use claude-private in a terminal.")];
 
   return h("div", { class: "section" }, h("h3", {}, "Setup"), keyRow, claude, commandsRow, ...editors);
 }
 
-// ------------------------------------------------------------------ the private profile's models
+// ------------------------------------------------------------------ each profile's models, and the hosts that run them
 
 const ROLES = [
   ["model", "Default", "What Claude Code starts with, and /model sonnet"],
   ["opus_model", "Opus", "What /model opus picks"],
   ["fast_model", "Quick", "/model haiku, and Claude Code's quick background tasks"],
-  ["vision_model", "Images", "Describes screenshots for a model that can't see them"],
+  ["vision_model", "Images", "Describes screenshots for a model that can't see them (one that can sees them itself)"],
 ];
+const ROUTES = {
+  nanogpt: ["auto", "speed", "latency", "throughput", "price", "host"],
+  openrouter: ["auto", "latency", "throughput", "price", "host"],
+};
+const ROUTE_LABELS = { speed: "Fastest overall", latency: "Fastest to start answering", throughput: "Fastest writing",
+  price: "Cheapest", host: "A host I choose…" };
 
-// without "private/": every model here is one, and the label then fits the window's width
-function modelLabel(m) {
+// without "private/" or "TEE/" in their own lists: every model there is one, and the label then fits
+function modelLabel(m, kind) {
   const p = m.price ? ` · $${price(m.price.input)} / $${price(m.price.cache_read)} / $${price(m.price.output)}` : "";
-  return `${m.id.replace(/^private\//, "")}${p}${m.vision ? " · sees images" : ""}${m.tools === false ? " · no tool calls" : ""}`;
+  const id = kind === "private" ? m.id.replace(/^private\//, "") : kind === "tee" ? m.id.replace(/^TEE\//i, "") : m.id;
+  return `${id}${p}${m.vision ? " · sees images" : ""}${m.tools === false ? " · no tool calls" : ""}${m.included ? " · subscription" : ""}`;
+}
+
+async function loadHosts(profile, model) {
+  S.hosts[model] = { loading: true };
+  render();
+  try { S.hosts[model] = await api("POST", "/api/hosts", { profile, model }); }
+  catch (e) { S.hosts[model] = { error: e.message }; }
+  render();
+}
+
+// which of the provider's hosts runs `model`: its own choice, a priority, or a host the user picks
+function routeRow(st, tab, p, model) {
+  const list = S.models[tab] || [];
+  const info = list.find((m) => m.id === model);
+  if (!ROUTES[p.provider] || !info || !info.routable) return null;
+  const route = (p.routes || {})[model] || null;
+  const choosing = S.routeHost[model] || (route && route.priority === "host");
+  const fp8 = route ? route.fp8 !== false : S.routeFp8 !== false;
+  const save = (r) => act("POST", "/api/route", { profile: tab, model, route: r },
+    r && p.provider === "nanogpt" ? "Saved: paid per use, even if a subscription includes the model." : "Saved.")
+    .then((done) => { if (done) delete S.routeHost[model]; });
+  const auto = p.provider === "nanogpt" ? "NanoGPT's own choice (what a subscription covers)" : "OpenRouter's own choice";
+  const priority = h("select", { onchange: (e) => {
+    const v = e.target.value;
+    if (v === "auto") save(null);
+    else if (v === "host") { S.routeHost[model] = true; if (!S.hosts[model]) loadHosts(tab, model); else render(); }
+    else save({ priority: v, fp8 });
+  } }, ROUTES[p.provider].map((v) => h("option", { value: v, selected: v === (choosing ? "host" : route ? route.priority : "auto") },
+    v === "auto" ? auto : ROUTE_LABELS[v])));
+  const parts = [priority];
+  if (choosing) {
+    const listed = S.hosts[model];
+    if (!listed) { S.hosts[model] = { loading: true }; setTimeout(() => loadHosts(tab, model), 0); }   // not while drawing
+    if (listed && listed.hosts) {
+      const hosts = listed.hosts.filter((x) => x.available && (!fp8 || x.fp8));
+      const speed = (x) => x.tokens_per_second ? ` · ${Math.round(x.tokens_per_second)} tok/s` : "";
+      const cost = (x) => x.input !== null && x.input !== undefined ? ` · $${price(x.input)} / $${price(x.output)}` : "";
+      parts.push(h("select", { onchange: (e) => {
+        const x = listed.hosts.find((y) => y.id === e.target.value);
+        if (x) save({ priority: "host", host: x.id, host_name: x.name, fp8 });
+      } }, [h("option", { value: "", selected: !(route && route.host) }, hosts.length ? "Choose the host…" : "No host listed")]
+        .concat(hosts.map((x) => h("option", { value: x.id, selected: route && route.host === x.id },
+          `${x.name}${x.precision ? ` · ${x.precision.toUpperCase()}` : ""}${cost(x)}${speed(x)}${x.keeps_nothing ? " · keeps nothing" : ""}`)))));
+    } else parts.push(h("span", { class: "small muted" }, listed && listed.error ? listed.error : "Reading its hosts…"));
+  }
+  if (route || choosing) parts.push(h("label", { class: "small muted tick", title: "Leave out hosts that run it at less than FP8 (or don't say)" },
+    h("input", { type: "checkbox", checked: fp8,
+      onchange: (e) => { if (route) save({ ...route, fp8: e.target.checked }); else { S.routeFp8 = e.target.checked; render(); } } }),
+    "FP8 or better"));
+  return h("div", { class: "model-row route" }, h("label", {}, "Runs on"), h("div", { class: "row" }, ...parts));
+}
+
+// a standard profile's provider: NanoGPT, OpenRouter, or an OpenAI-compatible endpoint of your own, and its key
+function providerRows(st, tab, p, save) {
+  const custom = p.provider === "custom" || S.customUrl;
+  const pick = h("select", { onchange: (e) => {
+    const v = e.target.value;
+    if (v === "custom" && !p.base_url) { S.customUrl = true; render(); }
+    else { S.customUrl = false; save({ provider: v }, `Saved: standard sessions use ${PROVIDERS[v]}.`); }
+  } }, Object.entries(PROVIDERS).map(([v, l]) => h("option", { value: v, selected: v === (custom ? "custom" : p.provider) }, l)));
+  const rows = [h("div", { class: "model-row" }, h("label", {}, "Provider"), pick)];
+  if (custom) {
+    const url = h("input", { type: "text", class: "mono", value: p.base_url || "", placeholder: "https://api.example.com/v1",
+      onkeydown: (e) => { if (e.key === "Enter") go(); } });
+    const go = () => save({ provider: "custom", base_url: url.value.trim() }, "Saved: standard sessions use it.")
+      .then((done) => { if (done) S.customUrl = false; });
+    rows.push(h("div", { class: "model-row" }, h("label", {}, "Address"), h("div", { class: "row" }, url,
+      h("button", { class: "small primary", onclick: go }, "Save"))),
+      h("div", { class: "model-row" }, h("span", {}), h("div", { class: "small muted" },
+        "Its OpenAI-compatible endpoint: https, or http only on this computer or your network.")));
+  }
+  const pk = st.provider_key;
+  if (pk && !S.customUrl) {
+    const label = p.provider === "openrouter" ? "OpenRouter" : "your provider's";
+    const keys = keyControls(`provider:${p.provider}`, pk, p.provider, label, "The key is stored in your keyring.");
+    rows.push(h("div", { class: "model-row" }, h("label", {}, "API key"), h("div", { class: "col" },
+      h("div", { class: "row" }, keys.stored ? h("span", { class: "small muted" }, `Stored (ending ${pk.ending})`) : null,
+        ...keys.controls),
+      keys.extra, !keys.stored && p.provider === "custom" ? h("div", { class: "small muted" }, "If it needs one.") : null)));
+  }
+  return rows;
 }
 
 function modelsSection(st) {
-  const p = st.config && st.config.profiles.private;
+  const tab = S.tab || st.start;
+  const p = st.config && st.config.profiles[tab];
   if (!p) return null;
-  const save = (fields, said = "Saved: the next session uses it.") => act("POST", "/api/profile", { profile: "private", fields }, said);
-  const list = S.models || [];
-  const rows = ROLES.map(([key, label, hint]) => {
+  const save = (fields, said = "Saved: the next session uses it.") => act("POST", "/api/profile", { profile: tab, fields }, said)
+    .then((done) => { if (done && ("provider" in fields || "base_url" in fields)) { S.hosts = {}; loadModels(tab, true); } return done; });
+  const list = S.models[tab] || [];
+  const routed = new Set();
+  const rows = ROLES.flatMap(([key, label, hint]) => {
     const current = p[key] || "";
     const usable = list.filter((m) => key === "vision_model" ? m.vision : m.tools !== false);
     const options = [];
-    if (key === "vision_model") options.push(h("option", { value: "", selected: !current }, "None: the model is told it can't see"));
+    if (key === "vision_model") options.push(h("option", { value: "", selected: !current }, "None: a model that can't see is told so"));
     if (current && !list.some((m) => m.id === current)) {
-      options.push(h("option", { value: current, selected: true }, S.models ? `${current} (no longer offered)` : current));
+      options.push(h("option", { value: current, selected: true }, S.models[tab] ? `${current} (not listed now)` : current));
     }
-    for (const m of usable) options.push(h("option", { value: m.id, selected: m.id === current }, modelLabel(m)));
-    return h("div", { class: "model-row", title: hint }, h("label", {}, label),
-      h("select", { onchange: (e) => save({ [key]: e.target.value }) }, options));
+    for (const m of usable) options.push(h("option", { value: m.id, selected: m.id === current }, modelLabel(m, tab)));
+    const out = [h("div", { class: "model-row", title: hint }, h("label", {}, label),
+      h("select", { onchange: (e) => save({ [key]: e.target.value }) }, options))];
+    if (p.kind === "standard" && current && !routed.has(current)) {
+      routed.add(current);
+      const route = routeRow(st, tab, p, current);
+      if (route) out.push(route);
+    }
+    return out;
   });
-  return h("div", { class: "section" }, h("h3", {}, "Models", h("span", { class: "chip private" }, "end-to-end encrypted")),
-    h("p", { class: "lead" }, "NanoGPT's Private Mode models, per million tokens: input / cached input / output, with its 5% markup."),
+  const lead = tab === "private" ? "NanoGPT's Private Mode models, per million tokens: input / cached input / output, with its 5% markup."
+    : tab === "tee" ? "NanoGPT's TEE models, per million tokens: input / cached input / output."
+      : `${providerName(st, tab)}'s models that take tool calls${p.provider === "custom" ? "" : ", per million tokens: input / cached input / output"}.`
+        + (p.provider === "nanogpt" ? " On NanoGPT's own choice of host, a subscription covers the ones it includes; a host you choose is paid per use." : "");
+  const reading = tab === "standard" ? `Reading ${providerName(st, tab)}'s list of models…` : `Reading NanoGPT's list of ${KINDS[tab].label === "TEE" ? "TEE" : "private"} models…`;
+  return h("div", { class: "section" }, h("h3", {}, "Models", chipOf(tab)),
+    seg(tab, (pick) => { S.tab = pick; S.customUrl = false; if (!S.models[pick]) loadModels(pick); render(); }),
+    warningOf(st, tab),
+    p.kind === "standard" ? providerRows(st, tab, p, save) : null,
+    h("p", { class: "lead" }, lead),
     rows,
     // where each session's effort starts: Claude Code's own (the editor's Effort, /effort) changes it
     // in a session, and the model runs at whatever Claude Code says (proxy.py)
@@ -240,66 +418,79 @@ function modelsSection(st) {
     h("div", { class: "model-row" }, h("span", {}), h("div", { class: "small muted" },
       "How hard the models think as each session starts. In a session, Claude Code's own Effort (in the editor, or ",
       h("code", {}, "/effort"), ") changes it.")),
-    S.modelsError ? h("div", { class: "warnbox" }, `NanoGPT's list of models couldn't be read: ${S.modelsError}`) : null,
-    S.models ? null : h("div", { class: "small muted row" }, h("span", { class: "spinner" }), "Reading NanoGPT's list of private models…"));
+    S.modelsError[tab] ? h("div", { class: "warnbox" }, `The list of models couldn't be read: ${S.modelsError[tab]}`) : null,
+    S.models[tab] ? null : h("div", { class: "small muted row" }, h("span", { class: "spinner" }), reading));
 }
 
 // ------------------------------------------------------------------ web search
 
 function searchSection(st) {
-  const p = st.config && st.config.profiles.private;
+  const tab = S.tab || st.start;
+  const p = st.config && st.config.profiles[tab];
   if (!p) return null;
-  const pick = (value, said) => act("POST", "/api/profile", { profile: "private", fields: { web_search: value } }, said);
+  const pick = (value, said) => act("POST", "/api/profile", { profile: tab, fields: { web_search: value } }, said);
   const radio = (value, title, desc) => h("label", { class: "radio" },
     h("input", { type: "radio", name: "search", checked: p.web_search === value,
       onchange: () => pick(value, "Saved: the next session searches this way.") }),
     h("div", {}, h("div", {}, title), h("div", { class: "small muted" }, desc)));
-  return h("div", { class: "section" }, h("h3", {}, "Web search"),
-    h("p", { class: "lead" }, "Claude Code's own search runs on Anthropic's servers, so DA Private Coder gives it one through NanoGPT. Claude Code asks you before each search, and a search naming this computer or holding a secret is refused."),
+  return h("div", { class: "section" }, h("h3", {}, `Web search in ${KINDS[tab].label} sessions`),
+    h("p", { class: "lead" }, "Claude Code's own search runs on Anthropic's servers, so DA Private Coder gives it one through NanoGPT (with its key). Claude Code asks you before each search, and a search naming this computer or holding a secret is refused."),
     radio("zero-retention", "Keep nothing: Linkup only",
       "Linkup keeps nothing it's sent (zero data retention), and no search goes anywhere else, even when Linkup fails. It finds less. NanoGPT and Linkup still read each search: no search is end-to-end encrypted."),
     radio("best", "Best results: Perplexity and Kagi",
       "Perplexity to learn things, Kagi to find sites. Not zero data retention: NanoGPT and the provider read each search, and what the provider keeps is up to its own policy."),
     radio("off", "No web search", "Claude Code works with what it knows, and pages it's given the address of."),
-    p.web_search === "best" ? h("div", { class: "warnbox" }, h("b", {}, "Your sessions are private; their searches aren't. "),
+    p.web_search === "best" && tab === "private" ? h("div", { class: "warnbox" }, h("b", {}, "Your sessions are private; their searches aren't. "),
       "Perplexity and Kagi aren't zero data retention. Choose Keep nothing to search with Linkup, which keeps nothing.") : null);
 }
 
-// ------------------------------------------------------------------ the enclave
+// ------------------------------------------------------------------ the enclaves
 
 function verifySection(st) {
   const a = st.attestation;
-  const run = () => guarded(async () => {
-    S.checking = true; render();
+  const tee = st.config && st.config.profiles.tee;
+  const run = (model) => guarded(async () => {
+    S.checking = model || "private"; render();
     try {
-      await api("POST", "/api/check", {});
+      const { attestation } = await api("POST", "/api/check", model ? { model } : {});
       S.state = await api("GET", "/api/state");
-      toast("The enclave is verified.", "ok", 3000);
-    } finally { S.checking = false; render(); }
+      toast(model ? `${model}: ${attestation.level === "full" ? "verified" : "verified in part"}.` : "The enclave is verified.", "ok", 4000);
+    } finally { S.checking = ""; render(); }
   });
-  return h("div", { class: "section" }, h("h3", {}, "The enclave"),
+  const teeRows = (st.tee_attestations || []).slice(0, 4).map((t) => h("div", { class: "attest" },
+    h("div", {}, t.error ? h("span", { class: "chip bad" }, "didn't hold") : h("span", { class: `chip ${t.level === "full" ? "ok" : "tee"}` },
+      t.level === "full" ? "verified" : "in part"), " ", h("b", {}, t.model), " ", t.error || t.summary),
+    h("div", { class: "small muted" }, `Checked ${t.t ? t.t.slice(0, 16).replace("T", " ") : ""}.`)));
+  return h("div", { class: "section" }, h("h3", {}, "The enclaves"),
+    h("div", { class: "small muted" }, "Private models"),
     a ? h("div", { class: "attest" },
       h("div", {}, h("span", { class: "chip ok" }, "verified"), " ", a.summary),
       h("div", { class: "small muted" }, `Last checked ${a.t ? a.t.slice(0, 16).replace("T", " ") : ""}. Every session checks it again before it sends anything, and every five minutes.`),
       a.key_sha256 ? h("div", { class: "fingerprint" }, `Its key's fingerprint (sha256): ${a.key_sha256}`) : null)
       : h("p", { class: "lead" }, "Not checked yet here. Every session checks it before it sends anything; you can check it now too (free)."),
-    h("div", { class: "row" }, h("button", { disabled: S.checking, onclick: run },
-      S.checking ? "Checking…" : "Check it now"), S.checking ? h("span", { class: "spinner" }) : null));
+    h("div", { class: "row" }, h("button", { disabled: Boolean(S.checking), onclick: () => run("") },
+      S.checking === "private" ? "Checking…" : "Check it now"), S.checking === "private" ? h("span", { class: "spinner" }) : null),
+    h("div", { class: "small muted spaced" }, "TEE models"),
+    teeRows.length ? teeRows : h("p", { class: "lead" }, "None checked yet here. A TEE session checks each model's enclave before it sends it anything, and every 15 minutes; with your NanoGPT key, you can check one now too."),
+    tee && /^tee\//i.test(tee.model) ? h("div", { class: "row" }, h("button", { disabled: Boolean(S.checking) || !st.key.stored, onclick: () => run(tee.model),
+      title: st.key.stored ? "" : "NanoGPT shows a TEE model's attestation only with your API key" },
+      S.checking === tee.model ? "Checking…" : `Check ${tee.model}`), S.checking === tee.model ? h("span", { class: "spinner" }) : null) : null);
 }
 
 // ------------------------------------------------------------------ usage
 
-// how each request left this computer (manager.py's "sent"): sealed to the enclave, in the clear
-// (a search, or the nano profile's models), or not at all (refused here first)
-const SENT = { sealed: ["private", "sealed"], clear: ["warn", "clear"], "": ["", "not sent"] };
+// how each request left this computer (manager.py's "sent"): sealed to the enclave, to an attested TEE
+// through NanoGPT, in the clear (a search, a standard session's models), or not at all (refused here first)
+const SENT = { sealed: ["private", "sealed"], tee: ["tee", "TEE"], clear: ["warn", "clear"], "": ["", "not sent"] };
 
 function usageSection(st) {
   const u = st.usage;
   const rows = u.last.flatMap((r) => {
     const [chip, how] = SENT[r.sent] || SENT[""];
+    const where = r.provider && r.provider !== "nanogpt" ? ` · ${r.provider === "openrouter" ? "OpenRouter" : "your provider"}` : "";
     const what = r.kind === "search"
       ? `web search${r.what ? `, ${r.what}` : ""}${r.results !== null && r.results !== undefined ? ` · ${r.results} results` : ""}`
-      : r.what + (r.kind === "vision" ? " (image)" : "");
+      : r.what + (r.kind === "vision" ? " (image)" : "") + where;
     const row = h("tr", { class: r.error ? "bad has-note" : "" },
       h("td", {}, r.t.slice(5, 16)),
       h("td", { title: r.asked_for ? `Claude Code asked for ${r.asked_for}` : "" }, what),
@@ -307,7 +498,7 @@ function usageSection(st) {
       h("td", { class: "num" }, tokens(r.input)),
       h("td", { class: "num" }, tokens(r.cached)),
       h("td", { class: "num" }, tokens(r.output)),
-      h("td", { class: "num", title: r.estimated ? "estimated from NanoGPT's listed prices" : "" },
+      h("td", { class: "num", title: r.estimated ? "estimated from the provider's listed prices" : "" },
         money(r.cost, true) + (r.estimated ? "~" : "")));
     // what went wrong, under it and wrapped: a column of its own would be off the window's edge
     return r.error ? [row, h("tr", { class: "bad note" }, h("td", { colspan: "7" }, r.error))] : [row];
@@ -347,7 +538,7 @@ function render() {
   renderTop(st);
   const scroll = $("#page").scrollTop;
   $("#page").replaceChildren(...[startSection(st), setupSection(st), modelsSection(st), searchSection(st),
-    verifySection(st), usageSection(st), appSection(st)].filter(Boolean));
+    verifySection(st), usageSection(st), appSection(st)].flat().filter(Boolean));
   $("#page").scrollTop = scroll;
 }
 
@@ -356,18 +547,20 @@ async function refresh() {
   render();
 }
 
-async function loadModels(fresh = false) {
+// a profile's list of models (the one shown when not said)
+async function loadModels(profile, fresh = false) {
+  profile = profile || S.tab || (S.state && S.state.start) || "private";
   try {
-    S.models = (await api("GET", `/api/models${fresh ? "?fresh=1" : ""}`)).models;
-    S.modelsError = "";
+    S.models[profile] = (await api("GET", `/api/models?profile=${encodeURIComponent(profile)}${fresh ? "&fresh=1" : ""}`)).models;
+    S.modelsError[profile] = "";
   } catch (e) {
-    S.models = [];
-    S.modelsError = e.message;
+    S.models[profile] = [];
+    S.modelsError[profile] = e.message;
   }
   render();
 }
 
-$("#refresh-btn").addEventListener("click", () => guarded(async () => { await refresh(); await loadModels(true); }));
+$("#refresh-btn").addEventListener("click", () => guarded(async () => { S.hosts = {}; await refresh(); await loadModels("", true); }));
 // whether the user is in the middle of something the page would lose if drawn again: a field or a
 // list with the focus, or a key typed and not yet saved
 function editing() {

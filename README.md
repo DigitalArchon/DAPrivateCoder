@@ -11,6 +11,11 @@ Its window sets it up (your NanoGPT key, the `claude-private` command, the switc
 chooses the models and how Claude Code searches the web, checks the enclave, opens Claude Code in a
 folder, and shows what each request cost, never what was said.
 
+For convenience it also runs Claude Code on models that **aren't** end-to-end encrypted, and says so
+wherever you choose them: NanoGPT's TEE models, each enclave attested before anything is sent to it,
+and standard models of NanoGPT, OpenRouter or another OpenAI-compatible provider, in the clear (see
+[TEE and standard sessions](#tee-and-standard-sessions)). `claude-private` is only ever private.
+
 ## What is private, and what isn't
 
 - **Sealed:** everything Claude Code sends to the model: your prompts, the files and command
@@ -27,9 +32,11 @@ folder, and shows what each request cost, never what was said.
   Anthropic, and Anthropic's web search (DA Private Coder has its own, below).
 - **Not covered:** web searches (see [Web search](#web-search)), and what Claude Code's tools do on
   your computer. WebFetch fetches pages itself (the site sees your address), Bash runs what it runs,
-  and MCP servers you've added talk to whoever they talk to. The `nano` profile sends requests to
-  NanoGPT in the clear. NanoGPT's `TEE/` models aren't end-to-end encrypted (their prompts pass
-  NanoGPT's gateway); only `private/` ones are.
+  and MCP servers you've added talk to whoever they talk to.
+
+All of this is a private session's. A TEE session's prompts are read by NanoGPT's gateway, and a
+standard session's go in the clear to its provider and the model's host: see
+[TEE and standard sessions](#tee-and-standard-sessions).
 
 ## Getting started
 
@@ -41,10 +48,12 @@ Code is used), and a NanoGPT API key with credit (Private Mode is paid per use).
    The window needs WebKitGTK 4.1 (`sudo apt install gir1.2-webkit2-4.1`, `sudo dnf install
    webkit2gtk4.1`, `sudo pacman -S webkit2gtk-4.1`); without it, it opens in your web browser.
 2. In **Setup**: paste your NanoGPT key (or use DA Vibe Manager's).
-3. **Start Claude Code**: choose a folder and open Claude Code in a terminal there. To type
-   `claude-private` in a terminal yourself instead, **Install** the terminal commands (optional).
-4. For your editor: **Use private models** next to VSCodium or VS Code, then open a new Claude Code
-   tab; **Back to normal** undoes it. The extension takes this for the whole editor, not per project.
+3. **Start Claude Code**: choose a folder and open Claude Code in a terminal there. **Private** is
+   chosen; **TEE** and **Standard** aren't end-to-end encrypted. To type `claude-private` in a
+   terminal yourself instead, **Install** the terminal commands (optional).
+4. For your editor: choose **Private models** (or TEE, Standard) and **Switch on** next to VSCodium or
+   VS Code, then open a new Claude Code tab; **Back to normal** undoes it. The extension takes this
+   for the whole editor, not per project.
 
 In a session, `/status` shows the base URL as `http://127.0.0.1:…`: that is DA Private Coder.
 `/model` offers the profile's models (Sonnet is GLM-5.3, Opus Kimi K3, Haiku DeepSeek V4.1 Flash) and
@@ -52,7 +61,7 @@ the other models NanoGPT's Private Mode offers now.
 
 ## Models and cost
 
-Chosen in the window (**Models**), or in `~/.config/daprivatecoder/config.toml`:
+Chosen in the window (**Models**, Private), or in `~/.config/daprivatecoder/config.toml`:
 
 | Role | Model | Input | Cached input | Output |
 |---|---|---|---|---|
@@ -75,6 +84,43 @@ these models have nothing between high and max, so Claude Code's xhigh runs as m
 
 A model that sees images (Kimi K3, DeepSeek V4.1 Flash) gets them as they are. Only one that
 doesn't (GLM-5.3) has them described, by the **Images** model, also a private one.
+
+## TEE and standard sessions
+
+Neither is end-to-end encrypted. The window warns of it where you choose one, and **Usage** marks
+each request: sealed, TEE, or clear.
+
+**TEE** sessions run NanoGPT's `TEE/` models (by default GLM-5.3, Kimi K3 for `/model opus`, and
+GLM-5.3 Flash for quick tasks and images). Before anything is sent to one, its enclave is attested,
+and again every 15 minutes: its Intel TDX quote is verified up to Intel's root, with Intel's
+revocation lists and TCB ratings, and its GPUs' evidence by NVIDIA's attestation service, all bound
+to a nonce of this session's (DA Vibe Manager's verifier). An enclave that doesn't hold gets
+nothing. Some attest only in part, which **The enclaves** in the window says: NanoGPT's TEE GLM
+models pass through RedPill's gateway, whose enclave is checked but not the model's own. Either way,
+**NanoGPT's gateway reads every prompt and reply in the clear**: the enclave protects them from the
+host that runs the model, not from NanoGPT. A TEE session never sends to a model in the clear: a
+request for one goes to the session's own model.
+
+**Standard** sessions run any model of their provider, **in the clear** to it and to the host that
+runs the model:
+
+- **NanoGPT** (with your NanoGPT key), **OpenRouter** (with an OpenRouter key), or **another
+  provider** with an OpenAI-compatible API (its address: https, or http only on this computer or
+  your network; a key if it needs one). Each key is in your keyring, set in the window.
+- **Runs on** (per model, NanoGPT and OpenRouter): the provider's own choice of host (on NanoGPT,
+  what a subscription covers), or the fastest, the cheapest, the quickest to answer, or a host you
+  pick from the provider's list, with its precision, price and speed; FP8 or better by default.
+  **On NanoGPT a host you choose is paid per use, even for a model your subscription includes.**
+- A Claude model (`anthropic/…`) goes to the provider's Anthropic endpoint as Claude Code wrote it;
+  Claude Code's own default names (`claude-haiku-…`) are the session's models instead, so nothing
+  goes to Claude unless you pick it.
+- A `private/` model you pick with `/model` in a standard session is still sealed, and a `TEE/` one
+  on NanoGPT attested; once a private model has been used, nothing more of that session goes in the
+  clear.
+
+Both kinds have their own models, effort and web search (**Models** and **Web search** in the window,
+with the same Private, TEE, Standard choice), and start from the window, the editor's switch, or
+`daprivatecoder claude --profile tee` (or `standard`) in a terminal.
 
 ## Web search
 
@@ -106,10 +152,10 @@ editor needs a path that stays put.
 |---|---|
 | `daprivatecoder` | The window (`--browser`: in your web browser) |
 | `claude-private [args]` | Claude Code on the private profile; any of `claude`'s arguments work |
-| `daprivatecoder claude [--profile NAME] [args]` | Claude Code on any profile; `nano` has NanoGPT's other models, in the clear |
-| `daprivatecoder editor on\|off\|status [vscodium\|code]` | The switch for Claude Code in the editor |
-| `daprivatecoder key set\|clear\|status` | The NanoGPT key, in your keyring (GNOME Keyring or KWallet) |
-| `daprivatecoder check` | Attest the enclave; list the private models, their prices, and any your profile uses that are gone |
+| `daprivatecoder claude [--profile NAME] [args]` | Claude Code on a profile: `tee` and `standard` aren't end-to-end encrypted |
+| `daprivatecoder editor on\|off\|status [--profile NAME] [vscodium\|code]` | The switch for Claude Code in the editor (on: private unless said) |
+| `daprivatecoder key set\|clear\|status [--provider openrouter\|custom]` | An API key, in your keyring (GNOME Keyring or KWallet): NanoGPT's unless said |
+| `daprivatecoder check [--profile NAME]` | Attest the enclaves (a TEE profile's models too); list the models, their prices, and any your profile uses that are gone |
 | `daprivatecoder log [-n N]` | The last requests and searches: model, sealed or not, tokens, cost |
 | `daprivatecoder status` | What is set up here |
 
@@ -122,8 +168,8 @@ In `claude -p` (no one to ask), the web search tool runs only if you allow it:
   compacts the conversation sooner, which also keeps each request cheaper. To change it, set
   `CLAUDE_CODE_MAX_CONTEXT_TOKENS`.
 - The model's reasoning isn't shown: Anthropic's thinking blocks carry Anthropic's signatures.
-- A private profile only takes `private/` models; a settings file that says otherwise doesn't load,
-  and the window won't save one.
+- A private profile only takes `private/` models, and a TEE one `TEE/` (or private) ones; a settings
+  file that says otherwise doesn't load, and the window won't save one.
 
 ## How it works
 
@@ -136,8 +182,11 @@ editor's process wrapper (`claudeCode.claudeProcessWrapper`), it runs the extens
 
 The proxy takes Claude Code's Anthropic requests and, for a private model, turns them into chat
 completions. Each is sealed with EHBP (HPKE X25519 and AES-GCM) to the attested enclave's key and
-sent through NanoGPT's relay; the replies come back as Anthropic events. The Private Mode client and
-the translation come from DA Vibe Manager, after DAToolkit and SealedLore.
+sent through NanoGPT's relay; the replies come back as Anthropic events. A TEE model's are translated
+the same way and sent through NanoGPT once its enclave has attested; a standard model's go to its
+provider, with the host chosen for it; a Claude model's to the provider's Anthropic endpoint as they
+are. The Private Mode client, the TEE verifier, the routes and the translation come from DA Vibe
+Manager, after DAToolkit and SealedLore.
 
 The window is a small local web page (served on 127.0.0.1 with a token for each launch) shown with
 your system's GTK and WebKitGTK, as DA Vibe Manager's is.
@@ -158,8 +207,9 @@ committed source and compares. See [packaging/README.md](packaging/README.md).
 
 ## Uninstall
 
-In the window: **Back to normal** for your editor, and **Remove** the key. Then delete the AppImage,
-`~/.local/bin/claude-private`, `~/.local/bin/daprivatecoder`, and if you like
-`~/.config/daprivatecoder` and `~/.local/state/daprivatecoder`.
+In the window: **Back to normal** for your editor, and **Remove** the keys. Then delete the AppImage,
+`~/.local/bin/claude-private`, `~/.local/bin/daprivatecoder`, `~/.local/share/daprivatecoder` (the
+editor's scripts for TEE and standard sessions), and if you like `~/.config/daprivatecoder` and
+`~/.local/state/daprivatecoder`.
 
 Licence: AGPL-3.0-or-later.

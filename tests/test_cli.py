@@ -36,7 +36,7 @@ def test_the_editor_switch(tmp_path, monkeypatch, capsys):
     settings.parent.mkdir()
     settings.write_text('{\n    "claudeCode.preferredLocation": "panel" // mine\n}\n')
     monkeypatch.setattr(editor, "EDITORS", (("VSCodium", str(settings)), ("VS Code", str(tmp_path / "none" / "s.json"))))
-    monkeypatch.setattr(editor, "wrapper_path", lambda: "/opt/pc/bin/claude-private")
+    monkeypatch.setattr(editor, "wrapper_path", lambda profile="private": "/opt/pc/bin/claude-private")
     assert cli.main(["editor", "on"]) == 0
     assert editor.current(settings) == "/opt/pc/bin/claude-private" and "// mine" in settings.read_text()
     assert "daprivatecoder editor off" in capsys.readouterr().out

@@ -117,9 +117,9 @@ async def test_only_the_window_gets_in(window):
 async def test_setting_it_up_from_the_window(window, ring, tmp_path):
     app, started, settings, quit_called = window
     status, st = await call(app, "GET", "/api/state")
-    assert status == 200 and st["ready"] is False and st["key"]["stored"] is False
+    assert status == 200 and not any(st["ready"].values()) and st["key"]["stored"] is False
     assert st["config"]["profiles"]["private"]["model"] == "private/glm-5-3" and st["claude"]["error"]
-    assert st["editors"] == [{"name": "VSCodium", "path": str(settings), "value": "", "state": "off"}]
+    assert st["editors"] == [{"name": "VSCodium", "path": str(settings), "value": "", "state": "off", "profile": ""}]
     status, st = await call(app, "POST", "/api/key", {"key": "not a key"})
     assert status == 400 and "isn't an API key" in st["error"]
     ring.store[("davibemanager", "provider:NanoGPT")] = "sk-dvm"
@@ -250,7 +250,85 @@ async def test_an_editor_on_another_programs_wrapper_is_left_as_it_is(window, ca
     assert st["editors"][0]["state"] == "on" and "// mine" in settings.read_text()
     assert editor.current(settings) == str(commands.path_of("claude-private"))
     assert cli.main(["editor", "status"]) == 0
-    assert "VSCodium: on (DA Private Coder)" in capsys.readouterr().out
+    assert "VSCodium: on (DA Private Coder, its private profile)" in capsys.readouterr().out
     settings.write_text('{"claudeCode.claudeProcessWrapper": "/opt/wrap"}')
     status, said = await call(app, "POST", "/api/editor", {"name": "VSCodium", "on": True})
     assert status == 400 and "another program" in said["error"] and editor.current(settings) == "/opt/wrap"
+
+
+async def test_tee_and_standard_sessions_from_the_window(window, ring, monkeypatch, tmp_path):
+    app, started, settings, _ = window
+    ring.store[("daprivatecoder", "nanogpt")] = "sk-nano"
+    project = tmp_path / "project"
+    project.mkdir()
+    # Start opens what was chosen last
+    st = (await call(app, "POST", "/api/start", {"session": "tee"}))[1]
+    assert st["start"] == "tee" and (await call(app, "POST", "/api/start", {"session": "secret"}))[0] == 400
+    await call(app, "POST", "/api/open", {"folder": str(project), "profile": "tee"})
+    assert started[-1][0][-3:] == ["claude", "--profile", "tee"]
+    # the editor on a TEE profile runs DA Private Coder's script for it, kept out of the PATH
+    st = (await call(app, "POST", "/api/editor", {"name": "VSCodium", "on": True, "profile": "tee"}))[1]
+    wrapper = commands.wrapper_dir() / "claude-tee"
+    assert st["editors"][0]["state"] == "on" and st["editors"][0]["profile"] == "tee"
+    assert editor.current(settings) == str(wrapper) and 'claude --profile tee "$@"' in wrapper.read_text()
+    monkeypatch.setenv("APPIMAGE", "/moved/DAPrivateCoder.AppImage")             # the AppImage moved: it follows
+    commands.refresh()
+    assert "exec /moved/DAPrivateCoder.AppImage claude --profile tee" in wrapper.read_text()
+    # a standard profile on OpenRouter: its own key, a host for a model
+    await call(app, "POST", "/api/profile", {"profile": "standard", "fields": {"provider": "openrouter"}})
+    st = (await call(app, "GET", "/api/state"))[1]
+    assert st["provider_key"]["provider"] == "openrouter" and not st["provider_key"]["stored"]
+    assert st["ready"]["tee"] is False and st["ready"]["standard"] is False             # no Claude Code here
+    st = (await call(app, "POST", "/api/key", {"key": "sk-or-1234", "provider": "openrouter"}))[1]
+    assert st["provider_key"]["stored"] and ring.store[("daprivatecoder", "openrouter")] == "sk-or-1234"
+    assert ring.store[("daprivatecoder", "nanogpt")] == "sk-nano"
+    route = {"priority": "host", "host": "parasail/fp8", "host_name": "Parasail", "fp8": True}
+    st = (await call(app, "POST", "/api/route", {"profile": "standard", "model": "z-ai/glm-5.3", "route": route}))[1]
+    assert st["config"]["profiles"]["standard"]["routes"]["z-ai/glm-5.3"]["host"] == "parasail/fp8"
+    assert config.load().profile("standard").routes["z-ai/glm-5.3"]["priority"] == "host"
+    status, said = await call(app, "POST", "/api/route", {"profile": "standard", "model": "z-ai/glm-5.3",
+                                                         "route": {"priority": "speed"}})
+    assert status == 400 and "one of: auto, latency" in said["error"]          # OpenRouter has no "speed"
+    st = (await call(app, "POST", "/api/route", {"profile": "standard", "model": "z-ai/glm-5.3", "route": None}))[1]
+    assert st["config"]["profiles"]["standard"]["routes"] == {}
+    status, said = await call(app, "POST", "/api/route", {"profile": "tee", "model": "TEE/glm-5.3", "route": route})
+    assert status == 400 and "can't be given a route" in said["error"]
+    await call(app, "POST", "/api/route", {"profile": "standard", "model": "z-ai/glm-5.3", "route": route})
+    st = (await call(app, "POST", "/api/profile", {"profile": "standard", "fields": {"provider": "nanogpt"}}))[1]
+    assert st["config"]["profiles"]["standard"]["routes"] == {}                # another provider's hosts: gone
+    # a custom provider: https, or local
+    status, said = await call(app, "POST", "/api/profile", {"profile": "standard", "fields": {
+        "provider": "custom", "base_url": "http://llm.example.com/v1"}})
+    assert status == 400 and "https" in said["error"]
+    st = (await call(app, "POST", "/api/profile", {"profile": "standard", "fields": {
+        "provider": "custom", "base_url": "https://llm.example.com/v1"}}))[1]
+    assert st["provider_key"]["provider"] == "custom" and st["config"]["profiles"]["standard"]["base_url"] == \
+        "https://llm.example.com/v1"
+
+
+async def test_each_profiles_models_come_from_its_provider(window, monkeypatch):
+    app, *_ = window
+    from daprivatecoder.llm import capabilities
+
+    async def nanogpt(base_url, http=None):
+        return capabilities.parse([
+            {"id": "TEE/kimi-k3", "capabilities": {"vision": True, "tool_calling": True}},
+            {"id": "TEE/llama3-3-70b", "capabilities": {"vision": False, "tool_calling": False}},
+            {"id": "z-ai/glm-5.3", "capabilities": {"tool_calling": True}, "subscription": {"included": True},
+             "pricing": {"prompt": 1.4, "completion": 4.4, "currency": "USD", "unit": "per_million_tokens"}},
+            {"id": "flux/image", "capabilities": {"tool_calling": False}}])
+    monkeypatch.setattr(manager.capabilities, "fetch_nanogpt", nanogpt)
+    tee = (await call(app, "GET", "/api/models?profile=tee"))[1]["models"]
+    assert [m["id"] for m in tee] == ["TEE/kimi-k3", "TEE/llama3-3-70b"] and tee[1]["tools"] is False
+    assert not any(m["routable"] for m in tee)
+    standard = (await call(app, "GET", "/api/models?profile=standard"))[1]["models"]
+    assert [m["id"] for m in standard] == ["TEE/kimi-k3", "z-ai/glm-5.3"]       # the ones that take tool calls
+    glm = standard[1]
+    assert glm["included"] and glm["routable"] and glm["price"] == {"input": 1.4, "cache_read": 1.4, "output": 4.4}
+
+    async def hosts(provider, base_url, model, http=None):
+        assert (provider, base_url, model) == ("nanogpt", "https://nano-gpt.com/api/v1", "z-ai/glm-5.3")
+        return {"model": model, "supported": True, "auto": {}, "hosts": [{"id": "parasail", "name": "Parasail"}]}
+    monkeypatch.setattr(manager.routes, "fetch_hosts", hosts)
+    listed = (await call(app, "POST", "/api/hosts", {"profile": "standard", "model": "z-ai/glm-5.3"}))[1]
+    assert listed["hosts"][0]["id"] == "parasail"

@@ -20,7 +20,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from .llm import routes as routes_mod
-from .llm.client import RANK, is_private_mode, private_id, tier_of
+from .llm.client import RANK, private_id, tier_of
 from .netpolicy import InsecureURL, check_url
 
 APP_ID = "daprivatecoder"
