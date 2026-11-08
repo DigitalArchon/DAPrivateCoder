@@ -128,8 +128,19 @@ async def test_a_private_session_seals_everything_whatever_model_is_asked_for():
         assert said(r) == f"Hi from {sent}"
         assert SAID in json.dumps(fake.calls[-1][1])                   # what was said went to the sealed client
     assert fake.keys and set(fake.keys) == {"sk-nano"}
-    assert {c[3]["reasoning_effort"] for c in fake.calls} == {"low"}   # the profile's, not Claude Code's "high"
+    assert {c[3]["reasoning_effort"] for c in fake.calls} == {"low"}   # Claude Code said none: the profile's
     assert p.used_private
+
+
+async def test_the_model_thinks_as_hard_as_claude_code_says(tmp_path):
+    log = UsageLog(tmp_path / "requests.log", "s1")
+    p, fake = make(log=log)
+    # the editor's Effort, /effort and --effort all reach the proxy as output_config.effort
+    for asked, run in (("low", "low"), ("medium", "medium"), ("high", "high"), ("xhigh", "max"), ("max", "max"),
+                       ("HIGH", "high"), ("turbo", "low"), (3, "low")):
+        r = await call(p, "POST", "/v1/messages", message("private/glm-5-3", output_config={"effort": asked}))
+        assert r.status_code == 200 and fake.calls[-1][3]["reasoning_effort"] == run, asked
+    assert [r["effort"] for r in read(tmp_path / "requests.log")][:5] == ["low", "medium", "high", "max", "max"]
 
 
 async def test_tokens_of_a_private_request_are_counted_here():
@@ -174,6 +185,30 @@ async def test_a_model_that_sees_gets_images_and_one_that_doesnt_has_them_descri
     records = read(tmp_path / "requests.log")
     assert [r["kind"] for r in records] == ["request", "vision", "request"]
     assert records[1]["model"] == "private/deepseek-v4-1-flash" and records[1]["usage"]["input"] == 900
+
+
+async def test_whether_a_model_sees_is_never_guessed_when_nanogpts_list_cant_be_read(tmp_path):
+    log = UsageLog(tmp_path / "requests.log", "s1")
+    p, fake = make(log=log)
+    up = {"now": False}
+
+    async def flaky():
+        if not up["now"]:
+            raise httpx.ConnectError("NanoGPT is down")
+        return capabilities.parse(CAPS)
+    p._load_caps = flaky
+    tool_image = {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1",
+                                               "content": [bridge.b64_image(PNG)]}]}
+    body = message("private/kimi-k3", messages=[tool_image])
+    assert bridge.has_images(body) and not bridge.has_images(message("private/kimi-k3"))
+    r = await call(p, "POST", "/v1/messages", body)
+    assert r.status_code == 503 and "x-should-retry" not in r.headers           # Claude Code asks again
+    assert not fake.calls and not fake.described                               # nothing sent, nothing described
+    assert (await call(p, "POST", "/v1/messages", message("private/kimi-k3"))).status_code == 200   # no image: sent
+    up["now"] = True
+    assert (await call(p, "POST", "/v1/messages", body)).status_code == 200
+    assert fake.calls[-1][1][-1]["content"][1]["type"] == "image_url" and not fake.described   # Kimi K3 sees it
+    assert [r.get("sees") for r in read(tmp_path / "requests.log")] == [None, False, True]
 
 
 async def test_a_nano_session_sends_other_models_to_nanogpt_with_the_key():

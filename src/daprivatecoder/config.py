@@ -4,10 +4,7 @@ what each one means) on first use. It never holds secrets: the NanoGPT key lives
 
 A profile is a way to start Claude Code: the models it uses, and whether it is private. A private
 profile takes NanoGPT Private Mode models only (private/…), so every request is sealed to an
-attested enclave; a model that isn't one is a mistake in the file, and nothing starts with it.
-
-PrivateCode, this app's earlier name, kept its settings in ~/.config/privatecode: they are taken
-over (copied) the first time, while there are none here."""
+attested enclave; a model that isn't one is a mistake in the file, and nothing starts with it."""
 
 from __future__ import annotations
 
@@ -23,7 +20,6 @@ from .llm.client import is_private_mode, private_id
 from .netpolicy import InsecureURL, check_url
 
 APP_ID = "daprivatecoder"
-EARLIER_APP_ID = "privatecode"
 NANOGPT_BASE_URL = "https://nano-gpt.com/api/v1"
 # what the private models accept (Kimi K3 and GLM-5.3 take low, high and max; DeepSeek V4.1 Flash
 # all of these but xhigh); never "none": GLM with its thinking off reasons all the more, in its answer
@@ -49,10 +45,6 @@ def state_dir() -> Path:
 
 def config_path() -> Path:
     return config_dir() / "config.toml"
-
-
-def earlier_config_path() -> Path:
-    return config_dir().parent / EARLIER_APP_ID / "config.toml"
 
 
 @dataclass(frozen=True)
@@ -119,7 +111,8 @@ _NOTES = {
     "opus_model": "what /model opus picks",
     "fast_model": "what /model haiku picks, and what Claude Code uses for quick background tasks",
     "vision_model": "describes images for a model that can't see them; empty: such a model is told it can't see",
-    "reasoning": "how hard the model reasons before it answers: low, medium, high or max",
+    "reasoning": ("how hard the model reasons before it answers, as each session starts: low, medium, high or max.\n"
+                  "# In a session, Claude Code's Effort (the editor's, or /effort) changes it"),
     "web_search": """\
 Web search, through NanoGPT. No search is end-to-end encrypted: NanoGPT and the search provider
 # read every query (Claude Code asks you before each one, and refuses one naming this computer).
@@ -215,14 +208,11 @@ def parse(text: str, path: Path | None = None) -> Config:
 
 
 def load(path: Path | None = None) -> Config:
-    """The settings, from `path` (default: config_path()). With no file there yet, PrivateCode's
-    are copied to it, or else the defaults written."""
-    default = path is None
+    """The settings, from `path` (default: config_path()), written with the defaults if there are none."""
     path = path or config_path()
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
-        earlier = earlier_config_path()
-        path.write_text(earlier.read_text() if default and earlier.is_file() else DEFAULT_TEXT)
+        path.write_text(DEFAULT_TEXT)
     try:
         text = path.read_text()
     except OSError as e:

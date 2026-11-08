@@ -80,7 +80,7 @@ function renderTop(st) {
   if (st.config_error) { text = "The settings file has a mistake"; cls = "bad"; }
   else if (!st.key.stored) { text = "Needs your NanoGPT API key"; cls = "wait"; }
   else if (!st.claude.path) { text = "Needs Claude Code"; cls = "wait"; }
-  else if (p) text = `Ready: private sessions run on ${p.model}`;
+  else if (p) text = "Ready: sessions run on private models only";
   bar.className = `status ${cls}`;
   $("#status-text").textContent = text;
   const notes = [st.ui_notice, st.config_error].filter(Boolean);
@@ -170,29 +170,27 @@ function setupSection(st) {
   const cmds = Object.entries(st.commands);
   const allIn = cmds.every(([, c]) => c.state === "current");
   const taken = cmds.filter(([, c]) => c.state === "taken").map(([, c]) => c.path);
-  const commandsRow = check(allIn, "The claude-private command",
-    allIn ? (st.commands_on_path ? "Installed in ~/.local/bin: claude-private and daprivatecoder."
-      : "Installed in ~/.local/bin, which isn't on your PATH: add it to run them by name.")
+  // only for typing them in a terminal: this window runs the app itself, and the editor's switch puts
+  // claude-private there when it's turned on
+  const commandsRow = check(allIn || "optional", "Terminal commands",
+    allIn ? (st.commands_on_path ? "claude-private and daprivatecoder are in ~/.local/bin: type them in any terminal."
+      : "In ~/.local/bin, which isn't on your PATH: add it to run claude-private and daprivatecoder by name.")
       : taken.length ? `${taken.join(", ")} is someone else's program, so it's left as it is.`
-        : "For a terminal (claude-private), and for the editor's switch, which runs it.",
-    allIn ? null : h("button", { class: "small primary", onclick: () => act("POST", "/api/commands", {}, "Installed.") }, "Install"));
+        : "Optional: puts claude-private and daprivatecoder in ~/.local/bin, to type in any terminal. Opening Claude Code "
+          + "from this window doesn't need them, and the editor's switch puts claude-private there itself.",
+    allIn ? null : h("button", { class: "small", onclick: () => act("POST", "/api/commands", {}, "Installed.") }, "Install"));
 
-  // on, off, other (another program's wrapper: left alone), or earlier (PrivateCode's: still the old app)
-  const switchOn = (e, label) => h("button", { class: "small private", disabled: !st.ready,
+  // on, off, or other (another program's wrapper: left alone)
+  const switchOn = (e) => h("button", { class: "small private", disabled: !st.ready,
     title: st.ready ? "" : "Set up the key and Claude Code first", onclick: () => act("POST", "/api/editor",
-      { name: e.name, on: true }, `${e.name}'s new Claude Code tabs run on private models.`) }, label);
+      { name: e.name, on: true }, `${e.name}'s new Claude Code tabs run on private models.`) }, "Use private models");
   const switchOff = (e) => h("button", { class: "small", onclick: () => act("POST", "/api/editor", { name: e.name, on: false },
     `${e.name}'s Claude Code runs as usual again (open a new Claude Code tab).`) }, "Back to normal");
-  const editors = st.editors.length ? st.editors.map((e) => check(
-    e.state === "on" ? true : e.state === "earlier" ? false : "optional", `Claude Code in ${e.name}`,
+  const editors = st.editors.length ? st.editors.map((e) => check(e.state === "on" || "optional", `Claude Code in ${e.name}`,
     e.state === "on" ? "Runs on private models (new Claude Code tabs). The extension takes this for the whole editor."
-      : e.state === "earlier" ? `Runs PrivateCode's claude-private (${e.value}), this app's earlier version, not DA Private Coder's.`
-        : e.state === "other" ? `Runs through another program (${e.value}), so this is left as it is.`
-          : "Runs as usual, on Anthropic's models.",
-    e.state === "on" ? switchOff(e) : null,
-    e.state === "off" ? switchOn(e, "Use private models") : null,
-    e.state === "earlier" ? switchOn(e, "Use DA Private Coder's") : null,
-    e.state === "earlier" ? switchOff(e) : null))
+      : e.state === "other" ? `Runs through another program (${e.value}), so this is left as it is.`
+        : "Runs as usual, on Anthropic's models.",
+    e.state === "on" ? switchOff(e) : e.state === "off" ? switchOn(e) : null))
     : [check("optional", "Claude Code in your editor", "No VSCodium or VS Code here: use claude-private in a terminal.")];
 
   return h("div", { class: "section" }, h("h3", {}, "Setup"), keyRow, claude, commandsRow, ...editors);
@@ -233,10 +231,15 @@ function modelsSection(st) {
   return h("div", { class: "section" }, h("h3", {}, "Models", h("span", { class: "chip private" }, "end-to-end encrypted")),
     h("p", { class: "lead" }, "NanoGPT's Private Mode models, per million tokens: input / cached input / output, with its 5% markup."),
     rows,
-    h("div", { class: "model-row" }, h("label", {}, "Reasoning"),
+    // where each session's effort starts: Claude Code's own (the editor's Effort, /effort) changes it
+    // in a session, and the model runs at whatever Claude Code says (proxy.py)
+    h("div", { class: "model-row" }, h("label", {}, "Effort"),
       h("select", { onchange: (e) => save({ reasoning: e.target.value }) },
         [["low", "Low (fast; recommended)"], ["medium", "Medium"], ["high", "High (slow)"], ["max", "Max (slowest)"]]
           .map(([v, l]) => h("option", { value: v, selected: p.reasoning === v }, l)))),
+    h("div", { class: "model-row" }, h("span", {}), h("div", { class: "small muted" },
+      "How hard the models think as each session starts. In a session, Claude Code's own Effort (in the editor, or ",
+      h("code", {}, "/effort"), ") changes it.")),
     S.modelsError ? h("div", { class: "warnbox" }, `NanoGPT's list of models couldn't be read: ${S.modelsError}`) : null,
     S.models ? null : h("div", { class: "small muted row" }, h("span", { class: "spinner" }), "Reading NanoGPT's list of private models…"));
 }

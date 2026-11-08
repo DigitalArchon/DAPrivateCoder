@@ -104,6 +104,15 @@ class ImageDescriber:
         return f"[Image, described for you by a vision model ({self.model}):]\n{self._cache[digest]}"
 
 
+def has_images(body: dict) -> bool:
+    """Whether a request carries an image anywhere: in a message, or in a tool's result."""
+    def any_image(content) -> bool:
+        return isinstance(content, list) and any(
+            isinstance(b, dict) and (b.get("type") == "image" or (b.get("type") == "tool_result" and any_image(b.get("content"))))
+            for b in content)
+    return any(isinstance(m, dict) and any_image(m.get("content")) for m in body.get("messages") or [])
+
+
 def _image_part(block: dict) -> dict | None:
     """An Anthropic image block as a chat-completions content part (None: it has no data to send)."""
     url = _data_url(block)
@@ -218,8 +227,8 @@ async def to_openai(body: dict, images: ImageDescriber, native: bool = False) ->
         params["tool_choice"] = {"type": "function", "function": {"name": choice["name"]}}
     elif choice.get("type") == "none":
         tools = []
-    # Claude Code's "thinking" setting isn't passed on: the proxy sets the effort (never "none":
-    # GLM with its thinking off reasons all the more, in its answer)
+    # Claude Code's "thinking" setting isn't passed on: the proxy sets the effort from Claude Code's
+    # (output_config), never "none" (GLM with its thinking off reasons all the more, in its answer)
     return messages, tools or None, params
 
 

@@ -206,14 +206,11 @@ def wrapper_path() -> str:
 
 
 def owner(value) -> str:
-    """Whose program the process wrapper setting `value` names: "ours" (a claude-private of DA Private
-    Coder's), "earlier" (PrivateCode's, this app's earlier name: its claude-private in its own
-    environment, which still runs PrivateCode), "other" (another program), or "" (none: the usual)."""
+    """Whose program the process wrapper setting `value` names: "ours" (DA Private Coder's
+    claude-private), "other" (another program), or "" (none: the usual)."""
     if not value:
         return ""
-    if not isinstance(value, str) or os.path.basename(value) != "claude-private":
-        return "other"
-    return "earlier" if "/privatecode/" in value else "ours"
+    return "ours" if isinstance(value, str) and os.path.basename(value) == "claude-private" else "other"
 
 
 def current(path: Path) -> str | None:

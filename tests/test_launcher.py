@@ -92,6 +92,17 @@ def test_the_settings_go_in_once_with_ours_over_any_given(tmp_path):
         claude_args(PRIVATE, env, ["--settings", "{nope"])
 
 
+def test_a_session_starts_at_the_profiles_effort_and_claude_codes_own_changes_it():
+    from dataclasses import replace
+    env = claude_env(PRIVATE, 4321, "tok")
+    assert json.loads(claude_args(PRIVATE, env, [])[1])["effortLevel"] == PRIVATE.reasoning
+    # Claude Code's effortLevel setting has no "max": its xhigh, which the proxy runs as max
+    assert json.loads(claude_args(replace(PRIVATE, reasoning="max"), env, [])[1])["effortLevel"] == "xhigh"
+    # one the caller gives in --settings stands; --effort is Claude Code's, passed on as it is
+    given = claude_args(PRIVATE, env, ["--settings", '{"effortLevel": "high"}', "--effort", "medium"])
+    assert json.loads(given[1])["effortLevel"] == "high" and given[2:] == ["--effort", "medium"]
+
+
 def test_a_model_the_editor_passes_by_a_name_that_isnt_private_becomes_the_profiles():
     env = claude_env(PRIVATE, 1, "t")
     args = claude_args(PRIVATE, env, ["--model", "claude-opus-5-5", "--fallback-model=claude-sonnet-5-5", "--model",

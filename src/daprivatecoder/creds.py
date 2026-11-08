@@ -17,8 +17,6 @@ SERVICE = "daprivatecoder"
 USER = "nanogpt"
 # where DA Vibe Manager keeps the same key, for `daprivatecoder key set --from-vibe-manager`
 VIBE_MANAGER = ("davibemanager", "provider:NanoGPT")
-# where PrivateCode, this app's earlier name, kept it: taken over once, while none is stored here
-PRIVATECODE = ("privatecode", "nanogpt")
 
 
 class KeyringUnavailable(Exception):
@@ -55,15 +53,8 @@ def _get(service: str, user: str) -> str | None:
 
 
 def get_key() -> str | None:
-    """The NanoGPT key, or None if none is stored. One PrivateCode stored, while there is none of
-    DA Private Coder's own, is taken over (copied: PrivateCode's stays where it is)."""
-    key = _get(SERVICE, USER)
-    if key is None:
-        earlier = _get(*PRIVATECODE)
-        if earlier:
-            set_key(earlier)
-            key = earlier
-    return key
+    """The NanoGPT key, or None if none is stored."""
+    return _get(SERVICE, USER)
 
 
 def set_key(value: str) -> None:

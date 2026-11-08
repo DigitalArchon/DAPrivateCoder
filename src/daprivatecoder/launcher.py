@@ -58,6 +58,11 @@ QUIET = {
 }
 
 
+# the profile's effort as Claude Code's effortLevel setting, which takes no "max": its xhigh, which the
+# proxy runs as the models' max (none takes xhigh)
+START_EFFORT = {"max": "xhigh"}
+
+
 class LaunchError(Exception):
     """Claude Code can't be started on the proxy; the message says why and what to do."""
 
@@ -164,6 +169,9 @@ def session_settings(profile: Profile, env: dict[str, str], given: dict | None =
     out = dict(given or {})
     out["env"] = {**(out.get("env") or {}), **env}
     out["model"] = profile.model
+    # the effort the session starts at (the window's): the editor's Effort and /effort change it in the
+    # session, and --effort from the start; the proxy runs the model at whatever Claude Code asks for
+    out.setdefault("effortLevel", START_EFFORT.get(profile.reasoning, profile.reasoning))
     # WebFetch tells Anthropic each site it reads (its blocklist check) unless told not to
     out["skipWebFetchPreflight"] = True
     out["disableClaudeAiConnectors"] = True

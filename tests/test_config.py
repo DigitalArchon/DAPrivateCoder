@@ -89,13 +89,3 @@ def test_settings_saved_from_the_window_keep_their_notes_and_read_back_the_same(
     with pytest.raises(ConfigError, match="isn't a NanoGPT Private Mode model"):
         config.save(cfg.with_profile(replace(cfg.profile("private"), opus_model="z-ai/glm-5.3")))
     assert config.load().profiles == saved.profiles                     # nothing written
-
-
-def test_privatecodes_settings_are_taken_over_once():
-    earlier = config.earlier_config_path()
-    earlier.parent.mkdir(parents=True)
-    earlier.write_text('[profiles.private]\nprivate = true\nmodel = "private/kimi-k3"\n')
-    assert config.load().profile("private").model == "private/kimi-k3"
-    earlier.write_text('[profiles.private]\nprivate = true\nmodel = "private/gemma4-31b"\n')
-    assert config.load().profile("private").model == "private/kimi-k3"   # once: its own from then on
-    assert earlier.read_text().endswith('"private/gemma4-31b"\n')         # PrivateCode's left as it is

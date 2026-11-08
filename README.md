@@ -40,20 +40,15 @@ Code is used), and a NanoGPT API key with credit (Private Mode is paid per use).
 1. Download `DAPrivateCoder-<version>-x86_64.AppImage`, make it executable, and open it.
    The window needs WebKitGTK 4.1 (`sudo apt install gir1.2-webkit2-4.1`, `sudo dnf install
    webkit2gtk4.1`, `sudo pacman -S webkit2gtk-4.1`); without it, it opens in your web browser.
-2. In **Setup**: paste your NanoGPT key (or use DA Vibe Manager's), and install the
-   `claude-private` command.
-3. **Start Claude Code**: choose a folder and open Claude Code in a terminal there, or run
-   `claude-private` in a terminal yourself.
+2. In **Setup**: paste your NanoGPT key (or use DA Vibe Manager's).
+3. **Start Claude Code**: choose a folder and open Claude Code in a terminal there. To type
+   `claude-private` in a terminal yourself instead, **Install** the terminal commands (optional).
 4. For your editor: **Use private models** next to VSCodium or VS Code, then open a new Claude Code
    tab; **Back to normal** undoes it. The extension takes this for the whole editor, not per project.
 
 In a session, `/status` shows the base URL as `http://127.0.0.1:…`: that is DA Private Coder.
 `/model` offers the profile's models (Sonnet is GLM-5.3, Opus Kimi K3, Haiku DeepSeek V4.1 Flash) and
 the other models NanoGPT's Private Mode offers now.
-
-DA Private Coder was called PrivateCode before: its settings and its key in your keyring are taken
-over the first time. An editor PrivateCode switched on still runs PrivateCode: the window says so,
-and **Use DA Private Coder's** switches it over (or `daprivatecoder editor on`).
 
 ## Models and cost
 
@@ -72,8 +67,14 @@ Claude Code sends the whole conversation with every request; what repeats comes 
 cache, at the cached price. **Usage** in the window shows each request's tokens and cost. Ignore
 Claude Code's own `/cost`: it doesn't know these models' prices.
 
-`reasoning` sets how hard the models think (low, medium, high or max; low by default, since GLM
-at its default can reason for minutes a step). Claude Code's `/effort` doesn't change it.
+**Effort** in the window (`reasoning` in the file) is how hard the models think as each session
+starts: low, medium, high or max; low by default, since GLM at its default can reason for minutes a
+step. In a session, Claude Code's own effort changes it: the Effort control of the editor's Claude
+Code, or `/effort` (and `--effort`) in a terminal. The model runs at whatever Claude Code shows;
+these models have nothing between high and max, so Claude Code's xhigh runs as max.
+
+A model that sees images (Kimi K3, DeepSeek V4.1 Flash) gets them as they are. Only one that
+doesn't (GLM-5.3) has them described, by the **Images** model, also a private one.
 
 ## Web search
 
@@ -96,8 +97,10 @@ retention, by Linkup; the result tells the model which ran.
 
 ## Commands
 
-The window installs these in `~/.local/bin`, as small scripts that run the AppImage where it is
-(they follow it when it moves):
+**Install** in the window puts these in `~/.local/bin`, as small scripts that run the AppImage where
+it is (they follow it when it moves). They are only for typing in a terminal: the window opens
+Claude Code without them, and the editor's switch writes `claude-private` there itself, since the
+editor needs a path that stays put.
 
 | Command | What it does |
 |---|---|
@@ -144,7 +147,7 @@ your system's GTK and WebKitGTK, as DA Vibe Manager's is.
 ```sh
 uv venv --system-site-packages     # the window uses the system's PyGObject (python3-gi)
 uv sync
-uv run daprivatecoder              # the window; Install there puts the commands in ~/.local/bin
+uv run daprivatecoder              # the window
 uv run pytest
 ```
 

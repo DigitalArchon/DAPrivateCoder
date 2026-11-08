@@ -97,9 +97,7 @@ def _key(args) -> int:
 
 def _wrapper_state(value) -> str:
     from . import editor
-    return {"ours": "on (DA Private Coder)", "": "off",
-            "earlier": f"PrivateCode's ({value}): daprivatecoder editor on switches it to DA Private Coder",
-            }.get(editor.owner(value), f"another wrapper: {value}")
+    return {"ours": "on (DA Private Coder)", "": "off"}.get(editor.owner(value), f"another wrapper: {value}")
 
 
 def _editor(args) -> int:

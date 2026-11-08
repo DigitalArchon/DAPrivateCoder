@@ -79,11 +79,3 @@ def test_a_broken_settings_file_is_said_plainly(capsys):
     assert "isn't a NanoGPT Private Mode model" in capsys.readouterr().err
     assert cli._launch("claude-private", "private", ["-p", "hi"]) == 1
     assert "nothing would be sent in the clear" in capsys.readouterr().err
-
-
-def test_a_key_privatecode_stored_is_taken_over(ring):
-    ring.store[("privatecode", "nanogpt")] = "sk-from-privatecode"
-    creds.forget()
-    assert creds.get_key() == "sk-from-privatecode"
-    assert ring.store[("daprivatecoder", "nanogpt")] == "sk-from-privatecode"
-    assert ring.store[("privatecode", "nanogpt")] == "sk-from-privatecode"     # copied, not moved

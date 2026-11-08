@@ -4,8 +4,10 @@ editor's switch names) and daprivatecoder (the rest: key, check, log…).
 Each is a small script of DA Private Coder's that runs it the way it runs now: the AppImage, where it
 is now, or from source, its Python. A path inside the AppImage won't do: it is mounted somewhere new
 each time it runs. The scripts are written again when the window starts, so they follow an AppImage
-that has moved. A file there that isn't DA Private Coder's is never overwritten; PrivateCode's (this
-app's earlier name: links into its own environment) are replaced."""
+that has moved. A file there that isn't DA Private Coder's is never overwritten.
+
+They are only for typing in a terminal: the window runs the app itself, and the editor's switch
+writes claude-private when it is turned on (editor.wrapper_path)."""
 
 from __future__ import annotations
 
@@ -38,11 +40,9 @@ def script(name: str) -> str:
 
 
 def state(name: str) -> str:
-    """"current" (ours, as it should be), "stale" (ours, or PrivateCode's: to write again), "missing", or
-    "taken" (someone else's)."""
+    """"current" (ours, as it should be), "stale" (ours, to write again), "missing", or "taken"
+    (someone else's)."""
     path = path_of(name)
-    if path.is_symlink() and "/privatecode/" in os.readlink(path):
-        return "stale"                            # PrivateCode's install.sh: a link into its environment
     if not path.exists():
         return "missing"
     try:

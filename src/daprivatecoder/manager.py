@@ -100,8 +100,7 @@ class Manager:
         out["editors"] = []
         for name, path in editor.editors():
             value = editor.current(path)
-            # on, off, other (another program's), or earlier (PrivateCode's: still the old app)
-            state = {"ours": "on", "": "off"}.get(editor.owner(value), editor.owner(value))
+            state = {"ours": "on", "": "off"}.get(editor.owner(value), "other")      # other: another program's
             out["editors"].append({"name": name, "path": str(path), "value": value or "", "state": state})
         out["usage"] = self.usage()
         out["attestation"] = self.last_attestation()

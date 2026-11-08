@@ -26,18 +26,22 @@ def test_the_commands_run_the_app_as_it_runs_now(monkeypatch):
     assert commands.script("daprivatecoder").endswith("exec '/home/u/Apps/DA Private Coder.AppImage' \"$@\"\n")
 
 
-def test_installing_replaces_privatecodes_and_ours_never_someone_elses(monkeypatch):
+def test_installing_writes_ours_and_never_touches_someone_elses(monkeypatch, tmp_path):
     bin_dir = commands.bin_dir()
     bin_dir.mkdir(parents=True)
-    old = bin_dir.parent / "share/privatecode/venv/bin/claude-private"
-    old.parent.mkdir(parents=True)
-    old.write_text("#!/bin/sh\n")
-    os.symlink(old, bin_dir / "claude-private")                    # PrivateCode's install.sh
+    theirs = tmp_path / "elsewhere/claude-private"
+    theirs.parent.mkdir()
+    theirs.write_text("#!/bin/sh\necho theirs\n")
+    os.symlink(theirs, bin_dir / "claude-private")                   # a link to someone else's
     (bin_dir / "daprivatecoder").write_text("#!/bin/sh\necho mine\n")  # someone else's
-    assert commands.state("claude-private") == "stale" and commands.state("daprivatecoder") == "taken"
-    assert commands.install() == {"claude-private": "current", "daprivatecoder": "taken"}
-    assert not (bin_dir / "claude-private").is_symlink() and os.access(bin_dir / "claude-private", os.X_OK)
+    assert commands.state("claude-private") == "taken" and commands.state("daprivatecoder") == "taken"
+    assert commands.install() == {"claude-private": "taken", "daprivatecoder": "taken"}
+    assert (bin_dir / "claude-private").is_symlink() and theirs.read_text() == "#!/bin/sh\necho theirs\n"
     assert (bin_dir / "daprivatecoder").read_text() == "#!/bin/sh\necho mine\n"
+    (bin_dir / "claude-private").unlink()
+    assert commands.state("claude-private") == "missing"
+    assert commands.install(["claude-private"]) == {"claude-private": "current"}
+    assert os.access(bin_dir / "claude-private", os.X_OK)
     monkeypatch.setenv("APPIMAGE", "/moved/DAPrivateCoder.AppImage")    # the AppImage moved
     assert commands.state("claude-private") == "stale"
     commands.refresh()
@@ -238,19 +242,15 @@ async def test_usage_says_how_each_request_left_and_blanks_what_wasnt_counted(wi
     assert [line.split()[2] for line in lines[:6]] == ["sealed", "clear", "unsent", "sealed", "unsent", "clear"]
 
 
-async def test_an_editor_left_on_privatecodes_wrapper_is_said_and_switched_over(window, capsys):
+async def test_an_editor_on_another_programs_wrapper_is_left_as_it_is(window, capsys):
     app, started, settings, _ = window
-    old = "/home/u/.local/share/privatecode/venv/bin/claude-private"     # PrivateCode's editor switch
-    settings.write_text('{\n    "claudeCode.claudeProcessWrapper": "%s" // on\n}\n' % old)
-    assert [editor.owner(v) for v in (None, "", old, "/home/u/.local/bin/claude-private", "/opt/wrap", 3)] == \
-        ["", "", "earlier", "ours", "other", "other"]
-    st = (await call(app, "GET", "/api/state"))[1]
-    assert st["editors"][0]["state"] == "earlier" and st["editors"][0]["value"] == old
-    assert cli.main(["editor", "status"]) == 0
-    assert "VSCodium: PrivateCode's" in capsys.readouterr().out
+    assert [editor.owner(v) for v in (None, "", "/home/u/.local/bin/claude-private", "/opt/wrap", 3)] == \
+        ["", "", "ours", "other", "other"]
     st = (await call(app, "POST", "/api/editor", {"name": "VSCodium", "on": True}))[1]
-    assert st["editors"][0]["state"] == "on"
-    assert editor.current(settings) == str(commands.path_of("claude-private")) and "// on" in settings.read_text()
+    assert st["editors"][0]["state"] == "on" and "// mine" in settings.read_text()
+    assert editor.current(settings) == str(commands.path_of("claude-private"))
+    assert cli.main(["editor", "status"]) == 0
+    assert "VSCodium: on (DA Private Coder)" in capsys.readouterr().out
     settings.write_text('{"claudeCode.claudeProcessWrapper": "/opt/wrap"}')
     status, said = await call(app, "POST", "/api/editor", {"name": "VSCodium", "on": True})
     assert status == 400 and "another program" in said["error"] and editor.current(settings) == "/opt/wrap"

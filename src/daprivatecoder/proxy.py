@@ -32,7 +32,7 @@ import httpx
 from . import creds
 from .config import Profile
 from .llm import capabilities
-from .llm.anthropic_bridge import VISION_PROMPT, ImageDescriber, estimate_tokens, message, sse, to_openai
+from .llm.anthropic_bridge import VISION_PROMPT, ImageDescriber, estimate_tokens, has_images, message, sse, to_openai
 from .llm.client import is_private_mode, private_id
 from .llm.private_mode import Attestation, Enclave, PrivateModeClient, list_private_models, offers_private_mode, relay_url
 from .netpolicy import check_url, is_secure
@@ -48,6 +48,9 @@ PASS_HEADERS = ("content-type", "accept", "anthropic-version", "anthropic-beta",
 RETURN_HEADERS = ("content-type", "request-id", "x-request-id", "retry-after", "x-should-retry",
                   "anthropic-ratelimit-requests-remaining", "anthropic-ratelimit-tokens-remaining")
 VISION_EFFORT = "low"
+# Claude Code's effort (output_config.effort: the editor's Effort, /effort, --effort, or where the
+# session started, launcher.py) as the private models take it: none takes xhigh, so it is their max
+EFFORTS = {"low": "low", "medium": "medium", "high": "high", "xhigh": "max", "max": "max"}
 # Claude Code gives up on its model list after 3 seconds (its gateway model discovery)
 MODEL_LIST_SECONDS = 2.5
 
@@ -122,6 +125,14 @@ class UsageReader:
                 elif data.get("type") == "message_delta" and isinstance(data.get("usage"), dict):
                     later = anthropic_usage(data["usage"])
                     self.usage = {k: later[k] or v for k, v in (self.usage or later).items()}
+
+
+def effort_of(data: dict, default: str) -> str:
+    """How hard the model should reason for this request: what Claude Code asks for, else `default`
+    (the profile's)."""
+    config = data.get("output_config")
+    asked = config.get("effort") if isinstance(config, dict) else None
+    return EFFORTS.get(asked.strip().lower(), default) if isinstance(asked, str) else default
 
 
 def _error_text(raw: bytes) -> str:
@@ -223,7 +234,14 @@ class Proxy:
             return self._caps
 
     async def sees(self, model: str) -> bool:
-        return bool((capabilities.lookup(await self.capabilities(), model) or {}).get("vision"))
+        """Whether `model` reads images itself (they go to it as they are) or has them described by
+        the vision helper. Without NanoGPT's list it isn't known, and a model that sees mustn't be
+        given descriptions, nor one that doesn't images: Claude Code is told to ask again."""
+        caps = await self.capabilities()
+        if not caps:
+            raise Refused(503, f"NanoGPT's list of models couldn't be read, so it isn't known whether {model} sees "
+                               "images: nothing was sent. Claude Code asks again.", "api_error", retry=True)
+        return bool((capabilities.lookup(caps, model) or {}).get("vision"))
 
     def _record(self, kind: str, **fields) -> None:
         if self.log is not None:
@@ -349,16 +367,17 @@ class Proxy:
             return JSONResponse({"input_tokens": estimate_tokens(data)})
         client = self._private(model)                       # raises Refused: no key, not NanoGPT
         started = time.monotonic()
+        # raises Refused (asked again) when it isn't known whether the model sees: never guessed
+        native = await self.sees(model) if has_images(data) else False
         try:
-            native = await self.sees(model)
             messages, tools, params = await to_openai(data, self.images, native=native)
         except Exception as e:  # noqa: BLE001 - Claude Code shows the reason
             raise Refused(502, f"Couldn't prepare the request for {model}: {e}", "api_error") from e
-        params["reasoning_effort"] = self.profile.reasoning
+        params["reasoning_effort"] = effort = effort_of(data, self.profile.reasoning)
         self.used_private = True
         estimate = estimate_tokens(data)
         rec = {"path": path, "model": model, "asked_for": asked if asked and private_id(asked) != model else "",
-               "sealed": True, "sees": native, "bytes_out": size}
+               "sealed": True, "sees": native, "effort": effort, "bytes_out": size}
         events = client.stream(model, messages, tools, params)
 
         async def done(stats: dict, status: int, **extra) -> None:
