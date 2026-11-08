@@ -71,8 +71,10 @@ check(ok, f"{NAME}: the app window starts and stays up" + ("" if ok else "\n" + 
 # the API, as the window drives it: not set up (no keyring in the container), the profile saved
 proc, base, token = start("--no-open")
 st = api(base, token, "GET", "/api/state")
-check(st["ready"] is False and st["config"]["profiles"]["private"]["model"] == "private/glm-5-3",
-      f"{NAME}: the API answers, not set up yet")
+profiles = st["config"]["profiles"]
+check(not any(st["ready"].values()) and profiles["private"]["model"] == "private/glm-5-3"
+      and profiles["tee"]["kind"] == "tee" and profiles["standard"]["kind"] == "standard",
+      f"{NAME}: the API answers, not set up yet, with private, TEE and standard sessions")
 api(base, token, "POST", "/api/profile", {"profile": "private", "fields": {"model": "private/kimi-k3", "web_search": "best"}})
 p = api(base, token, "GET", "/api/state")["config"]["profiles"]["private"]
 check(p["model"] == "private/kimi-k3" and p["web_search"] == "best", f"{NAME}: settings are saved")
