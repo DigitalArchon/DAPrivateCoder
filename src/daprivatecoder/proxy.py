@@ -54,9 +54,17 @@ PASS_HEADERS = ("content-type", "accept", "anthropic-version", "anthropic-beta",
 RETURN_HEADERS = ("content-type", "request-id", "x-request-id", "retry-after", "x-should-retry",
                   "anthropic-ratelimit-requests-remaining", "anthropic-ratelimit-tokens-remaining")
 VISION_EFFORT = "low"
-# Claude Code's effort (output_config.effort: the editor's Effort, /effort, --effort, or where the
-# session started, launcher.py) as the private models take it: none takes xhigh, so it is their max
-EFFORTS = {"low": "low", "medium": "medium", "high": "high", "xhigh": "max", "max": "max"}
+# Claude Code's efforts (output_config.effort: the editor's Effort, /effort, --effort, or where the
+# session started, launcher.py), least to most. A model is sent the nearest one it takes (effort_for):
+# measured live (Nov 8 2026), a private model refuses any other (Kimi K3 and DeepSeek V4.1 Flash
+# answer HTTP 400 to "medium"), and through NanoGPT's gateway one is taken but ignored (GLM-5.3 then
+# reasons at its default, max: "medium" made it think harder than "high")
+LEVELS = ("low", "medium", "high", "xhigh", "max")
+# what every private model takes (Kimi K3 only these; GLM-5.3 ignores others; DeepSeek V4.1 Flash
+# also xhigh): NanoGPT's listing of their TEE twins doesn't hold for the private build
+PRIVATE_EFFORTS = ("low", "high", "max")
+# an OpenAI-compatible provider of your own: OpenAI's own levels
+CUSTOM_EFFORTS = ("low", "medium", "high")
 # Claude Code gives up on its model list after 3 seconds (its gateway model discovery)
 MODEL_LIST_SECONDS = 2.5
 
@@ -138,7 +146,30 @@ def effort_of(data: dict, default: str) -> str:
     (the profile's)."""
     config = data.get("output_config")
     asked = config.get("effort") if isinstance(config, dict) else None
-    return EFFORTS.get(asked.strip().lower(), default) if isinstance(asked, str) else default
+    asked = asked.strip().lower() if isinstance(asked, str) else ""
+    return asked if asked in LEVELS else default
+
+
+def effort_for(asked: str, takes) -> str:
+    """The effort a model that takes `takes` (None: not known) is sent for `asked`: itself if it takes
+    it, else the nearest it does, the higher of two as near (medium as high where there's no medium,
+    xhigh as max). Never "none" or "minimal": Claude Code doesn't ask for them (and GLM with its
+    thinking off reasons all the more, in its answer)."""
+    choices = [e for e in (takes or ()) if e in LEVELS]
+    if not choices or asked in choices or asked not in LEVELS:
+        return asked
+    at = LEVELS.index(asked)
+    return min(choices, key=lambda e: (abs(LEVELS.index(e) - at), -LEVELS.index(e)))
+
+
+def efforts_named(error: str, sent: str | None) -> tuple[str, ...]:
+    """The efforts a model's refusal says it takes ("Kimi K3 supports thinking_effort values: low,
+    high, max (… value=medium)"; "reasoning_effort must be low, high, xhigh, max, or …"), or ()."""
+    import re
+    if "effort" not in error.lower():
+        return ()
+    named = [w for w in re.findall(r"[a-z]+", error.lower()) if w in LEVELS and w != sent]
+    return tuple(e for e in LEVELS if e in named)
 
 
 def _error_text(raw: bytes) -> str:
@@ -226,6 +257,7 @@ class Proxy:
         self.enclave = Enclave(relay_url(self.base_url), on_attested=self._attested) \
             if offers_private_mode(self.base_url) else None
         self._describers: dict[str, ImageDescriber] = {}
+        self._efforts: dict[str, tuple[str, ...]] = {}      # model -> the efforts its refusal said it takes
         self.used_private = False
 
     # ------------------------------------------------------------------ what is sent where
@@ -374,6 +406,53 @@ class Proxy:
                 usage = {**usage, "cost": round(estimate, 6), "cost_estimated": True}
         return usage
 
+    async def efforts(self, model: str, tier: str):
+        """The efforts `model` takes: what it said when it refused one, else for a private model those
+        every private model takes, else its provider's listing (another provider: OpenAI's levels); None
+        when not known (sent as asked)."""
+        if model in self._efforts:
+            return self._efforts[model]
+        if tier == "private":
+            return PRIVATE_EFFORTS
+        provider = self._provider_of(tier)
+        if provider == "custom":
+            return CUSTOM_EFFORTS
+        caps = await self.capabilities(provider) or {}
+        return (capabilities.lookup(caps, model) or {}).get("efforts")
+
+    async def _effort(self, model: str, tier: str, asked: str) -> str:
+        return effort_for(asked, await self.efforts(model, tier))
+
+    def _learned(self, model: str, error: BaseException, sent: str | None) -> str | None:
+        """When `model` refused the effort it was sent and said which it takes: remember them, and the
+        one to send instead (None: not that kind of refusal)."""
+        takes = efforts_named(str(error), sent)
+        if not takes or not sent:
+            return None
+        self._efforts[model] = takes
+        return effort_for(sent, takes)
+
+    def _stream(self, client, model: str, messages, tools, params: dict, rec: dict):
+        """The model's events; a model that refuses the effort before it answers, naming those it takes,
+        is asked once more with one of them (rec["effort"] says which went)."""
+        async def events():
+            sent = params.get("reasoning_effort")
+            started = False
+            try:
+                async for event in client.stream(model, messages, tools, params):
+                    started = True
+                    yield event
+                return
+            except Exception as e:
+                instead = None if started else self._learned(model, e, sent)
+                if instead is None or instead == sent:
+                    raise
+            rec.setdefault("effort_asked", sent)
+            rec["effort"] = instead
+            async for event in client.stream(model, messages, tools, {**params, "reasoning_effort": instead}):
+                yield event
+        return events()
+
     def _images(self, tier: str) -> ImageDescriber:
         """The vision helper for a request of `tier`: what an image shows is part of the request, so
         only a helper no less protected than it describes one (else the model is told it can't see)."""
@@ -395,8 +474,15 @@ class Proxy:
         if tier == "tee":
             await self._attest_tee(model)
         client = self._chat_client(model, tier)
+        effort = await self._effort(model, tier, VISION_EFFORT)
         try:
-            text = await client.complete(model, messages, params={"reasoning_effort": VISION_EFFORT})
+            try:
+                text = await client.complete(model, messages, params={"reasoning_effort": effort})
+            except Exception as e:
+                instead = self._learned(model, e, effort)
+                if instead is None or instead == effort:
+                    raise
+                text = await client.complete(model, messages, params={"reasoning_effort": instead})
         except Exception as e:
             self._record("vision", model=model, tier=tier, status=502, error=str(e)[:300])
             raise
@@ -516,7 +602,8 @@ class Proxy:
             messages, tools, params = await to_openai(data, self._images(tier), native=native)
         except Exception as e:  # noqa: BLE001 - Claude Code shows the reason
             raise Refused(502, f"Couldn't prepare the request for {model}: {e}", "api_error") from e
-        params["reasoning_effort"] = effort = effort_of(data, self.profile.reasoning)
+        wanted = effort_of(data, self.profile.reasoning)
+        params["reasoning_effort"] = effort = await self._effort(model, tier, wanted)
         route = self.profile.routes.get(model) if tier == "standard" else None
         params.update(routes.body(self.provider, route))      # which of the provider's hosts runs it, if chosen
         if tier == "private":
@@ -524,8 +611,9 @@ class Proxy:
         estimate = estimate_tokens(data)
         rec = {"path": path, "model": model, "asked_for": asked if asked and asked.strip().lower() != model.lower() else "",
                "sealed": tier == "private", "tier": tier, "provider": self._provider_of(tier), "sees": native,
-               "effort": effort, "bytes_out": size, **({"route": routes.describe(self.provider, route)} if route else {})}
-        events = client.stream(model, messages, tools, params)
+               "effort": effort, **({"effort_asked": wanted} if wanted != effort else {}), "bytes_out": size,
+               **({"route": routes.describe(self.provider, route)} if route else {})}
+        events = self._stream(client, model, messages, tools, params, rec)
 
         async def done(stats: dict, status: int, **extra) -> None:
             usage = stats.get("usage")

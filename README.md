@@ -79,8 +79,11 @@ Claude Code's own `/cost`: it doesn't know these models' prices.
 **Effort** in the window (`reasoning` in the file) is how hard the models think as each session
 starts: low, medium, high or max; low by default, since GLM at its default can reason for minutes a
 step. In a session, Claude Code's own effort changes it: the Effort control of the editor's Claude
-Code, or `/effort` (and `--effort`) in a terminal. The model runs at whatever Claude Code shows;
-these models have nothing between high and max, so Claude Code's xhigh runs as max.
+Code, or `/effort` (and `--effort`) in a terminal. The model runs at the level Claude Code shows, or
+the nearest it takes, the higher of two as near: the private models take only low, high and max, so
+medium runs as high and xhigh as max (a private model refuses any other level, and GLM-5.3 ignores
+one and reasons at its own default, the most). A TEE or standard model gets the nearest of the levels
+its provider lists for it; one that refuses a level, naming those it takes, is asked again with one.
 
 A model that sees images (Kimi K3, DeepSeek V4.1 Flash) gets them as they are. Only one that
 doesn't (GLM-5.3) has them described, by the **Images** model, also a private one.

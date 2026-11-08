@@ -417,7 +417,8 @@ function modelsSection(st) {
           .map(([v, l]) => h("option", { value: v, selected: p.reasoning === v }, l)))),
     h("div", { class: "model-row" }, h("span", {}), h("div", { class: "small muted" },
       "How hard the models think as each session starts. In a session, Claude Code's own Effort (in the editor, or ",
-      h("code", {}, "/effort"), ") changes it.")),
+      h("code", {}, "/effort"), ") changes it. A model that doesn't take a level runs at the nearest it does: ",
+      tab === "private" ? "the private models have no medium (it runs as high), nor xhigh (as max)." : "as its provider lists them.")),
     S.modelsError[tab] ? h("div", { class: "warnbox" }, `The list of models couldn't be read: ${S.modelsError[tab]}`) : null,
     S.models[tab] ? null : h("div", { class: "small muted row" }, h("span", { class: "spinner" }), reading));
 }

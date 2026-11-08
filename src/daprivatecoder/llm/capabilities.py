@@ -42,6 +42,8 @@ def parse(items: list[dict]) -> dict[str, dict]:
             "pricing": _pricing(m.get("pricing")),
             # in a NanoGPT subscription, when NanoGPT routes it itself (llm/routes.py)
             "included": bool((m.get("subscription") or {}).get("included")),
+            # the reasoning efforts it takes (["low", "high", "max"]); None: not said
+            "efforts": _efforts(m.get("reasoning_efforts")),
         }
     return out
 
@@ -61,8 +63,13 @@ def parse_openrouter(items: list[dict]) -> dict[str, dict]:
             "max_output": (m.get("top_provider") or {}).get("max_completion_tokens"),
             "pricing": _per_token_pricing(m.get("pricing")),
             "included": False,
+            "efforts": _efforts((m.get("reasoning") or {}).get("supported_efforts")),
         }
     return out
+
+
+def _efforts(listed) -> list[str] | None:
+    return [e for e in listed if isinstance(e, str)] if isinstance(listed, list) and listed else None
 
 
 def _per_token_pricing(p) -> dict | None:

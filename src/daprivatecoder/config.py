@@ -30,8 +30,8 @@ OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 KINDS = ("private", "tee", "standard")
 # where a standard profile's models are: private and TEE profiles are NanoGPT's
 PROVIDERS = {"nanogpt": "NanoGPT", "openrouter": "OpenRouter", "custom": "another provider"}
-# what the private models accept (Kimi K3 and GLM-5.3 take low, high and max; DeepSeek V4.1 Flash
-# all of these but xhigh); never "none": GLM with its thinking off reasons all the more, in its answer
+# where a session's effort starts (Claude Code's own changes it); a model is sent the nearest level it
+# takes (proxy.effort_for). Never "none": GLM with its thinking off reasons all the more, in its answer
 REASONING = ("low", "medium", "high", "max")
 # web search (search.py): Linkup, which keeps nothing; Perplexity and Kagi; or none
 WEB_SEARCH = ("zero-retention", "best", "off")

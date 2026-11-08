@@ -165,15 +165,63 @@ async def test_a_private_session_seals_everything_whatever_model_is_asked_for():
     assert p.used_private
 
 
-async def test_the_model_thinks_as_hard_as_claude_code_says(tmp_path):
+async def test_the_model_thinks_as_hard_as_claude_code_says_at_the_nearest_level_it_takes(tmp_path):
     log = UsageLog(tmp_path / "requests.log", "s1")
     p, fake = make(log=log)
-    # the editor's Effort, /effort and --effort all reach the proxy as output_config.effort
-    for asked, run in (("low", "low"), ("medium", "medium"), ("high", "high"), ("xhigh", "max"), ("max", "max"),
+    # the editor's Effort, /effort and --effort all reach the proxy as output_config.effort; a private
+    # model takes low, high and max only (measured: Kimi K3 refuses medium, GLM-5.3 ignores it)
+    for asked, run in (("low", "low"), ("medium", "high"), ("high", "high"), ("xhigh", "max"), ("max", "max"),
                        ("HIGH", "high"), ("turbo", "low"), (3, "low")):
         r = await call(p, "POST", "/v1/messages", message("private/glm-5-3", output_config={"effort": asked}))
         assert r.status_code == 200 and fake.calls[-1][3]["reasoning_effort"] == run, asked
-    assert [r["effort"] for r in read(tmp_path / "requests.log")][:5] == ["low", "medium", "high", "max", "max"]
+    recs = read(tmp_path / "requests.log")
+    assert [r["effort"] for r in recs][:5] == ["low", "high", "high", "max", "max"]
+    assert recs[1]["effort_asked"] == "medium" and "effort_asked" not in recs[0]
+
+
+def test_the_nearest_effort_a_model_takes():
+    from daprivatecoder.proxy import effort_for, efforts_named
+    glm = ["low", "high", "max"]
+    assert [effort_for(e, glm) for e in ("low", "medium", "high", "xhigh", "max")] == ["low", "high", "high", "max", "max"]
+    every = ["low", "medium", "high", "xhigh", "max"]
+    assert [effort_for(e, every) for e in every] == every
+    assert effort_for("max", ["minimal", "low", "medium", "high"]) == "high"
+    assert effort_for("low", ["none", "high"]) == "high" and effort_for("medium", None) == "medium"
+    assert effort_for("xhigh", ["none", "low", "high", "max"]) == "max"
+    kimi = ('Private Mode request failed (HTTP 400): {"error":{"message":"Kimi K3 supports thinking_effort values: '
+            'low, high, max (parameter=thinking_effort, value=medium)"}}')
+    deepseek = "DeepSeek V4.1 reasoning_effort must be low, high, xhigh, max, or an integer within [1, 100]"
+    assert efforts_named(kimi, "medium") == ("low", "high", "max")
+    assert efforts_named(deepseek, "medium") == ("low", "high", "xhigh", "max")
+    assert efforts_named("HTTP 400: max_tokens is too high", "low") == ()
+
+
+async def test_a_model_that_refuses_an_effort_is_asked_again_with_one_it_names(tmp_path):
+    from dataclasses import replace
+
+    class Picky(FakePlain):
+        def stream(self, model, messages, tools=None, params=None):
+            if params.get("reasoning_effort") not in ("low", "high", "xhigh", "max"):
+                self.calls.append((model, messages, tools, params))
+
+                async def refuse():
+                    raise RuntimeError("HTTP 400: DeepSeek V4.1 reasoning_effort must be low, high, xhigh, max, or an integer")
+                    yield
+                return refuse()
+            return super().stream(model, messages, tools, params)
+    log = UsageLog(tmp_path / "requests.log", "s1")
+    plain = Picky()
+    # its provider's listing says it takes medium (as NanoGPT lists TEE/deepseek-v4.1-flash), but it refuses it
+    p, _ = make(replace(NANO, model="deepseek/deepseek-v4.1-flash"), plain=plain, log=log)
+    p._caps["nanogpt"] = {"deepseek/deepseek-v4.1-flash": {"tools": True, "efforts": ["none", "low", "medium", "high", "max"]}}
+    r = await call(p, "POST", "/v1/messages", message("deepseek/deepseek-v4.1-flash", output_config={"effort": "medium"}))
+    assert r.status_code == 200 and "Hi from" in said(r)
+    assert [c[3]["reasoning_effort"] for c in plain.calls] == ["medium", "high"]
+    assert read(tmp_path / "requests.log")[-1]["effort"] == "high" and read(tmp_path / "requests.log")[-1]["effort_asked"] == "medium"
+    await call(p, "POST", "/v1/messages", message("deepseek/deepseek-v4.1-flash", output_config={"effort": "medium"}))
+    assert plain.calls[-1][3]["reasoning_effort"] == "high" and len(plain.calls) == 3      # learned: asked once
+    r = await call(p, "POST", "/v1/messages", message("deepseek/deepseek-v4.1-flash", output_config={"effort": "xhigh"}))
+    assert plain.calls[-1][3]["reasoning_effort"] == "xhigh"                               # which it does take
 
 
 async def test_tokens_of_a_private_request_are_counted_here():
