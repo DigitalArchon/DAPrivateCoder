@@ -16,9 +16,9 @@ from daprivatecoder.launcher import (LaunchError, child_env, claude_args, claude
                                   managed_conflicts, split_wrapper_args)
 from daprivatecoder.usagelog import read
 
-PRIVATE = Profile("private", True, "private/glm-5-3", "private/kimi-k3", "private/deepseek-v4-1-flash",
+PRIVATE = Profile("private", "private", "private/glm-5-3", "private/kimi-k3", "private/deepseek-v4-1-flash",
                   "private/deepseek-v4-1-flash", "low")
-NANO = Profile("nano", False, "z-ai/glm-5.3", "moonshotai/kimi-k3", "z-ai/glm-5.3-flash", "", "low")
+NANO = Profile("nano", "standard", "z-ai/glm-5.3", "moonshotai/kimi-k3", "z-ai/glm-5.3-flash", "", "low")
 BIN = Path(sys.executable).parent
 
 
@@ -205,11 +205,11 @@ def test_the_search_server_comes_first_with_what_it_needs(tmp_path):
     assert args[0] == "--mcp-config" and args[2] == "--settings" and args[4:] == ["fix the build"]
     assert mcp_config(PRIVATE, None, base) is None and claude_args(PRIVATE, {}, [])[0] == "--settings"
     assert "neither keeps it" in search_notice(PRIVATE_SEARCH)
-    assert "not zero data retention" in search_notice(Profile("p", True, "private/glm-5-3", "", "", web_search="best"))
+    assert "not zero data retention" in search_notice(Profile("p", "private", "private/glm-5-3", "", "", web_search="best"))
     assert search_notice(PRIVATE) == ""
 
 
-PRIVATE_SEARCH = Profile("private", True, "private/glm-5-3", "private/kimi-k3", "private/deepseek-v4-1-flash",
+PRIVATE_SEARCH = Profile("private", "private", "private/glm-5-3", "private/kimi-k3", "private/deepseek-v4-1-flash",
                          "private/deepseek-v4-1-flash", "low", "zero-retention")
 
 

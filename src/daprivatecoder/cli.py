@@ -261,9 +261,9 @@ def _serve(args) -> int:
         token = token or secrets.token_urlsafe(32)
     sock.setblocking(False)
     log = UsageLog(state_dir() / "requests.log", secrets.token_hex(4))
-    log.write("session", profile=profile.name, private=profile.private, models=list(profile.models),
-              vision=profile.vision_model, base_url=cfg.base_url, pid=os.getpid())
-    p = proxy.Proxy(profile, cfg.base_url, token, log=log)
+    log.write("session", profile=profile.name, profile_kind=profile.kind, private=profile.private, models=list(profile.models),
+              vision=profile.vision_model, provider=profile.provider, base_url=cfg.provider_url(profile), pid=os.getpid())
+    p = proxy.Proxy(profile, cfg.base_url, token, log=log, provider_url=cfg.provider_url(profile))
 
     def ready(port: int) -> None:
         if args.fd is None:

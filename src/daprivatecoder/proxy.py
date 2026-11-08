@@ -9,9 +9,15 @@ never leaves this process. After DA Vibe Manager's gateway (its model endpoint).
   counted here, roughly: nothing of it is sent anywhere to be counted.
 - In a private profile that is all there is. A request for any other model (Claude Code asks for
   its own defaults now and then) goes sealed to the profile's quick model, never in the clear.
-- Otherwise (the nano profile) a request for another model goes to NanoGPT's Anthropic endpoint as
-  Claude Code wrote it, with the key added; a redirect is never followed. Once a private model has
-  been used in the session, nothing more goes in the clear: what was said is in every request.
+- A TEE/ model's request (a TEE profile's, or one picked on NanoGPT) is translated too, and sent
+  through NanoGPT once its enclave has attested (llm/tee.py): never before, and again every 15
+  minutes. NanoGPT's gateway reads it: it isn't sealed. A TEE session never sends to a model below
+  TEE: its own model stands in.
+- In a standard profile, any other model's request is translated and sent to its provider (NanoGPT,
+  OpenRouter, another OpenAI-compatible one) in the clear, with the host the user chose for it
+  (llm/routes.py); a Claude model's goes to the provider's Anthropic endpoint as Claude Code wrote
+  it. A redirect is never followed. Once a private model has been used in a session, nothing more
+  goes in the clear: what was said is in every request.
 
 Only what Claude Code needs is served: POST /v1/messages, POST /v1/messages/count_tokens and
 GET /v1/models.
@@ -31,9 +37,9 @@ import httpx
 
 from . import creds
 from .config import Profile
-from .llm import capabilities
+from .llm import capabilities, routes
 from .llm.anthropic_bridge import VISION_PROMPT, ImageDescriber, estimate_tokens, has_images, message, sse, to_openai
-from .llm.client import is_private_mode, private_id
+from .llm.client import RANK, LLMClient, is_claude, is_private_mode, is_tee, private_id, tier_of
 from .llm.private_mode import Attestation, Enclave, PrivateModeClient, list_private_models, offers_private_mode, relay_url
 from .netpolicy import check_url, is_secure
 from .usagelog import UsageLog
@@ -41,7 +47,7 @@ from .usagelog import UsageLog
 MODEL_PATHS = frozenset({("POST", "/v1/messages"), ("POST", "/v1/messages/count_tokens"), ("GET", "/v1/models")})
 # Claude Code's connection-warming probe (HEAD /api/hello): answered here, sent nowhere
 PROBE = ("HEAD", "/api/hello")
-# request headers passed on to NanoGPT; everything else (auth, host, cookies, Claude Code's session id) stays here
+# request headers passed on to the provider; everything else (auth, host, cookies, Claude Code's session id) stays here
 PASS_HEADERS = ("content-type", "accept", "anthropic-version", "anthropic-beta", "user-agent", "x-stainless-retry-count",
                 "x-app")
 # response headers passed back
@@ -146,17 +152,51 @@ def _error_text(raw: bytes) -> str:
 
 
 PrivateClientFactory = Callable[[str, str, Enclave], object]   # (base_url, key, enclave) -> PrivateModeClient
+PlainClientFactory = Callable[[str, "str | None"], object]     # (base_url, key) -> LLMClient
+TeeCheck = Callable[[str, str, str], dict]                     # (NanoGPT's base_url, key, model) -> attestation
+# a TEE model's enclave is attested again after this, before its next request (as DA Vibe Manager does)
+TEE_REATTEST_SECONDS = 900
+# providers with an Anthropic endpoint, where a Claude model goes as Claude Code wrote the request
+ANTHROPIC_ENDPOINTS = ("nanogpt", "openrouter")
+NAMES = {"nanogpt": "NanoGPT", "openrouter": "OpenRouter", "custom": "your provider"}
+
+
+def attest_tee(base_url: str, key: str, model: str) -> dict:
+    """A TEE model's enclave, attested now (llm/tee.py; blocking, so run in a thread): raises when it
+    doesn't hold."""
+    from .llm import tee
+    client = tee.TeeClient(base_url, key, model)
+    try:
+        return client.attest().to_dict()
+    finally:
+        client.close()
+
+
+def _worth_retrying(e: BaseException) -> bool:
+    """An attestation that couldn't be fetched (the network, NanoGPT's 5xx) may well be fetched next
+    time; one that was fetched and didn't hold, or a key NanoGPT refused, won't."""
+    from .llm.secure_http import ProviderError
+    if "couldn't be fetched" not in str(e):
+        return False
+    cause = e.__cause__
+    return isinstance(cause, httpx.TransportError) or (
+        isinstance(cause, ProviderError) and (cause.status_code is None or cause.status_code >= 500))
 
 
 class Proxy:
-    """One session's proxy: `profile` says which models it uses and whether it is private."""
+    """One session's proxy: `profile` says which models it uses, and how their requests travel."""
 
     def __init__(self, profile: Profile, base_url: str, token: str,
                  key: Callable[[], str | None] = creds.get_key, log: UsageLog | None = None,
                  http: httpx.AsyncClient | None = None,
                  private_client: PrivateClientFactory = PrivateModeClient,
                  capabilities_loader: Callable[[], Awaitable[dict]] | None = None,
-                 private_lister: Callable[[], Awaitable[list[str]]] | None = None):
+                 private_lister: Callable[[], Awaitable[list[str]]] | None = None,
+                 provider_url: str = "", provider_key: Callable[[], str | None] | None = None,
+                 plain_client: PlainClientFactory | None = None, tee_check: TeeCheck = attest_tee,
+                 provider_capabilities_loader: Callable[[], Awaitable[dict | None]] | None = None):
+        """`base_url` and `key` are NanoGPT's (private and TEE models); a standard profile's provider
+        is at `provider_url`, with `provider_key`."""
         self.profile = profile
         self.base_url = check_url(base_url, "NanoGPT's base URL").rstrip("/")
         self.token = token
@@ -164,49 +204,92 @@ class Proxy:
         self._key = key
         self._http = http
         self._private_client = private_client
-        self._load_caps = capabilities_loader or (lambda: capabilities.fetch_nanogpt(self.base_url, self._client()))
+        # a standard profile's models are its provider's; a private or TEE profile's, NanoGPT's
+        self.provider = profile.provider if profile.kind == "standard" else "nanogpt"
+        self.provider_url = check_url(provider_url or self.base_url, f"{NAMES[self.provider]}'s base URL").rstrip("/")
+        self._provider_key = provider_key or (key if self.provider == "nanogpt"
+                                              else lambda: creds.get_key(self.provider, self.provider_url))
+        self._plain_client = plain_client or LLMClient
+        self._plain: dict[tuple[str, str], object] = {}
+        self._tee_check = tee_check
+        self._tee: dict[str, tuple[float, dict]] = {}
+        self._tee_lock = asyncio.Lock()
+        self._caps_loaders: dict[str, Callable[[], Awaitable[dict | None]]] = {
+            "nanogpt": capabilities_loader or (lambda: capabilities.fetch_nanogpt(self.base_url, self._client()))}
+        if self.provider != "nanogpt":
+            self._caps_loaders[self.provider] = provider_capabilities_loader or (
+                lambda: capabilities.fetch(self.provider, self.provider_url, self._client()))
         self._list_private = private_lister or (lambda: list_private_models(self.base_url, self._client()))
-        self._caps: dict | None = None
+        self._caps: dict[str, dict | None] = {}
         self._caps_lock = asyncio.Lock()
         # one enclave a session: its attestation, and the prompt cache's secret (llm/private_mode.py)
         self.enclave = Enclave(relay_url(self.base_url), on_attested=self._attested) \
             if offers_private_mode(self.base_url) else None
-        vision = profile.vision_model
-        # what an image shows is part of a sealed request: it is only ever described by a private model
-        self.images = ImageDescriber(self._describe if is_private_mode(vision) else None, vision)
+        self._describers: dict[str, ImageDescriber] = {}
         self.used_private = False
 
     # ------------------------------------------------------------------ what is sent where
+
+    def tier(self, model: str) -> str:
+        """How a request for `model` travels: private (sealed), tee (attested, through NanoGPT) or standard."""
+        return tier_of(model, self.provider == "nanogpt")
+
+    def _provider_of(self, tier: str) -> str:
+        return self.provider if tier == "standard" else "nanogpt"
+
+    def _stand_in(self, model: str) -> str:
+        """The profile's model for one it won't send to: its quick one for a quick model's work."""
+        return self.profile.fast_model if "haiku" in model.lower() else self.profile.model
 
     def choose(self, asked: str) -> str:
         """The model a request for `asked` goes to; raises Refused when it can't go anywhere."""
         p = self.profile
         model = private_id(asked) if is_private_mode(asked) else (asked.strip() or p.model)
-        if is_private_mode(model):
+        tier = self.tier(model)
+        if tier == "private":
             return private_id(model)
         if p.private:
             # never in the clear: a model of Claude's (its own defaults, one picked by name) is
             # stood in for by the profile's, the quick one for a quick model's work
-            return p.fast_model if "haiku" in model.lower() else p.model
+            return self._stand_in(model)
         if self.used_private:
             raise Refused(403, f"This session has used a private model, so {model} can't be used in it: everything "
                                "said so far would go to it in the clear. Start a new session for it.")
+        if RANK[tier] < RANK[p.kind] or model.lower().startswith("claude-"):
+            # below the session's kind (a TEE session never sends to a model in the clear), or a name of
+            # Claude's own that Claude Code asks for by itself: the profile's model stands in
+            return self._stand_in(model)
         return model
 
-    def _read_key(self) -> str:
+    def _read_key(self, provider: str = "nanogpt") -> str | None:
         try:
-            key = self._key()
+            key = self._key() if provider == "nanogpt" else self._provider_key()
         except creds.KeyringUnavailable as e:
             raise Refused(403, str(e)) from None
-        if not key:
+        if key or provider == "custom":                      # a server of your own may need none
+            return key
+        if provider == "nanogpt":
             raise Refused(403, "No NanoGPT API key is stored. Run `daprivatecoder key set` in a terminal, then try again.")
-        return key
+        raise Refused(403, f"No {NAMES[provider]} API key is stored: add it in DA Private Coder's window (Models, "
+                           f"Standard), or run `daprivatecoder key set --provider {provider}`, then try again.")
 
     def _private(self, model: str):
         if self.enclave is None:
             raise Refused(403, f"{model} is a NanoGPT Private Mode model, and {self.base_url} isn't NanoGPT: "
                                "nothing was sent.")
         return self._private_client(self.base_url, self._read_key(), self.enclave)
+
+    def _chat_client(self, model: str, tier: str):
+        """The client for a model's chat completions: sealed for a private one, plain otherwise (a TEE
+        one's enclave attested first, by the caller)."""
+        if tier == "private":
+            return self._private(model)
+        url, key = (self.base_url, self._read_key()) if tier == "tee" \
+            else (self.provider_url, self._read_key(self.provider))
+        client = self._plain.get((url, key or ""))
+        if client is None:
+            client = self._plain[(url, key or "")] = self._plain_client(url, key)
+        return client
 
     def _client(self) -> httpx.AsyncClient:
         if self._http is None:
@@ -222,25 +305,34 @@ class Proxy:
     async def aclose(self) -> None:
         if self._http is not None:
             await self._http.aclose()
+        for client in self._plain.values():
+            close = getattr(client, "aclose", None)
+            if close is not None:
+                await close()
 
-    async def capabilities(self) -> dict:
-        """NanoGPT's model list, loaded once (an empty one when it can't be read: asked again next time)."""
+    async def capabilities(self, provider: str = "nanogpt") -> dict | None:
+        """The provider's model list, loaded once: None when it lists none (another provider), {} when
+        it can't be read now (asked again next time)."""
         async with self._caps_lock:
-            if self._caps is None:
+            if provider not in self._caps:
                 try:
-                    self._caps = await self._load_caps()
-                except Exception:  # noqa: BLE001 - unknown capabilities: images are described, not shown
+                    self._caps[provider] = await self._caps_loaders[provider]()
+                except Exception:  # noqa: BLE001 - unknown for now: asked again next time
                     return {}
-            return self._caps
+            return self._caps[provider]
 
-    async def sees(self, model: str) -> bool:
+    async def sees(self, model: str, tier: str = "private") -> bool:
         """Whether `model` reads images itself (they go to it as they are) or has them described by
-        the vision helper. Without NanoGPT's list it isn't known, and a model that sees mustn't be
-        given descriptions, nor one that doesn't images: Claude Code is told to ask again."""
-        caps = await self.capabilities()
+        the vision helper. Without its provider's list it isn't known, and a model that sees mustn't be
+        given descriptions, nor one that doesn't images: Claude Code is told to ask again. A provider
+        that lists nothing of what its models do: described."""
+        caps = await self.capabilities(self._provider_of(tier))
+        if caps is None:
+            return False
         if not caps:
-            raise Refused(503, f"NanoGPT's list of models couldn't be read, so it isn't known whether {model} sees "
-                               "images: nothing was sent. Claude Code asks again.", "api_error", retry=True)
+            raise Refused(503, f"{NAMES[self._provider_of(tier)]}'s list of models couldn't be read, so it isn't known "
+                               f"whether {model} sees images: nothing was sent. Claude Code asks again.", "api_error",
+                          retry=True)
         return bool((capabilities.lookup(caps, model) or {}).get("vision"))
 
     def _record(self, kind: str, **fields) -> None:
@@ -252,31 +344,64 @@ class Proxy:
                      digest=att.release_digest, latest=att.latest_release, latest_checked=att.latest_checked,
                      key_sha256=att.hpke_key_sha256, summary=att.summary)
 
-    async def _priced(self, model: str, usage: dict, private: bool) -> dict:
-        """The usage with what it cost: NanoGPT's own bill when it gives one, else the listed prices'."""
+    async def _attest_tee(self, model: str) -> dict:
+        """Nothing goes to a TEE model whose enclave hasn't attested (llm/tee.py); an attestation older
+        than TEE_REATTEST_SECONDS is made again first. Raises Refused when it doesn't hold."""
+        async with self._tee_lock:
+            hit = self._tee.get(model)
+            if hit and time.monotonic() - hit[0] < TEE_REATTEST_SECONDS:
+                return hit[1]
+            key = self._read_key() or ""
+            try:
+                att = await asyncio.to_thread(self._tee_check, self.base_url, key, model)
+            except Exception as e:  # noqa: BLE001 - said as it is, and nothing sent
+                self._record("attested_tee", model=model, error=str(e)[:300])
+                raise Refused(502, f"{model}'s enclave didn't attest, so nothing was sent to it: {e}", "api_error",
+                              retry=_worth_retrying(e)) from e
+            self._tee[model] = (time.monotonic(), att)
+            self._record("attested_tee", model=model, **{k: att.get(k) for k in (
+                "level", "summary", "shortfalls", "tcb_status", "gpus", "instances", "signing_address")})
+            return att
+
+    async def _priced(self, model: str, usage: dict, tier: str) -> dict:
+        """The usage with what it cost: the provider's own bill when it gives one, else the listed prices'."""
         if "cost" not in usage:
-            estimate = capabilities.cost(capabilities.lookup(await self.capabilities(), model), usage, private)
+            caps = await self.capabilities(self._provider_of(tier)) or {}
+            estimate = capabilities.cost(capabilities.lookup(caps, model), usage, tier == "private")
             if estimate is not None:
                 usage = {**usage, "cost": round(estimate, 6), "cost_estimated": True}
         return usage
 
+    def _images(self, tier: str) -> ImageDescriber:
+        """The vision helper for a request of `tier`: what an image shows is part of the request, so
+        only a helper no less protected than it describes one (else the model is told it can't see)."""
+        if tier not in self._describers:
+            vision = self.profile.vision_model
+            allowed = bool(vision) and RANK[self.tier(vision)] >= RANK[tier]
+            self._describers[tier] = ImageDescriber(self._describe if allowed else None, vision)
+        return self._describers[tier]
+
     async def _describe(self, data_url: str, context: str) -> str:
-        """The vision helper: a private model that can see describes an image for one that can't."""
+        """The vision helper: a model that can see describes an image for one that can't."""
         model = self.profile.vision_model
+        tier = self.tier(model)
         messages = [{"role": "system", "content": VISION_PROMPT},
                     {"role": "user", "content": [
                         {"type": "text", "text": "What the assistant is doing: " + (context.strip() or "(not said)")},
                         {"type": "image_url", "image_url": {"url": data_url}}]}]
         started = time.monotonic()
-        client = self._private(model)
+        if tier == "tee":
+            await self._attest_tee(model)
+        client = self._chat_client(model, tier)
         try:
             text = await client.complete(model, messages, params={"reasoning_effort": VISION_EFFORT})
         except Exception as e:
-            self._record("vision", model=model, status=502, error=str(e)[:300])
+            self._record("vision", model=model, tier=tier, status=502, error=str(e)[:300])
             raise
         usage = getattr(client, "last_usage", None)
-        self._record("vision", model=model, status=200, seconds=round(time.monotonic() - started, 2),
-                     **({"usage": await self._priced(model, openai_usage(usage), True)} if usage else {}))
+        self._record("vision", model=model, tier=tier, sealed=tier == "private", status=200,
+                     seconds=round(time.monotonic() - started, 2),
+                     **({"usage": await self._priced(model, openai_usage(usage), tier)} if usage else {}))
         return text.strip()
 
     async def _private_ids(self) -> list[str]:
@@ -289,21 +414,26 @@ class Proxy:
         return await self.enclave.private_ids(read) if self.enclave is not None else []
 
     async def warm_up(self) -> None:
-        """Attest the enclave and read NanoGPT's model lists before the first request needs them."""
+        """Attest the enclaves and read the model lists before the first request needs them."""
         if self.enclave is not None and any(is_private_mode(m) for m in self.profile.models):
             await self._private_ids()
             try:
                 await self.enclave.current()
             except Exception as e:  # noqa: BLE001 - the first request attests again, and says why it can't
                 self._record("attested", error=str(e)[:300])
-        await self.capabilities()
+        if self.tier(self.profile.model) == "tee":
+            try:
+                await self._attest_tee(self.profile.model)
+            except Refused:
+                pass                                    # the first request attests again, and says why it can't
+        for provider in self._caps_loaders:
+            await self.capabilities(provider)
 
     # ------------------------------------------------------------------ the endpoint
 
     def app(self):
         from starlette.applications import Starlette
         from starlette.requests import Request
-        from starlette.responses import JSONResponse
         from starlette.routing import Route
 
         async def handle(request: Request):
@@ -320,6 +450,7 @@ class Proxy:
                 return self._error(Refused(404, f"DA Private Coder passes on Claude Code's messages, not {request.method} {path}.",
                                            "not_found_error"))
             if path == "/v1/models":
+                from starlette.responses import JSONResponse
                 return JSONResponse(await self.model_list())
             body = await request.body()
             try:
@@ -331,9 +462,10 @@ class Proxy:
             asked = str(data.get("model") or "")
             try:
                 model = self.choose(asked)
-                if is_private_mode(model):
-                    return await self._sealed(path, data, model, asked, len(body))
-                return await self._forward(request, path, data, model, asked, body)
+                tier = self.tier(model)
+                if tier == "standard" and is_claude(model) and self.provider in ANTHROPIC_ENDPOINTS:
+                    return await self._forward(request, path, data, model, asked, body)
+                return await self._translated(path, data, model, asked, len(body), tier)
             except Refused as e:
                 self._record("request", path=path, model=asked, status=e.status, error=str(e))
                 return self._error(e)
@@ -348,42 +480,55 @@ class Proxy:
 
     async def model_list(self) -> dict:
         """The models of this session's profile, as Anthropic lists them (Claude Code's /model picker);
-        a private profile adds every model NanoGPT's Private Mode offers now (its public list)."""
+        a private profile adds every model NanoGPT's Private Mode offers now (its public list), and a
+        TEE one every TEE model that takes tools."""
         ids = list(self.profile.models)
-        if self.profile.private and self.enclave is not None:
-            try:
+        listed: list[str] = []
+        try:
+            if self.profile.private and self.enclave is not None:
                 listed = await asyncio.wait_for(self._private_ids(), MODEL_LIST_SECONDS)
-            except asyncio.TimeoutError:
-                listed = []                   # the profile's own models are listed all the same
-            ids += [m for m in listed if m not in ids]
+            elif self.profile.kind == "tee":
+                caps = await asyncio.wait_for(self.capabilities("nanogpt"), MODEL_LIST_SECONDS) or {}
+                listed = sorted(m for m, c in caps.items() if is_tee(m) and c.get("tools"))
+        except asyncio.TimeoutError:
+            listed = []                       # the profile's own models are listed all the same
+        ids += [m for m in listed if m not in ids]
         data = [{"type": "model", "id": m, "display_name": m, "created_at": "2026-01-01T00:00:00Z"} for m in ids]
         return {"data": data, "has_more": False, "first_id": ids[0] if ids else None, "last_id": ids[-1] if ids else None}
 
-    async def _sealed(self, path: str, data: dict, model: str, asked: str, size: int):
-        """A request for a private model: Anthropic in, chat completions sealed to the enclave, Anthropic back."""
+    async def _translated(self, path: str, data: dict, model: str, asked: str, size: int, tier: str):
+        """A request for a model other than Claude: Anthropic in, chat completions out (sealed to the
+        enclave for a private model; to an attested enclave through NanoGPT for a TEE one; to the
+        provider for any other), Anthropic back."""
         from starlette.responses import JSONResponse, StreamingResponse
 
         if path == "/v1/messages/count_tokens":
             return JSONResponse({"input_tokens": estimate_tokens(data)})
-        client = self._private(model)                       # raises Refused: no key, not NanoGPT
+        if tier == "tee":
+            await self._attest_tee(model)                  # raises Refused: nothing goes to it unattested
+        client = self._chat_client(model, tier)            # raises Refused: no key, not NanoGPT
         started = time.monotonic()
         # raises Refused (asked again) when it isn't known whether the model sees: never guessed
-        native = await self.sees(model) if has_images(data) else False
+        native = await self.sees(model, tier) if has_images(data) else False
         try:
-            messages, tools, params = await to_openai(data, self.images, native=native)
+            messages, tools, params = await to_openai(data, self._images(tier), native=native)
         except Exception as e:  # noqa: BLE001 - Claude Code shows the reason
             raise Refused(502, f"Couldn't prepare the request for {model}: {e}", "api_error") from e
         params["reasoning_effort"] = effort = effort_of(data, self.profile.reasoning)
-        self.used_private = True
+        route = self.profile.routes.get(model) if tier == "standard" else None
+        params.update(routes.body(self.provider, route))      # which of the provider's hosts runs it, if chosen
+        if tier == "private":
+            self.used_private = True
         estimate = estimate_tokens(data)
-        rec = {"path": path, "model": model, "asked_for": asked if asked and private_id(asked) != model else "",
-               "sealed": True, "sees": native, "effort": effort, "bytes_out": size}
+        rec = {"path": path, "model": model, "asked_for": asked if asked and asked.strip().lower() != model.lower() else "",
+               "sealed": tier == "private", "tier": tier, "provider": self._provider_of(tier), "sees": native,
+               "effort": effort, "bytes_out": size, **({"route": routes.describe(self.provider, route)} if route else {})}
         events = client.stream(model, messages, tools, params)
 
         async def done(stats: dict, status: int, **extra) -> None:
             usage = stats.get("usage")
             self._record("request", **rec, status=status, seconds=round(time.monotonic() - started, 2), **extra,
-                         **({"usage": await self._priced(model, openai_usage(usage), True)} if usage else {}))
+                         **({"usage": await self._priced(model, openai_usage(usage), tier)} if usage else {}))
 
         if not data.get("stream"):
             stats: dict = {}
@@ -408,11 +553,12 @@ class Proxy:
         return StreamingResponse(body(), media_type="text/event-stream")
 
     async def _forward(self, request, path: str, data: dict, model: str, asked: str, body: bytes):
-        """A request for a model that isn't private (the nano profile): to NanoGPT's Anthropic endpoint."""
+        """A request for a Claude model in a standard session: to the provider's Anthropic endpoint, as
+        Claude Code wrote it, with the provider's key."""
         from starlette.responses import Response, StreamingResponse
 
-        key = self._read_key()
-        # Claude Code's metadata is this computer's device id and the session's: NanoGPT knows the
+        key = self._read_key(self.provider)
+        # Claude Code's metadata is this computer's device id and the session's: the provider knows the
         # account by its key, and needs neither
         if data.get("model") != model or "metadata" in data:
             data["model"] = model
@@ -420,23 +566,24 @@ class Proxy:
             body = json.dumps(data).encode()
         headers = {k: v for k, v in request.headers.items() if k.lower() in PASS_HEADERS}
         headers["authorization"] = f"Bearer {key}"
-        url = upstream_url(self.base_url, path, request.url.query)
+        url = upstream_url(self.provider_url, path, request.url.query)
         client = self._client()
         started = time.monotonic()
         rec = {"path": path, "model": model, "asked_for": asked if asked and asked != model else "", "sealed": False,
-               "bytes_out": len(body)}
+               "tier": "standard", "provider": self.provider, "bytes_out": len(body)}
+        name = NAMES[self.provider]
         try:
             resp = await client.send(client.build_request(request.method, url, content=body, headers=headers), stream=True)
         except httpx.HTTPError as e:
-            raise Refused(502, f"Could not reach NanoGPT: {e}", "api_error", retry=True) from e
+            raise Refused(502, f"Could not reach {name}: {e}", "api_error", retry=True) from e
         if resp.is_redirect:
             # never followed: the key would go wherever it points
             where = resp.headers.get("location", "")[:200]
             await resp.aclose()
-            raise Refused(502, f"NanoGPT redirected the request to {where}; refusing to follow.", "api_error")
+            raise Refused(502, f"{name} redirected the request to {where}; refusing to follow.", "api_error")
         out_headers = {k: v for k, v in resp.headers.items() if k.lower() in RETURN_HEADERS}
         if resp.status_code >= 400:
-            # NanoGPT's own explanation (wrong key, unknown model, no credit), for the log and Claude Code
+            # the provider's own explanation (wrong key, unknown model, no credit), for the log and Claude Code
             raw = (await resp.aread())[:8000]
             await resp.aclose()
             self._record("request", **rec, status=resp.status_code, error=_error_text(raw),
@@ -464,7 +611,7 @@ class Proxy:
                         pass
                 self._record("request", **rec, status=resp.status_code, bytes_in=n,
                              seconds=round(time.monotonic() - started, 2),
-                             **({"usage": await self._priced(model, usage.usage, False)} if usage.usage else {}))
+                             **({"usage": await self._priced(model, usage.usage, "standard")} if usage.usage else {}))
         return StreamingResponse(stream(), status_code=resp.status_code, headers=out_headers)
 
 

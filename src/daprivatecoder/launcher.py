@@ -28,8 +28,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-from .config import Config, Profile, state_dir
-from .llm.client import is_private_mode
+from .config import PROVIDERS, Config, Profile, state_dir
+from .llm.client import RANK, is_private_mode, tier_of
 
 # Claude Code's own model names that resolve through the tier variables set below
 TIER_ALIASES = frozenset({"opus", "sonnet", "haiku", "fable", "opusplan", "default", "inherit"})
@@ -118,9 +118,13 @@ def split_wrapper_args(argv: list[str]) -> tuple[str | None, list[str]]:
 # ---------------------------------------------------------------------- what Claude Code is given
 
 def _describe(profile: Profile, model: str) -> str:
-    if is_private_mode(model):
+    """What /model says of a model: how its requests travel."""
+    tier = tier_of(model, profile.provider == "nanogpt")
+    if tier == "private":
         return "Private: sealed on this computer to an attested enclave"
-    return "NanoGPT, not private"
+    if tier == "tee":
+        return "TEE: an attested enclave, but NanoGPT's gateway reads it (not end-to-end encrypted)"
+    return f"{PROVIDERS[profile.provider].capitalize()}, in the clear: not private"
 
 
 def claude_env(profile: Profile, port: int, token: str) -> dict[str, str]:
@@ -141,7 +145,7 @@ def claude_env(profile: Profile, port: int, token: str) -> dict[str, str]:
         env[f"ANTHROPIC_DEFAULT_{tier}_MODEL"] = model
         env[f"ANTHROPIC_DEFAULT_{tier}_MODEL_NAME"] = model
         env[f"ANTHROPIC_DEFAULT_{tier}_MODEL_DESCRIPTION"] = _describe(profile, model)
-    if profile.private:
+    if profile.kind != "standard":
         # no pre-release features (Anthropic's server-side context editing, tool search): nothing here runs them
         env["CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"] = "1"
     return env
@@ -184,7 +188,10 @@ def session_settings(profile: Profile, env: dict[str, str], given: dict | None =
 
 
 def _model_ok(profile: Profile, model: str) -> bool:
-    return not profile.private or is_private_mode(model) or model.strip().lower() in TIER_ALIASES
+    """Whether Claude Code may be given `model` (as --model) in this profile: one no less protected than
+    the profile's kind, or one of Claude Code's own aliases, which resolve to the profile's models."""
+    return model.strip().lower() in TIER_ALIASES or \
+        RANK[tier_of(model, profile.provider == "nanogpt")] >= RANK[profile.kind]
 
 
 # what DA Private Coder's search server (search.py) needs of the environment Claude Code starts it with:
@@ -228,7 +235,7 @@ def search_notice(profile: Profile) -> str:
 
 def claude_args(profile: Profile, env: dict[str, str], args: list[str], mcp: dict | None = None) -> list[str]:
     """Claude Code's arguments for the session: one --settings, ours merged into any given; and in a
-    private profile, a model given by a name that isn't private (the editor passes the one picked in
+    private or TEE profile, a model given by a name below its kind (the editor passes the one picked in
     it) is the profile's, so Claude Code knows what it is talking to. The search server, `mcp`, comes
     first: --mcp-config takes every value up to the next option (--settings), and the editor's own
     --mcp-config adds to it."""

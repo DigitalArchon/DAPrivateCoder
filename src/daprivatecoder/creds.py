@@ -1,4 +1,5 @@
-"""The NanoGPT API key, in the OS keyring (Secret Service on Linux). After DA Vibe Manager's creds.py.
+"""The API keys (NanoGPT's, and a standard profile's provider's: OpenRouter, another), in the OS
+keyring (Secret Service on Linux). After DA Vibe Manager's creds.py.
 
 Right after login the keyring may not be there yet, or still be locked. A key that can't be read
 then is not a key that isn't there: reading raises KeyringUnavailable, and a key that isn't stored
@@ -14,7 +15,7 @@ import keyring.core
 from keyring.errors import PasswordDeleteError
 
 SERVICE = "daprivatecoder"
-USER = "nanogpt"
+USER = "nanogpt"            # NanoGPT's key: private and TEE sessions, web search, and a standard one on NanoGPT
 # where DA Vibe Manager keeps the same key, for `daprivatecoder key set --from-vibe-manager`
 VIBE_MANAGER = ("davibemanager", "provider:NanoGPT")
 
@@ -52,27 +53,38 @@ def _get(service: str, user: str) -> str | None:
     return value
 
 
-def get_key() -> str | None:
-    """The NanoGPT key, or None if none is stored."""
-    return _get(SERVICE, USER)
+def account(provider: str = "nanogpt", base_url: str = "") -> str:
+    """The keyring entry for a provider's key: "nanogpt", "openrouter", or "custom:<host>" (each host
+    its own, so a key never goes to another server)."""
+    if provider == "custom":
+        from urllib.parse import urlparse
+        return f"custom:{(urlparse(base_url).hostname or '').lower()}"
+    return provider if provider == "openrouter" else USER
 
 
-def set_key(value: str) -> None:
+def get_key(provider: str = "nanogpt", base_url: str = "") -> str | None:
+    """The provider's key (NanoGPT's when not said), or None if none is stored."""
+    return _get(SERVICE, account(provider, base_url))
+
+
+def set_key(value: str, provider: str = "nanogpt", base_url: str = "") -> None:
+    user = account(provider, base_url)
     try:
-        _backend().set_password(SERVICE, USER, value)
+        _backend().set_password(SERVICE, user, value)
     except KeyringUnavailable:
         raise
     except Exception as e:  # noqa: BLE001 - said to the user as it is
         raise KeyringUnavailable(f"Your keyring couldn't store the key: {e}") from e
-    _known[(SERVICE, USER)] = value
+    _known[(SERVICE, user)] = value
 
 
-def delete_key() -> None:
+def delete_key(provider: str = "nanogpt", base_url: str = "") -> None:
+    user = account(provider, base_url)
     try:
-        _backend().delete_password(SERVICE, USER)
+        _backend().delete_password(SERVICE, user)
     except PasswordDeleteError:
         pass
-    _known[(SERVICE, USER)] = None
+    _known[(SERVICE, user)] = None
 
 
 def vibe_manager_key() -> str | None:

@@ -3,7 +3,11 @@ model list (GET /models?detailed=true, public: no key is sent). From DA Vibe Man
 llm/capabilities.py.
 
 Private Mode models (private/kimi-k3) are not in that list, so they are matched to their public
-counterpart by name (TEE/kimi-k3, moonshotai/kimi-k3), the enclave build first."""
+counterpart by name (TEE/kimi-k3, moonshotai/kimi-k3), the enclave build first.
+
+OpenRouter's list (GET /models, public too) says the same in its own shape: read by parse_openrouter.
+Another provider's list, if it has one, names its models and nothing more: what they can do isn't
+known (a model then has images described for it, if a helper is set)."""
 
 from __future__ import annotations
 
@@ -36,8 +40,46 @@ def parse(items: list[dict]) -> dict[str, dict]:
             "context": m.get("context_length"),
             "max_output": m.get("max_output_tokens"),
             "pricing": _pricing(m.get("pricing")),
+            # in a NanoGPT subscription, when NanoGPT routes it itself (llm/routes.py)
+            "included": bool((m.get("subscription") or {}).get("included")),
         }
     return out
+
+
+def parse_openrouter(items: list[dict]) -> dict[str, dict]:
+    """OpenRouter's model list: prices per token, as text; what a model takes in its architecture."""
+    out = {}
+    for m in items:
+        if not isinstance(m, dict) or not isinstance(m.get("id"), str):
+            continue
+        arch = m.get("architecture") or {}
+        params = m.get("supported_parameters") or []
+        out[m["id"]] = {
+            "vision": "image" in (arch.get("input_modalities") or []),
+            "tools": "tools" in params,
+            "context": m.get("context_length"),
+            "max_output": (m.get("top_provider") or {}).get("max_completion_tokens"),
+            "pricing": _per_token_pricing(m.get("pricing")),
+            "included": False,
+        }
+    return out
+
+
+def _per_token_pricing(p) -> dict | None:
+    """OpenRouter's prices (USD a token, as text) per million tokens."""
+    def num(v) -> float | None:
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            return None
+        return v * 1_000_000 if v >= 0 else None
+    if not isinstance(p, dict):
+        return None
+    inp, out = num(p.get("prompt")), num(p.get("completion"))
+    if inp is None or out is None:
+        return None
+    read = num(p.get("input_cache_read"))
+    return {"input": inp, "output": out, "cache_read": inp if read is None else read}
 
 
 def _pricing(p) -> dict | None:
@@ -61,6 +103,23 @@ async def fetch_nanogpt(base_url: str, http: httpx.AsyncClient | None = None) ->
         r = await client.get(base_url.rstrip("/") + "/models", params={"detailed": "true"})
         r.raise_for_status()
         return parse(r.json().get("data", []))
+    finally:
+        if http is None:
+            await client.aclose()
+
+
+async def fetch(provider: str, base_url: str, http: httpx.AsyncClient | None = None) -> dict[str, dict] | None:
+    """The capabilities `provider` lists ("nanogpt", "openrouter"); None for one that lists none."""
+    if provider == "nanogpt":
+        return await fetch_nanogpt(base_url, http)
+    if provider != "openrouter":
+        return None
+    check_url(base_url, "OpenRouter's base URL")
+    client = http or httpx.AsyncClient(timeout=30)
+    try:
+        r = await client.get(base_url.rstrip("/") + "/models")
+        r.raise_for_status()
+        return parse_openrouter(r.json().get("data", []))
     finally:
         if http is None:
             await client.aclose()

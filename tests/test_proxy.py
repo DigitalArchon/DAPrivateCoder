@@ -17,9 +17,9 @@ from daprivatecoder.usagelog import UsageLog, read
 
 BASE = "https://nano-gpt.com/api/v1"
 TOKEN = "session-token-" + "x" * 30
-PRIVATE = Profile("private", True, "private/glm-5-3", "private/kimi-k3", "private/deepseek-v4-1-flash",
+PRIVATE = Profile("private", "private", "private/glm-5-3", "private/kimi-k3", "private/deepseek-v4-1-flash",
                   "private/deepseek-v4-1-flash", "low")
-NANO = Profile("nano", False, "z-ai/glm-5.3", "moonshotai/kimi-k3", "z-ai/glm-5.3-flash", "", "low")
+NANO = Profile("nano", "standard", "z-ai/glm-5.3", "moonshotai/kimi-k3", "z-ai/glm-5.3-flash", "", "low")
 CAPS = [
     {"id": "TEE/kimi-k3", "capabilities": {"vision": True, "tool_calling": True}, "context_length": 1048576,
      "pricing": {"prompt": 3, "completion": 15, "cacheReadInputPer1kTokens": 0.0015, "currency": "USD", "unit": "per_million_tokens"}},
@@ -59,7 +59,34 @@ class FakePrivate:
         return "A terminal with a failing test."
 
 
-def make(profile=PRIVATE, fake=None, handler=None, key="sk-nano", listed=LISTED, log=None, base=BASE):
+class FakePlain(FakePrivate):
+    """Stands in for LLMClient: what went in the clear (or to a TEE model), to which endpoint, with which key."""
+
+    def __init__(self, usage=None):
+        super().__init__(usage)
+        self.made = []
+
+    def factory(self, base_url, key):
+        self.made.append((base_url, key))
+        return self
+
+
+class Attester:
+    """Stands in for llm/tee.py's attestation: what was attested, and what it found."""
+
+    def __init__(self, level="full", fail=None):
+        self.asked, self.level, self.fail = [], level, fail
+
+    def __call__(self, base_url, key, model):
+        self.asked.append((base_url, key, model))
+        if self.fail is not None:
+            raise self.fail
+        return {"level": self.level, "summary": f"Intel TDX quote {self.level}", "shortfalls": [] if self.level == "full"
+                else ["the model's own enclave unchecked (RedPill's gateway)"], "gpus": 8, "tcb_status": "UpToDate"}
+
+
+def make(profile=PRIVATE, fake=None, handler=None, key="sk-nano", listed=LISTED, log=None, base=BASE, plain=None,
+         attester=None, provider_url="", provider_key=None, provider_caps=None):
     fake = fake or FakePrivate()
 
     def nothing_in_the_clear(request):
@@ -73,9 +100,15 @@ def make(profile=PRIVATE, fake=None, handler=None, key="sk-nano", listed=LISTED,
             raise listed
         return listed
 
+    async def no_plain_caps():
+        return provider_caps
+
     p = Proxy(profile, base, TOKEN, key=lambda: key, log=log,
               http=httpx.AsyncClient(transport=httpx.MockTransport(handler or nothing_in_the_clear)),
-              private_client=fake.factory, capabilities_loader=load_caps, private_lister=lister)
+              private_client=fake.factory, capabilities_loader=load_caps, private_lister=lister,
+              plain_client=(plain or FakePlain()).factory if plain is not False else None,
+              tee_check=attester or Attester(), provider_url=provider_url,
+              provider_key=provider_key, provider_capabilities_loader=no_plain_caps if provider_url else None)
     return p, fake
 
 
@@ -196,7 +229,7 @@ async def test_whether_a_model_sees_is_never_guessed_when_nanogpts_list_cant_be_
         if not up["now"]:
             raise httpx.ConnectError("NanoGPT is down")
         return capabilities.parse(CAPS)
-    p._load_caps = flaky
+    p._caps_loaders["nanogpt"] = flaky
     tool_image = {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1",
                                                "content": [bridge.b64_image(PNG)]}]}
     body = message("private/kimi-k3", messages=[tool_image])
@@ -211,7 +244,7 @@ async def test_whether_a_model_sees_is_never_guessed_when_nanogpts_list_cant_be_
     assert [r.get("sees") for r in read(tmp_path / "requests.log")] == [None, False, True]
 
 
-async def test_a_nano_session_sends_other_models_to_nanogpt_with_the_key():
+async def test_a_standard_session_sends_claude_models_to_nanogpts_anthropic_endpoint_with_the_key():
     seen = []
 
     def nanogpt(request):
@@ -223,7 +256,7 @@ async def test_a_nano_session_sends_other_models_to_nanogpt_with_the_key():
                                                       "set-cookie": "a=b"})
     p, fake = make(NANO, handler=nanogpt)
     r = await call(p, "POST", "/v1/messages?beta=true",
-                   message("z-ai/glm-5.3", metadata={"user_id": '{"device_id":"0c51a8"}'}),
+                   message("anthropic/claude-opus-5.5", metadata={"user_id": '{"device_id":"0c51a8"}'}),
                    headers={"anthropic-beta": "claude-code-20250219", "anthropic-version": "2023-06-01",
                             "x-claude-code-session-id": "38826834", "cookie": "c=d"})
     assert r.status_code == 200 and "message_stop" in r.text and r.headers["request-id"] == "req_1"
@@ -234,18 +267,113 @@ async def test_a_nano_session_sends_other_models_to_nanogpt_with_the_key():
     for kept_here in ("x-claude-code-session-id", "cookie", "x-api-key"):
         assert kept_here not in sent.headers
     body = json.loads(sent.content)
-    assert body["model"] == "z-ai/glm-5.3" and "metadata" not in body          # no device id for NanoGPT
+    assert body["model"] == "anthropic/claude-opus-5.5" and "metadata" not in body   # no device id for NanoGPT
     assert not fake.calls
 
 
-async def test_a_nano_session_never_follows_a_redirect_and_passes_errors_back():
+async def test_a_standard_session_never_follows_a_redirect_and_passes_errors_back():
     replies = [httpx.Response(302, headers={"location": "http://0.0.0.0/steal"}),
                httpx.Response(402, json={"type": "error", "error": {"type": "billing_error", "message": "no credit"}})]
     p, _ = make(NANO, handler=lambda request: replies.pop(0))
-    r = await call(p, "POST", "/v1/messages", message("z-ai/glm-5.3"))
+    r = await call(p, "POST", "/v1/messages", message("anthropic/claude-opus-5.5"))
     assert r.status_code == 502 and "refusing to follow" in r.text
-    r = await call(p, "POST", "/v1/messages", message("z-ai/glm-5.3"))
+    r = await call(p, "POST", "/v1/messages", message("anthropic/claude-opus-5.5"))
     assert r.status_code == 402 and r.json()["error"]["message"] == "no credit"
+
+
+async def test_a_standard_session_sends_other_models_in_the_clear_with_the_route_chosen_for_them(tmp_path):
+    from dataclasses import replace
+    log = UsageLog(tmp_path / "requests.log", "s1")
+    route = {"priority": "host", "host": "parasail", "host_name": "Parasail", "fp8": True}
+    plain = FakePlain()
+    p, fake = make(replace(NANO, routes={"z-ai/glm-5.3": route}), plain=plain, log=log)
+    for asked, sent in (("z-ai/glm-5.3", "z-ai/glm-5.3"), ("moonshotai/kimi-k3", "moonshotai/kimi-k3"),
+                        ("claude-haiku-4-5", "z-ai/glm-5.3-flash"),       # Claude Code's own default: the profile's
+                        (None, "z-ai/glm-5.3")):
+        r = await call(p, "POST", "/v1/messages", message(asked))
+        assert r.status_code == 200 and plain.calls[-1][0] == sent, asked
+    assert set(plain.made) == {(BASE, "sk-nano")} and not fake.calls
+    assert plain.calls[0][3]["provider"] == {"require_parameters": True, "order": ["parasail"], "min_quantization": "fp8"}
+    assert "provider" not in plain.calls[1][3]                                   # NanoGPT's own choice
+    recs = read(tmp_path / "requests.log")
+    assert [(r["tier"], r["sealed"]) for r in recs] == [("standard", False)] * 4
+    assert recs[0]["route"] == "Parasail · FP8 or better" and "route" not in recs[1]
+
+
+async def test_a_standard_session_on_openrouter_uses_its_key_and_its_way_of_routing():
+    from dataclasses import replace
+    route = {"priority": "throughput", "fp8": True}
+    profile = replace(NANO, provider="openrouter", routes={"z-ai/glm-5.3": route})
+    plain = FakePlain()
+    p, fake = make(profile, plain=plain, provider_url="https://openrouter.ai/api/v1", provider_key=lambda: "sk-or",
+                   provider_caps=capabilities.parse_openrouter([{"id": "z-ai/glm-5.3", "architecture": {
+                       "input_modalities": ["text"]}, "supported_parameters": ["tools"]}]))
+    r = await call(p, "POST", "/v1/messages", message("z-ai/glm-5.3"))
+    assert r.status_code == 200 and plain.made == [("https://openrouter.ai/api/v1", "sk-or")]
+    assert plain.calls[-1][3]["provider"] == {"require_parameters": True, "sort": "throughput",
+                                              "quantizations": ["int8", "fp8", "mxfp8", "fp16", "bf16", "fp32"]}
+    r = await call(p, "POST", "/v1/messages", message("private/kimi-k3"))   # sealed through NanoGPT, its key
+    assert r.status_code == 200 and fake.calls[-1][0] == "private/kimi-k3" and fake.keys == ["sk-nano"]
+    p, _ = make(profile, plain=FakePlain(), provider_url="https://openrouter.ai/api/v1", provider_key=lambda: None)
+    r = await call(p, "POST", "/v1/messages", message("z-ai/glm-5.3"))
+    assert r.status_code == 403 and "No OpenRouter API key" in r.text
+
+
+TEE = Profile("tee", "tee", "TEE/glm-5.3", "TEE/kimi-k3", "TEE/glm-5.3-flash", "TEE/glm-5.3-flash", "low")
+
+
+async def test_a_tee_session_attests_each_model_before_anything_goes_to_it(tmp_path, monkeypatch):
+    log = UsageLog(tmp_path / "requests.log", "s1")
+    plain, attester = FakePlain(), Attester(level="partial")
+    p, fake = make(TEE, plain=plain, attester=attester, log=log)
+    for asked, sent in (("TEE/glm-5.3", "TEE/glm-5.3"), ("TEE/kimi-k3", "TEE/kimi-k3"), ("TEE/glm-5.3", "TEE/glm-5.3"),
+                        ("z-ai/glm-5.3", "TEE/glm-5.3"),                   # never below TEE: its own model stands in
+                        ("claude-haiku-4-5", "TEE/glm-5.3-flash")):
+        r = await call(p, "POST", "/v1/messages", message(asked))
+        assert r.status_code == 200 and plain.calls[-1][0] == sent, asked
+    assert [m for _, _, m in attester.asked] == ["TEE/glm-5.3", "TEE/kimi-k3", "TEE/glm-5.3-flash"]   # once each
+    assert attester.asked[0][:2] == (BASE, "sk-nano") and set(plain.made) == {(BASE, "sk-nano")}
+    assert "provider" not in plain.calls[0][3]                         # never routed: the enclave is NanoGPT's
+    attested = [r for r in read(tmp_path / "requests.log") if r["kind"] == "attested_tee"]
+    assert attested[0]["level"] == "partial" and attested[0]["shortfalls"]
+    assert {r["tier"] for r in read(tmp_path / "requests.log") if r["kind"] == "request"} == {"tee"}
+    monkeypatch.setattr(proxy_mod, "TEE_REATTEST_SECONDS", 0)
+    await call(p, "POST", "/v1/messages", message("TEE/glm-5.3"))
+    assert len(attester.asked) == 4                                    # attested again when it's old
+
+
+async def test_nothing_goes_to_a_tee_model_whose_enclave_doesnt_attest():
+    from daprivatecoder.llm.secure_http import ProviderError
+    from daprivatecoder.llm.tee import TeeRefused
+    plain = FakePlain()
+    refused = TeeRefused("TEE/glm-5.3's quote doesn't bind our nonce")
+    p, _ = make(TEE, plain=plain, attester=Attester(fail=refused))
+    r = await call(p, "POST", "/v1/messages", message("TEE/glm-5.3"))
+    assert r.status_code == 502 and "didn't attest, so nothing was sent" in r.text and not plain.calls
+    assert r.headers["x-should-retry"] == "false"                      # it won't hold next time either
+    unreachable = TeeRefused("TEE/glm-5.3's attestation couldn't be fetched: down")
+    unreachable.__cause__ = ProviderError("nano-gpt answered HTTP 503", status_code=503)
+    p, _ = make(TEE, plain=plain, attester=Attester(fail=unreachable))
+    r = await call(p, "POST", "/v1/messages", message("TEE/glm-5.3"))
+    assert r.status_code == 502 and "x-should-retry" not in r.headers and not plain.calls     # asked again
+
+
+async def test_images_are_described_only_by_a_helper_as_protected_as_the_request():
+    from dataclasses import replace
+    body = message(None)
+    body["messages"] = [{"role": "user", "content": [{"type": "text", "text": "what is on screen?"}, bridge.b64_image(PNG)]}]
+    # a standard session whose helper is in the clear: a private model's images aren't described by it
+    plain = FakePlain()
+    p, fake = make(replace(NANO, vision_model="z-ai/glm-5.3-flash"), plain=plain)
+    await call(p, "POST", "/v1/messages", {**body, "model": "private/glm-5-3"})
+    assert "no vision helper is set up" in fake.calls[-1][1][-1]["content"] and not plain.described
+    await call(p, "POST", "/v1/messages", {**body, "model": "moonshotai/kimi-k3"})
+    assert not plain.described                                         # Kimi K3 sees it itself
+    # a TEE session: its TEE helper describes for GLM-5.3, which can't see
+    plain = FakePlain()
+    p, _ = make(replace(TEE, vision_model="TEE/kimi-k3"), plain=plain)
+    await call(p, "POST", "/v1/messages", {**body, "model": "TEE/glm-5.3"})
+    assert plain.described[0][0] == "TEE/kimi-k3" and "failing test" in plain.calls[-1][1][-1]["content"]
 
 
 async def test_once_a_private_model_is_used_nothing_more_goes_in_the_clear():
@@ -255,6 +383,10 @@ async def test_once_a_private_model_is_used_nothing_more_goes_in_the_clear():
     for asked in ("z-ai/glm-5.3", None):
         r = await call(p, "POST", "/v1/messages", message(asked))
         assert r.status_code == 403 and "Start a new session" in r.text and r.headers["x-should-retry"] == "false"
+    p, fake = make(TEE, plain=FakePlain())                               # nor to a TEE model, read by NanoGPT
+    await call(p, "POST", "/v1/messages", message("private/kimi-k3"))
+    r = await call(p, "POST", "/v1/messages", message("TEE/glm-5.3"))
+    assert r.status_code == 403 and "Start a new session" in r.text
 
 
 async def test_the_model_list_offers_every_private_model_in_a_private_session():
