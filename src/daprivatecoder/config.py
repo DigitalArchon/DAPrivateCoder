@@ -33,6 +33,11 @@ PROVIDERS = {"nanogpt": "NanoGPT", "openrouter": "OpenRouter", "custom": "anothe
 # where a session's effort starts (Claude Code's own changes it); a model is sent the nearest level it
 # takes (proxy.effort_for). Never "none": GLM with its thinking off reasons all the more, in its answer
 REASONING = ("low", "medium", "high", "max")
+# the context window Claude Code is told (CLAUDE_CODE_MAX_CONTEXT_TOKENS), where it compacts the
+# conversation: for a model it doesn't know, it assumes 200K. The window offers these; a file may say
+# any size between the first and the last
+CONTEXTS = (200_000, 400_000, 1_000_000)
+CONTEXT_RANGE = (100_000, 1_048_576)
 # web search (search.py): Linkup, which keeps nothing; Perplexity and Kagi; or none
 WEB_SEARCH = ("zero-retention", "best", "off")
 PROFILE_NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,31}")        # the whole name (fullmatch)
@@ -64,12 +69,13 @@ class Profile:
     opus_model: str
     fast_model: str
     vision_model: str = ""
-    reasoning: str = "high"         # none is recommended: for coding it's up to the use case
+    reasoning: str = "high"         # no level is called recommended: for coding it's up to the use case
     web_search: str = "off"
     provider: str = "nanogpt"       # a standard profile's: nanogpt, openrouter or custom (PROVIDERS)
     base_url: str = ""              # custom: its OpenAI-compatible endpoint
     # which of the provider's hosts runs a model (llm/routes.py): model -> route; none for its own choice
     routes: dict = field(default_factory=dict, hash=False)
+    context: int = CONTEXTS[0]      # the conversation's size where Claude Code compacts it (CONTEXTS)
 
     @property
     def private(self) -> bool:
@@ -143,6 +149,9 @@ _NOTES = {
     "vision_model": "describes images for a model that can't see them; empty: such a model is told it can't see",
     "reasoning": ("how hard the model reasons before it answers, as each session starts: low, medium, high or max.\n"
                   "# In a session, Claude Code's Effort (the editor's, or /effort) changes it"),
+    "context": ("the conversation's size, in tokens, where Claude Code compacts it (summarises it, and goes on):\n"
+                "# 200000 (what it assumes for models it doesn't know), 400000 or 1000000 (what NanoGPT lists for these).\n"
+                "# Every request sends the whole conversation, so a bigger one costs more each time, even from the cache"),
     "provider": ('"nanogpt", "openrouter", or "custom" (any OpenAI-compatible endpoint: base_url, https unless it\n'
                  "# is on this computer or your network). Its API key is in your keyring, set in the window"),
     "web_search": """\
@@ -188,6 +197,7 @@ def render(cfg: Config) -> str:
                 out.append(f"base_url = {_q(p.base_url)}")
         for key in ("model", "opus_model", "fast_model", "vision_model", "reasoning", "web_search"):
             out += [*note(key), f"{key} = {_q(getattr(p, key))}"]
+        out += [*note("context"), f"context = {p.context}"]
         if p.routes:
             out += ["# which of the provider's hosts runs a model (the window's Route): auto is the provider's own choice",
                     f"[profiles.{p.name}.routes]"]
@@ -281,7 +291,11 @@ def _profile(name: str, table: dict, where: str) -> Profile:
             raise ConfigError(f"{where}: the route for {routed}: {e}") from None
         if route:
             checked[routed] = route
-    return Profile(name, kind, model, opus, fast, vision, reasoning, web_search, provider, base_url, checked)
+    context = table.get("context", CONTEXTS[0])
+    if isinstance(context, bool) or not isinstance(context, int) or not CONTEXT_RANGE[0] <= context <= CONTEXT_RANGE[1]:
+        raise ConfigError(f"{where}: context must be a number of tokens from {CONTEXT_RANGE[0]} to {CONTEXT_RANGE[1]}, "
+                          f"such as 200000 (not {context!r}).")
+    return Profile(name, kind, model, opus, fast, vision, reasoning, web_search, provider, base_url, checked, context)
 
 
 def parse(text: str, path: Path | None = None) -> Config:

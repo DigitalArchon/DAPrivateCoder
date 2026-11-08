@@ -113,6 +113,12 @@ class ImageDescriber:
         return f"[Image, described for you by a vision model ({self.model}):]\n{self._cache[digest]}"
 
 
+# the signature on a thinking block of DA Private Coder's (a model's reasoning, as Claude Code shows
+# Claude's): only Anthropic's API checks a signature, and DA Private Coder never sends it one of these
+# (proxy._forward takes them out first). Claude Code keeps them and sends them back, as it does Claude's.
+SIGNATURE = "da-private-coder"
+
+
 def has_images(body: dict) -> bool:
     """Whether a request carries an image anywhere: in a message, or in a tool's result."""
     def any_image(content) -> bool:
@@ -167,9 +173,11 @@ async def to_openai(body: dict, images: ImageDescriber, native: bool = False) ->
                 context = content[-1500:]
             continue
         if role == "assistant":
-            text, calls = [], []
+            text, calls, reasoning = [], [], []
             for b in content or []:
-                if b.get("type") == "text":
+                if b.get("type") == "thinking" and b.get("thinking"):
+                    reasoning.append(b["thinking"])        # the model's own, handed back as Claude Code does
+                elif b.get("type") == "text":
                     text.append(b.get("text", ""))
                 elif b.get("type") == "tool_use":
                     calls.append({"id": b.get("id") or f"toolu_{secrets.token_hex(8)}", "type": "function",
@@ -179,6 +187,9 @@ async def to_openai(body: dict, images: ImageDescriber, native: bool = False) ->
                 msg["tool_calls"] = calls
             if msg["content"] is None and not calls:
                 msg["content"] = ""
+            if reasoning:
+                # the field NanoGPT's models, vLLM's chat templates and OpenRouter (an alias) take
+                msg["reasoning_content"] = "\n\n".join(reasoning)
             messages.append(msg)
             context = (msg["content"] or context)[-1500:]
             continue
@@ -236,8 +247,9 @@ async def to_openai(body: dict, images: ImageDescriber, native: bool = False) ->
         params["tool_choice"] = {"type": "function", "function": {"name": choice["name"]}}
     elif choice.get("type") == "none":
         tools = []
-    # Claude Code's "thinking" setting isn't passed on: the proxy sets the effort from Claude Code's
-    # (output_config), never "none" (GLM with its thinking off reasons all the more, in its answer)
+    # Claude Code's "thinking" setting doesn't turn the model's reasoning off (GLM with its thinking off
+    # reasons all the more, in its answer): the proxy sets the effort from Claude Code's (output_config),
+    # and shows the reasoning as Claude Code would Claude's, unless thinking is off (sse, message)
     return messages, tools or None, params
 
 
@@ -331,14 +343,36 @@ async def _paced(events: AsyncIterator[tuple[str, object]], every: float) -> Asy
 
 
 async def sse(events: AsyncIterator[tuple[str, object]], model: str, input_estimate: int,
-              ping_every: float = 5.0, stats: dict | None = None) -> AsyncIterator[bytes]:
-    """The private model's stream as Anthropic server-sent events. Reasoning isn't passed on
-    (Anthropic thinking blocks carry signatures this can't make); pings keep the stream alive."""
+              ping_every: float = 5.0, stats: dict | None = None, thinking: bool = True) -> AsyncIterator[bytes]:
+    """The model's stream as Anthropic server-sent events: its reasoning as thinking blocks (unless
+    `thinking` is off, as Claude Code asks when its thinking is), its answer as text, its tool calls;
+    pings keep the stream alive."""
     msg_id = f"msg_{secrets.token_hex(12)}"
     yield _sse("message_start", {"type": "message_start", "message": {
         "id": msg_id, "type": "message", "role": "assistant", "model": model, "content": [],
         "stop_reason": None, "stop_sequence": None, "usage": {"input_tokens": input_estimate, "output_tokens": 0}}})
-    index, text_open, last_ping = 0, False, time.monotonic()
+    index, last_ping = 0, time.monotonic()
+    block = ""                          # the block open now: "thinking", "text", or none
+
+    def close() -> list[bytes]:
+        nonlocal index, block
+        out = []
+        if block == "thinking":
+            out.append(_sse("content_block_delta", {"type": "content_block_delta", "index": index,
+                                                    "delta": {"type": "signature_delta", "signature": SIGNATURE}}))
+        if block:
+            out.append(_sse("content_block_stop", {"type": "content_block_stop", "index": index}))
+            index += 1
+        block = ""
+        return out
+
+    def open_block(kind: str) -> list[bytes]:
+        nonlocal block
+        out = close()
+        start = {"type": "thinking", "thinking": "", "signature": ""} if kind == "thinking" else {"type": "text", "text": ""}
+        out.append(_sse("content_block_start", {"type": "content_block_start", "index": index, "content_block": start}))
+        block = kind
+        return out
     result = None
     stats = stats if stats is not None else {}
     started = time.monotonic()
@@ -360,11 +394,16 @@ async def sse(events: AsyncIterator[tuple[str, object]], model: str, input_estim
                     stats["reasoning_chars"] += len(val)
                 elif kind == "text":
                     stats["text_chars"] += len(val)
-                if kind == "text" and val:
-                    if not text_open:
-                        yield _sse("content_block_start", {"type": "content_block_start", "index": index,
-                                                           "content_block": {"type": "text", "text": ""}})
-                        text_open = True
+                if kind == "reasoning" and val and thinking:
+                    if block != "thinking":
+                        for out in open_block("thinking"):
+                            yield out
+                    yield _sse("content_block_delta", {"type": "content_block_delta", "index": index,
+                                                       "delta": {"type": "thinking_delta", "thinking": val}})
+                elif kind == "text" and val:
+                    if block != "text":
+                        for out in open_block("text"):
+                            yield out
                     yield _sse("content_block_delta", {"type": "content_block_delta", "index": index,
                                                        "delta": {"type": "text_delta", "text": val}})
                 elif kind == "done":
@@ -376,9 +415,8 @@ async def sse(events: AsyncIterator[tuple[str, object]], model: str, input_estim
         stats["error"] = str(e)
         yield _sse("error", {"type": "error", "error": {"type": "api_error", "message": f"{model}: {e}"}})
         return
-    if text_open:
-        yield _sse("content_block_stop", {"type": "content_block_stop", "index": index})
-        index += 1
+    for out in close():
+        yield out
     calls, stop = _calls_and_stop(result)
     for call in calls:
         yield _sse("content_block_start", {"type": "content_block_start", "index": index, "content_block": {
@@ -396,16 +434,21 @@ async def sse(events: AsyncIterator[tuple[str, object]], model: str, input_estim
 
 
 async def message(events: AsyncIterator[tuple[str, object]], model: str, input_estimate: int,
-                  stats: dict | None = None) -> dict:
-    """The private model's reply as one Anthropic message (for requests that don't stream). `stats` gets
-    the provider's own usage, as sse gives it (its cached tokens, what NanoGPT billed)."""
-    text, result = "", None
+                  stats: dict | None = None, thinking: bool = True) -> dict:
+    """The model's reply as one Anthropic message (for requests that don't stream), its reasoning first
+    as a thinking block unless `thinking` is off. `stats` gets the provider's own usage, as sse gives
+    it (its cached tokens, what NanoGPT billed)."""
+    text, reasoning, result = "", "", None
     async for kind, val in events:
         if kind == "text":
             text += val
+        elif kind == "reasoning" and val:
+            reasoning += val
         elif kind == "done":
             result = val
-    content: list[dict] = [{"type": "text", "text": text}] if text else []
+    content: list[dict] = [{"type": "thinking", "thinking": reasoning, "signature": SIGNATURE}] \
+        if thinking and reasoning else []
+    content += [{"type": "text", "text": text}] if text else []
     calls, stop = _calls_and_stop(result)
     for call in calls:
         content.append({"type": "tool_use", "id": call.id or f"toolu_{secrets.token_hex(8)}", "name": call.name,

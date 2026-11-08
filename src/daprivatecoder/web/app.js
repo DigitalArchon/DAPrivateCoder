@@ -369,6 +369,22 @@ function routeRow(st, tab, p, model) {
   return h("div", { class: "model-row route" }, h("label", {}, "Runs on"), h("div", { class: "row" }, ...parts));
 }
 
+// where Claude Code compacts the conversation (config.CONTEXTS), and a model that holds less than that
+const CONTEXTS = [[200000, "200K"], [400000, "400K"], [1000000, "1M"]];
+function contextRows(tab, p, save) {
+  const smallest = (S.models[tab] || []).filter((m) => [p.model, p.opus_model, p.fast_model].includes(m.id) && m.context)
+    .reduce((least, m) => Math.min(least, m.context), Infinity);
+  return [h("div", { class: "model-row" }, h("label", {}, "Context"),
+    h("select", { onchange: (e) => save({ context: Number(e.target.value) }, "Saved: the next session compacts there.") },
+      CONTEXTS.map(([v, l]) => h("option", { value: String(v), selected: p.context === v }, l)))),
+  h("div", { class: "model-row" }, h("span", {}), h("div", { class: "small muted" },
+    "Where Claude Code compacts the conversation (summarises it, and goes on). Every request sends the whole conversation, "
+    + "so a bigger one costs more each time, even from the cache: at 1M, about $1.60 a Kimi K3 request. 200K is what "
+    + "Claude Code assumes for these models.",
+    smallest < p.context ? h("div", { class: "warnbox" }, `A model of these holds only ${Math.round(smallest / 1000)}K: `
+      + "its requests would fail before Claude Code compacts.") : null))];
+}
+
 // a standard profile's provider: NanoGPT, OpenRouter, or an OpenAI-compatible endpoint of your own, and its key
 function providerRows(st, tab, p, save) {
   const custom = p.provider === "custom" || S.customUrl;
@@ -447,6 +463,7 @@ function modelsSection(st) {
       "How hard the models think as each session starts. In a session, Claude Code's own Effort (in the editor, or ",
       h("code", {}, "/effort"), ") changes it. A model that doesn't take a level runs at the nearest it does: ",
       tab === "private" ? "the private models have no medium (it runs as high), nor xhigh (as max)." : "as its provider lists them.")),
+    contextRows(tab, p, save),
     S.modelsError[tab] ? h("div", { class: "warnbox" }, `The list of models couldn't be read: ${S.modelsError[tab]}`) : null,
     S.models[tab] ? null : h("div", { class: "small muted row" }, h("span", { class: "spinner" }), reading));
 }

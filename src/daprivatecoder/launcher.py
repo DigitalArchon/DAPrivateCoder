@@ -145,6 +145,9 @@ def claude_env(profile: Profile, port: int, token: str) -> dict[str, str]:
         env[f"ANTHROPIC_DEFAULT_{tier}_MODEL"] = model
         env[f"ANTHROPIC_DEFAULT_{tier}_MODEL_NAME"] = model
         env[f"ANTHROPIC_DEFAULT_{tier}_MODEL_DESCRIPTION"] = _describe(profile, model)
+    # where Claude Code compacts the conversation: for model names it doesn't know (these), it would
+    # assume 200K and say so at every start; Claude's own models (a standard profile's anthropic/…) keep theirs
+    env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = str(profile.context)
     if profile.kind != "standard":
         # no pre-release features (Anthropic's server-side context editing, tool search): nothing here runs them
         env["CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"] = "1"

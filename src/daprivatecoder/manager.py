@@ -317,6 +317,10 @@ class Manager:
         cfg = config.load()
         profile = cfg.profile(name)
         change = {}
+        if "context" in fields:
+            if fields["context"] not in config.CONTEXTS:
+                raise UserError(f"The context must be one of {', '.join(map(str, config.CONTEXTS))}.")
+            change["context"] = fields["context"]
         for key in PROFILE_FIELDS:
             if key in fields:
                 if not isinstance(fields[key], str):

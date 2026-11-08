@@ -122,6 +122,18 @@ medium runs as high and xhigh as max (a private model refuses any other level, a
 one and reasons at its own default, the most). A TEE or standard model gets the nearest of the levels
 its provider lists for it; one that refuses a level, naming those it takes, is asked again with one.
 
+**Context** in the window (`context` in the file) is where Claude Code compacts the conversation
+(summarises it, and goes on): 200K by default, which is what Claude Code assumes for models it
+doesn't know, or 400K, or 1M, what NanoGPT lists for these. Claude Code sends the whole conversation
+with every request, so a bigger one costs more each time, even from the cache: at 1M, about $1.60 a
+Kimi K3 request. The window says so if a model of the profile holds less than the size chosen.
+
+Each model's reasoning shows as Claude Code shows Claude's thinking (collapsed in the editor; Ctrl+O
+in a terminal), unless Claude Code's thinking is off; the model still reasons then, at its effort. As
+with Claude, what Claude Code sends back of it goes to the model with the rest of the conversation.
+A provider that won't take it back is asked again without it, from then on (the log says so). It
+never goes to a Claude model: Anthropic's API takes only its own thinking.
+
 A model that sees images (Kimi K3, DeepSeek V4.1 Flash) gets them as they are. Only one that
 doesn't (GLM-5.3) has them described, by the **Images** model, also a private one.
 
@@ -205,10 +217,6 @@ In `claude -p` (no one to ask), the web search tool runs only if you allow it:
 
 ## Limits
 
-- Claude Code assumes a 200K-token context window for models it doesn't know; these have 1M. It
-  compacts the conversation sooner, which also keeps each request cheaper. To change it, set
-  `CLAUDE_CODE_MAX_CONTEXT_TOKENS`.
-- The model's reasoning isn't shown: Anthropic's thinking blocks carry Anthropic's signatures.
 - A private profile only takes `private/` models, and a TEE one `TEE/` (or private) ones; a settings
   file that says otherwise doesn't load, and the window won't save one.
 

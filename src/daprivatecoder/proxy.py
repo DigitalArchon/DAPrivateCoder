@@ -72,6 +72,32 @@ CAPS_SECONDS = 20
 CAPS_RETRY_SECONDS = 30
 
 
+def handed_back(messages: list[dict]) -> bool:
+    return any("reasoning_content" in m for m in messages)
+
+
+def without_reasoning(messages: list[dict]) -> list[dict]:
+    """The messages without the reasoning handed back (for a provider that won't take the field)."""
+    return [{k: v for k, v in m.items() if k != "reasoning_content"} for m in messages]
+
+
+def drop_our_thinking(data: dict) -> bool:
+    """Take DA Private Coder's thinking blocks out of an Anthropic request's history (in place); whether
+    there were any."""
+    from .llm.anthropic_bridge import SIGNATURE
+    found = False
+    for m in data.get("messages") or []:
+        content = m.get("content") if isinstance(m, dict) else None
+        if m.get("role") != "assistant" or not isinstance(content, list):
+            continue
+        kept = [b for b in content if not (isinstance(b, dict) and b.get("type") == "thinking"
+                                           and b.get("signature") == SIGNATURE)]
+        if len(kept) != len(content):
+            found = True
+            m["content"] = kept or [{"type": "text", "text": "…"}]
+    return found
+
+
 def with_effort(params: dict, effort: str) -> dict:
     """`params` with the reasoning effort to send ("": none, for a model that takes none)."""
     out = {k: v for k, v in params.items() if k != "reasoning_effort"}
@@ -333,6 +359,7 @@ class Proxy:
             if offers_private_mode(self.base_url) else None
         self._describers: dict[str, ImageDescriber] = {}
         self._efforts: dict[str, tuple[str, ...]] = {}      # model -> the efforts its refusal said it takes
+        self._no_reasoning_back: set[str] = set()          # providers that refused the reasoning handed back
         self.used_private = False
 
     # ------------------------------------------------------------------ what is sent where
@@ -536,25 +563,34 @@ class Proxy:
             return ""
         return None
 
-    def _stream(self, client, model: str, messages, tools, params: dict, rec: dict):
-        """The model's events; a model that refuses the effort before it answers, naming those it takes,
-        is asked once more with one of them (rec["effort"] says which went)."""
+    def _stream(self, client, model: str, messages, tools, params: dict, rec: dict, where: str = ""):
+        """The model's events. Refused before it answers, it is asked again (twice at most): without the
+        reasoning handed back, if `where` (its provider) won't take that field, as from then on; with an
+        effort it takes, if it named those it takes (rec["effort"] says which went)."""
         async def events():
-            sent = params.get("reasoning_effort")
-            started = False
-            try:
-                async for event in client.stream(model, messages, tools, params):
-                    started = True
-                    yield event
-                return
-            except Exception as e:
-                instead = None if started else self._learned(model, e, sent)
-                if instead is None or instead == sent:
-                    raise
-            rec.setdefault("effort_asked", sent)
-            rec["effort"] = instead
-            async for event in client.stream(model, messages, tools, with_effort(params, instead)):
-                yield event
+            msgs, prm = messages, params
+            for attempt in range(3):
+                sent = prm.get("reasoning_effort")
+                started = False
+                try:
+                    async for event in client.stream(model, msgs, tools, prm):
+                        started = True
+                        yield event
+                    return
+                except Exception as e:
+                    if started or attempt == 2:
+                        raise
+                    if "reasoning_content" in str(e).lower() and handed_back(msgs):
+                        self._no_reasoning_back.add(where)
+                        msgs = without_reasoning(msgs)
+                        rec["reasoning_back"] = False          # in the log: the provider wouldn't take it
+                        continue
+                    instead = self._learned(model, e, sent)
+                    if instead is None or instead == sent:
+                        raise
+                    rec.setdefault("effort_asked", sent)
+                    rec["effort"] = instead
+                    prm = with_effort(prm, instead)
         return events()
 
     def _images(self, tier: str) -> ImageDescriber:
@@ -723,6 +759,8 @@ class Proxy:
         route = self.profile.routes.get(model) if tier == "standard" else None
         params.update(routes.body(self.provider, route))      # which of the provider's hosts runs it, if chosen
         estimate = estimate_tokens(data)
+        # the model's reasoning is shown as Claude Code shows Claude's, unless its thinking is off
+        show = not (isinstance(data.get("thinking"), dict) and data["thinking"].get("type") == "disabled")
         rec = {"path": path, "model": model, "asked_for": asked if asked and asked.strip().lower() != model.lower() else "",
                "sealed": tier == "private", "tier": tier, "provider": self._provider_of(tier), "sees": native,
                "effort": effort, **({"effort_asked": wanted} if wanted != effort else {}), "bytes_out": size,
@@ -734,7 +772,11 @@ class Proxy:
 
         try:
             # the provider's answer first: a request it refuses (no credit, its key, too long) is told by status
-            events = await answered(self._stream(client, model, messages, tools, params, rec))
+            where = f"{tier}:{self._provider_of(tier)}"
+            if where in self._no_reasoning_back and handed_back(messages):
+                messages = without_reasoning(messages)
+                rec["reasoning_back"] = False
+            events = await answered(self._stream(client, model, messages, tools, params, rec, where))
         except Exception as e:  # noqa: BLE001
             refusal = upstream_refusal(model, e, self._provider_of(tier))
             await done({}, refusal.status, error=str(e)[:300])
@@ -743,7 +785,7 @@ class Proxy:
         if not data.get("stream"):
             stats: dict = {}
             try:
-                reply = await message(events, model, estimate, stats=stats)
+                reply = await message(events, model, estimate, stats=stats, thinking=show)
             except Exception as e:  # noqa: BLE001
                 refusal = upstream_refusal(model, e, self._provider_of(tier), answering=True)
                 await done(stats, refusal.status, error=str(e)[:300])
@@ -755,7 +797,7 @@ class Proxy:
             stats: dict = {}
             n = 0
             try:
-                async for chunk in sse(events, model, estimate, stats=stats):
+                async for chunk in sse(events, model, estimate, stats=stats, thinking=show):
                     n += len(chunk)
                     yield chunk
             finally:
@@ -771,7 +813,10 @@ class Proxy:
         key = self._read_key(self.provider)
         # Claude Code's metadata is this computer's device id and the session's: the provider knows the
         # account by its key, and needs neither
-        if data.get("model") != model or "metadata" in data:
+        # the thinking blocks of DA Private Coder's (another model's reasoning) aren't Claude's: Anthropic's
+        # API refuses a signature it didn't make, so they go no further
+        ours = drop_our_thinking(data)
+        if data.get("model") != model or "metadata" in data or ours:
             data["model"] = model
             data.pop("metadata", None)
             body = json.dumps(data).encode()

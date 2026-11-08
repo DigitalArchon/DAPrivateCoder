@@ -157,3 +157,14 @@ def test_the_private_and_tee_profiles_are_those_kinds_whatever_a_hand_written_fi
             parse(f'[profiles.{name}]\nkind = "{kind}"\nmodel = "private/glm-5-3"\n')
     with pytest.raises(ConfigError, match="a profile's name"):
         parse('[profiles."dev\\n"]\nmodel = "z-ai/glm-5.3"\n')
+
+
+def test_the_context_window_is_200k_unless_said_and_read_back_as_written():
+    assert config.DEFAULTS.profile("private").context == 200_000
+    cfg = parse('[profiles.private]\nmodel = "private/glm-5-3"\ncontext = 1000000\n')
+    assert cfg.profile("private").context == 1_000_000
+    assert parse(config.render(cfg)).profile("private").context == 1_000_000
+    assert "where Claude Code compacts it" in config.render(cfg)
+    for wrong in ("50000", '"1M"', "true", "2000000"):
+        with pytest.raises(ConfigError, match="context must be a number of tokens"):
+            parse(f'[profiles.private]\nmodel = "private/glm-5-3"\ncontext = {wrong}\n')

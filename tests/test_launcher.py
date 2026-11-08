@@ -325,3 +325,9 @@ def test_the_editors_script_runs_each_folder_as_it_was_chosen(tmp_path):
     assert out["env"]["ANTHROPIC_MODEL"] == "private/glm-5-3" and out["cwd"] == str(chosen)
     session = [r for r in read(tmp_path / "state" / "daprivatecoder" / "requests.log") if r["kind"] == "session"][-1]
     assert session["folder"] == str(chosen)
+
+
+def test_claude_code_is_told_where_to_compact():
+    from dataclasses import replace
+    assert claude_env(PRIVATE, 1, "t")["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] == "200000"
+    assert claude_env(replace(PRIVATE, context=1_000_000), 1, "t")["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] == "1000000"

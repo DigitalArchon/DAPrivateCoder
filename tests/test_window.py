@@ -399,3 +399,11 @@ async def test_the_window_lists_the_sessions_running_now_and_where_their_request
     assert s["pid"] == me and s["kind"] == "private" and s["folder"] == str(tmp_path) and s["editor"] == ""
     assert s["last"]["model"] == "private/kimi-k3" and s["last"]["sent"] == "sealed" and s["last"]["status"] == 200
     assert s["stops"].startswith("DA Private Coder is closed")       # this test holds no window open
+
+
+async def test_where_claude_code_compacts_is_saved_from_the_window(window):
+    app, *_ = window
+    st = (await call(app, "POST", "/api/profile", {"profile": "private", "fields": {"context": 400000}}))[1]
+    assert st["config"]["profiles"]["private"]["context"] == 400000 and config.load().profile("private").context == 400000
+    status, said = await call(app, "POST", "/api/profile", {"profile": "private", "fields": {"context": 123}})
+    assert status == 400 and "200000, 400000, 1000000" in said["error"]

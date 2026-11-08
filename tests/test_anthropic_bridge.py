@@ -143,7 +143,18 @@ async def test_the_reply_streams_back_as_anthropic_events():
                                                 "private/glm-5-3", 100, ping_every=0)])
     evs = parse(raw)
     names = [n for n, _ in evs]
-    assert names[0] == "message_start" and names[-1] == "message_stop" and "ping" in names
+    assert names[0] == "message_start" and names[-1] == "message_stop"
+    # the reasoning first, as Claude Code shows Claude's: a thinking block, signed as DA Private Coder's
+    starts = [d["content_block"]["type"] for n, d in evs if n == "content_block_start"]
+    assert starts == ["thinking", "text", "tool_use"]
+    assert "".join(d["delta"]["thinking"] for n, d in evs if d.get("delta", {}).get("type") == "thinking_delta") == "hmm" * 3
+    assert [d["delta"]["signature"] for n, d in evs if d.get("delta", {}).get("type") == "signature_delta"] == [bridge.SIGNATURE]
+    assert [d["index"] for n, d in evs if n == "content_block_start"] == [0, 1, 2]
+    # Claude Code's thinking off: none shown (the model still reasons; the stream is kept alive)
+    off = parse(b"".join([c async for c in bridge.sse(events("Hello!", (), 3), "private/glm-5-3", 100, ping_every=0,
+                                                         thinking=False)]))
+    assert [d["content_block"]["type"] for n, d in off if n == "content_block_start"] == ["text"] and \
+        "ping" in [n for n, _ in off]
     text = "".join(d["delta"]["text"] for n, d in evs if n == "content_block_delta" and d["delta"]["type"] == "text_delta")
     assert text == "Hello!"
     tool = next(d["content_block"] for n, d in evs if n == "content_block_start" and d["content_block"]["type"] == "tool_use")
@@ -261,3 +272,27 @@ async def test_one_image_carried_by_two_requests_at_once_is_described_once():
     block = b64_image(b"\x89PNG same")
     a, b = await asyncio.gather(d.text_for(block, ""), d.text_for(block, ""))
     assert a == b and "a failing test" in a and len(calls) == 1
+
+
+
+async def test_a_reply_that_doesnt_stream_carries_its_reasoning_first():
+    msg = await bridge.message(events("ok", reasoning=2), "private/glm-5-3", 5)
+    assert msg["content"][0] == {"type": "thinking", "thinking": "hmmhmm", "signature": bridge.SIGNATURE}
+    assert msg["content"][1] == {"type": "text", "text": "ok"}
+    off = await bridge.message(events("ok", reasoning=2), "private/glm-5-3", 5, thinking=False)
+    assert [b["type"] for b in off["content"]] == ["text"]
+
+
+async def test_thinking_claude_code_sends_back_goes_back_to_the_model_as_its_reasoning():
+    """As Claude Code does with Claude: what it sends back of a turn's thinking reaches the model (its
+    reasoning_content); what it doesn't send, nothing is added for."""
+    body = {"messages": [
+        {"role": "user", "content": "list the files"},
+        {"role": "assistant", "content": [{"type": "thinking", "thinking": "I should run ls.", "signature": bridge.SIGNATURE},
+                                          {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "ls"}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "a.py"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "One file."}]}]}
+    messages, _, _ = await bridge.to_openai(body, bridge.ImageDescriber(None))
+    assistant = [m for m in messages if m["role"] == "assistant"]
+    assert assistant[0]["reasoning_content"] == "I should run ls." and assistant[0]["tool_calls"]
+    assert "reasoning_content" not in assistant[1]
