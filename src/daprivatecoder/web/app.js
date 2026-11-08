@@ -7,10 +7,13 @@
 const TOKEN = new URLSearchParams(location.search).get("t") || "";
 const $ = (sel) => document.querySelector(sel);
 // kept across renders, as the folder typed is: the Models tab shown (a profile), each profile's models and
-// the hosts listed for a model, the key whose Replace field is open, the session picked for an editor not
-// yet switched on, a route being chosen, a custom provider's address being typed, what is being checked
-const S = { state: null, folder: "", tab: "", models: {}, modelsError: {}, hosts: {}, routeHost: {}, routeFp8: true,
-  editorPick: {}, customUrl: false, replacing: "", checking: "" };
+// the hosts listed for a model, the key whose Replace field is open, a route being chosen (and, per model,
+// whether its hosts below FP8 are left out), what is typed and not yet saved (drafts: a key, an address),
+// the actions under way (busy: not sent twice), what is being checked
+const S = { state: null, folder: "", tab: "", models: {}, modelsError: {}, hosts: {}, routeHost: {}, routeFp8: {},
+  customUrl: false, replacing: "", checking: "", drafts: {}, busy: {}, asked: 0, shown: 0 };
+// what the editor's switch runs when it runs each folder as chosen (editor.PER_FOLDER)
+const PER_FOLDER = ":folders";
 
 function h(tag, attrs = {}, ...children) {
   const el = document.createElement(tag);
@@ -56,11 +59,29 @@ async function guarded(fn) {
 async function act(method, path, body, said) {
   return guarded(async () => {
     let st;
+    const n = ++S.asked;
     try { st = await api(method, path, body); } catch (e) { render(); throw e; }
-    if (st && st.version) { S.state = st; render(); }
+    if (st && st.version) take(n, st);
     if (said) toast(said, "ok", 3000);
     return true;
   });
+}
+
+// a state the server sent, unless one asked for after it is already shown: the 20 s look's answer,
+// slow behind the keyring, mustn't undo a choice made meanwhile (Start's kind of session, say)
+function take(n, st) {
+  if (n < S.shown) return;
+  S.shown = n;
+  S.state = st;
+  render();
+}
+
+// an action that can't be under way twice (a double click would open two terminals)
+async function once(name, fn) {
+  if (S.busy[name]) return;
+  S.busy[name] = true;
+  render();
+  try { return await fn(); } finally { delete S.busy[name]; render(); }
 }
 
 function applyTheme(theme) {
@@ -145,16 +166,22 @@ function renderTop(st) {
 function startSection(st) {
   const kind = st.start;
   const why = notReady(st, kind);
-  const open = (f) => act("POST", "/api/open", { folder: f, profile: kind },
-    `Claude Code is starting in a terminal window, on ${KINDS[kind].models}.`);
+  const opening = Object.keys(S.busy).some((k) => k.startsWith("open"));
+  const open = (f) => once("open", () => act("POST", "/api/open", { folder: f, profile: kind },
+    `Claude Code is starting in a terminal window, on ${KINDS[kind].models}.`));
+  // the folder in the editor, its Claude Code on this kind of session; other folders stay as they are
+  const openIn = (e, f) => once(`open:${e.name}`, () => act("POST", "/api/open-editor", { name: e.name, folder: f, profile: kind },
+    `${e.name} opens it: Claude Code there runs on ${KINDS[kind].models} (in a new conversation, if one was open). Other folders are as they were.`));
+  const editorsHere = (st.editors || []).filter((e) => e.opens && e.state !== "other");
   const folder = h("input", { type: "text", class: "mono folder", placeholder: "The project's folder", value: S.folder,
     oninput: (e) => { S.folder = e.target.value; },
     onkeydown: (e) => { if (e.key === "Enter" && !why) open(S.folder); } });
   const recent = (st.recent || []).map((f) => h("div", { class: "item" },
     // cut at the start when it's too long (direction: rtl), the path itself kept left to right:
-    // otherwise its first "/" is drawn at its end
-    h("span", { class: "path", title: f }, h("bdi", { dir: "ltr" }, f)),
-    h("button", { class: "small", disabled: Boolean(why), onclick: () => open(f) }, "Open"),
+    // otherwise its first "/" is drawn at its end; a click puts it in the folder field
+    h("span", { class: "path link", title: `${f} (click: open it in the editor or a terminal above)`,
+      onclick: () => { S.folder = f; render(); } }, h("bdi", { dir: "ltr" }, f)),
+    h("button", { class: "small", disabled: Boolean(why) || opening, onclick: () => open(f) }, "Open"),
     h("button", { class: "small ghost", title: "Forget this folder", onclick: () => act("POST", "/api/forget", { folder: f }) }, "×")));
   const installed = st.commands["claude-private"].state === "current";
   const command = kind === "private" ? "claude-private" : `daprivatecoder claude --profile ${kind}`;
@@ -168,7 +195,10 @@ function startSection(st) {
         const { folder: picked } = await api("POST", "/api/choose-folder", { start: S.folder });
         if (picked) { S.folder = picked; render(); }
       }) }, "Choose…") : null,
-      h("button", { class: kind, disabled: Boolean(why), onclick: () => open(S.folder) }, "Open in a terminal")),
+      h("button", { class: kind, disabled: Boolean(why) || opening, onclick: () => open(S.folder) }, "Open in a terminal")),
+    editorsHere.length ? h("div", { class: "row" }, ...editorsHere.map((e) => h("button", { class: kind,
+      disabled: Boolean(why) || opening, title: `Opens the folder in ${e.name}, its Claude Code on ${KINDS[kind].models}: other folders stay as they are`,
+      onclick: () => openIn(e, S.folder) }, `Open in ${e.name}`))) : null,
     why ? h("div", { class: "small muted" }, why) : null,
     recent.length ? h("div", { class: "recent" }, h("div", { class: "small muted" }, "Recent folders"), recent) : null,
     installed && st.commands_on_path ? h("div", { class: "small muted" }, "In a terminal, ", h("code", {}, command),
@@ -191,9 +221,11 @@ function check(done, what, detail, ...actions) {
 // a key in the keyring: stored (Replace, Remove: a second click), or a field to paste it in. `slot` keeps
 // the Replace field open across renders (S.replacing)
 function keyControls(slot, state, provider, label, said) {
+  const draft = `key:${slot}`;
   const saveKey = () => act("POST", "/api/key", { key: keyInput.value, provider }, said)
-    .then((done) => { if (done && S.replacing === slot) { S.replacing = ""; render(); } });
+    .then((done) => { if (done) { delete S.drafts[draft]; if (S.replacing === slot) S.replacing = ""; render(); } });
   const keyInput = h("input", { type: "password", placeholder: `Paste your ${label} API key`, autocomplete: "off",
+    value: S.drafts[draft] || "", oninput: (e) => { S.drafts[draft] = e.target.value; },
     onkeydown: (e) => { if (e.key === "Enter") saveKey(); } });
   const saveButton = h("button", { class: "primary small", onclick: saveKey }, "Save");
   if (!state.stored) return { stored: false, controls: [keyInput, saveButton], extra: null };
@@ -241,29 +273,21 @@ function setupSection(st) {
           + "from this window doesn't need them, and the editor's switch puts what it runs in place itself.",
     allIn ? null : h("button", { class: "small", onclick: () => act("POST", "/api/commands", {}, "Installed.") }, "Install"));
 
-  // each editor's switch: off, on (with the kind of session it runs), or another program's (left alone)
-  const switchTo = (e, kind) => act("POST", "/api/editor", { name: e.name, on: true, profile: kind },
-    `${e.name}'s new Claude Code tabs run on ${KINDS[kind].models}.`).then(() => { delete S.editorPick[e.name]; });
+  // each editor's switch: off (as usual everywhere), on (each folder as chosen: Folders in your editor), or
+  // another program's (left alone)
   const editors = st.editors.length ? st.editors.map((e) => {
-    const on = e.state === "on" && SESSIONS.includes(e.profile);
-    const pick = on ? e.profile : (S.editorPick[e.name] || "private");
-    const kinds = h("select", { class: "inline", onchange: (ev) => {
-      if (on) switchTo(e, ev.target.value);
-      else { S.editorPick[e.name] = ev.target.value; render(); }
-    } }, SESSIONS.map((kind) => h("option", { value: kind, selected: kind === pick }, `${KINDS[kind].label} models`)));
-    const why = notReady(st, pick);
-    const row = check(on || "optional", `Claude Code in ${e.name}`,
-      on ? `Runs on ${KINDS[e.profile].models} (new Claude Code tabs). The extension takes this for the whole editor.`
-        : e.state === "other" ? `Runs through another program (${e.value}), so this is left as it is.`
-          : "Runs as usual, on Anthropic's models.",
-      e.state === "other" ? null : kinds,
-      e.state === "off" ? h("button", { class: `small ${pick}`, disabled: Boolean(why), title: why,
-        onclick: () => switchTo(e, pick) }, "Switch on") : null,
+    const on = e.state === "on";
+    return check(on || "optional", `Claude Code in ${e.name}`,
+      e.state === "other" ? `Runs through another program (${e.value}), so this is left as it is.`
+        : !on ? "Runs as usual in every folder, on Anthropic's models. Switched on, the folders you choose (below, or Open in "
+          + `${e.name} above) run on DA Private Coder, and the rest as usual.`
+          : e.mode === PER_FOLDER ? "On: each folder runs as chosen in Folders in your editor, below. Other windows run as usual."
+            : `On: every session on DA Private Coder's ${e.mode} profile (set by hand to claude-private).`,
+      e.state === "off" ? h("button", { class: "small", onclick: () => act("POST", "/api/editor", { name: e.name, on: true },
+        `${e.name}'s Claude Code now runs as each folder says, in a new conversation.`) }, "Switch on") : null,
       on ? h("button", { class: "small", onclick: () => act("POST", "/api/editor", { name: e.name, on: false },
-        `${e.name}'s Claude Code runs as usual again (open a new Claude Code tab).`) }, "Back to normal") : null);
-    const warning = e.state !== "other" ? warningOf(st, pick) : null;
-    if (warning) row.querySelector(".body").append(warning);
-    return row;
+        `${e.name}'s Claude Code runs as usual everywhere. Conversations open on DA Private Coder stop at their next request.`) },
+        "Back to normal") : null);
   }) : [check("optional", "Claude Code in your editor", "No VSCodium or VS Code here: use claude-private in a terminal.")];
 
   return h("div", { class: "section" }, h("h3", {}, "Setup"), keyRow, claude, commandsRow, ...editors);
@@ -306,7 +330,7 @@ function routeRow(st, tab, p, model) {
   if (!ROUTES[p.provider] || !info || !info.routable) return null;
   const route = (p.routes || {})[model] || null;
   const choosing = S.routeHost[model] || (route && route.priority === "host");
-  const fp8 = route ? route.fp8 !== false : S.routeFp8 !== false;
+  const fp8 = route ? route.fp8 !== false : S.routeFp8[model] !== false;
   const save = (r) => act("POST", "/api/route", { profile: tab, model, route: r },
     r && p.provider === "nanogpt" ? "Saved: paid per use, even if a subscription includes the model." : "Saved.")
     .then((done) => { if (done) delete S.routeHost[model]; });
@@ -324,6 +348,10 @@ function routeRow(st, tab, p, model) {
     if (!listed) { S.hosts[model] = { loading: true }; setTimeout(() => loadHosts(tab, model), 0); }   // not while drawing
     if (listed && listed.hosts) {
       const hosts = listed.hosts.filter((x) => x.available && (!fp8 || x.fp8));
+      // the host saved, even when it isn't listed now (gone, or below FP8): what the requests still go to
+      if (route && route.host && !hosts.some((x) => x.id === route.host)) {
+        hosts.unshift({ id: route.host, name: `${route.host_name || route.host} (not listed now)` });
+      }
       const speed = (x) => x.tokens_per_second ? ` · ${Math.round(x.tokens_per_second)} tok/s` : "";
       const cost = (x) => x.input !== null && x.input !== undefined ? ` · $${price(x.input)} / $${price(x.output)}` : "";
       parts.push(h("select", { onchange: (e) => {
@@ -336,7 +364,7 @@ function routeRow(st, tab, p, model) {
   }
   if (route || choosing) parts.push(h("label", { class: "small muted tick", title: "Leave out hosts that run it at less than FP8 (or don't say)" },
     h("input", { type: "checkbox", checked: fp8,
-      onchange: (e) => { if (route) save({ ...route, fp8: e.target.checked }); else { S.routeFp8 = e.target.checked; render(); } } }),
+      onchange: (e) => { if (route) save({ ...route, fp8: e.target.checked }); else { S.routeFp8[model] = e.target.checked; render(); } } }),
     "FP8 or better"));
   return h("div", { class: "model-row route" }, h("label", {}, "Runs on"), h("div", { class: "row" }, ...parts));
 }
@@ -351,10 +379,10 @@ function providerRows(st, tab, p, save) {
   } }, Object.entries(PROVIDERS).map(([v, l]) => h("option", { value: v, selected: v === (custom ? "custom" : p.provider) }, l)));
   const rows = [h("div", { class: "model-row" }, h("label", {}, "Provider"), pick)];
   if (custom) {
-    const url = h("input", { type: "text", class: "mono", value: p.base_url || "", placeholder: "https://api.example.com/v1",
-      onkeydown: (e) => { if (e.key === "Enter") go(); } });
+    const url = h("input", { type: "text", class: "mono", value: S.drafts.url ?? (p.base_url || ""), placeholder: "https://api.example.com/v1",
+      oninput: (e) => { S.drafts.url = e.target.value; }, onkeydown: (e) => { if (e.key === "Enter") go(); } });
     const go = () => save({ provider: "custom", base_url: url.value.trim() }, "Saved: standard sessions use it.")
-      .then((done) => { if (done) S.customUrl = false; });
+      .then((done) => { if (done) { S.customUrl = false; delete S.drafts.url; } });
     rows.push(h("div", { class: "model-row" }, h("label", {}, "Address"), h("div", { class: "row" }, url,
       h("button", { class: "small primary", onclick: go }, "Save"))),
       h("div", { class: "model-row" }, h("span", {}), h("div", { class: "small muted" },
@@ -423,6 +451,67 @@ function modelsSection(st) {
     S.models[tab] ? null : h("div", { class: "small muted row" }, h("span", { class: "spinner" }), reading));
 }
 
+// ------------------------------------------------------------------ what runs on it now
+
+// where a request went, in words, after its chip
+function whereItWent(last) {
+  if (last.sent === "sealed") return "sealed to the attested enclave";
+  if (last.sent === "tee") return "to an attested enclave, through NanoGPT (not end-to-end encrypted)";
+  if (last.sent === "clear") return `in the clear, to ${last.provider === "openrouter" ? "OpenRouter" : last.provider === "custom" ? "your provider" : "NanoGPT"}`;
+  return "not sent";
+}
+
+// each session on DA Private Coder now: what it runs, where, and where its last request went
+function sessionsSection(st) {
+  const list = st.sessions || [];
+  const rows = list.map((s) => {
+    const kind = SESSIONS.includes(s.kind) ? s.kind : "standard";
+    const last = s.last;
+    const [chip, how] = last ? (SENT[last.sent] || SENT[""]) : ["", ""];
+    return h("div", { class: "session" },
+      h("div", { class: "row" }, chipOf(kind),
+        h("span", { class: "path", title: s.folder }, h("bdi", { dir: "ltr" }, s.folder || "?")),
+        h("span", { class: "small muted" }, s.editor ? `in ${s.editor}` : "in a terminal")),
+      last ? h("div", { class: "small" }, `Last request ${last.t.slice(11, 16)}: `, h("b", { class: "mono" }, last.model || "?"),
+        last.asked_for ? ` (Claude Code's quick work, for ${last.asked_for})` : "", " ", h("span", { class: `chip ${chip}` }, how), " ",
+        whereItWent(last), last.error ? h("div", { class: "small bad-text" }, last.error) : null)
+        : h("div", { class: "small muted" }, "No request yet."),
+      s.stops ? h("div", { class: "warnbox" }, h("b", {}, "Stops at its next request. "), s.stops) : null);
+  });
+  return h("div", { class: "section" }, h("h3", {}, "Running now"),
+    h("p", { class: "lead" }, list.length
+      ? "The Claude Code sessions on DA Private Coder now, and where each one's last request went: the model named is the one that ran. Claude Code not listed here runs as usual, on Anthropic's models."
+      : "No Claude Code runs on DA Private Coder now: any that's open runs as usual, on Anthropic's models."),
+    rows);
+}
+
+// which folders' Claude Code runs on DA Private Coder in the editor, and every other folder's
+function foldersSection(st) {
+  if (!st.editors.length) return null;
+  const f = st.folders;
+  const options = (current) => [["", "Claude as usual"], ...SESSIONS.map((k) => [k, `${KINDS[k].label} models`])]
+    .map(([v, l]) => h("option", { value: v, selected: v === current }, l));
+  const set = (body, said) => act("POST", "/api/folder", body, said);
+  const rows = f.list.map((x) => h("div", { class: "item" },
+    h("span", { class: "path", title: x.folder }, h("bdi", { dir: "ltr" }, x.folder)),
+    SESSIONS.includes(x.profile) ? chipOf(x.profile) : null,
+    h("select", { class: "inline", onchange: (e) => set({ folder: x.folder, profile: e.target.value },
+      e.target.value ? "Saved: a new conversation there runs so." : "Saved: Claude Code there runs as usual (in a new conversation).") },
+      options(x.profile))));
+  const on = st.editors.some((e) => e.state === "on" && e.mode === PER_FOLDER);
+  const other = h("div", { class: "model-row" }, h("label", {}, "Any other"),
+    h("select", { onchange: (e) => set({ other: e.target.value }, "Saved: every other folder runs so, in a new conversation.") },
+      options(f.other)));
+  return h("div", { class: "section" }, h("h3", {}, "Folders in your editor"),
+    h("p", { class: "lead" }, "Claude Code in a folder chosen here (or a folder inside it) runs on DA Private Coder in VSCodium and VS Code; "
+      + "in any other folder, as Any other says: as usual, on Anthropic's models, unless you choose otherwise. Open in VSCodium (Start) adds one. "
+      + "A conversation open in a folder whose choice changes stops at its next request: start a new one."),
+    f.error ? h("div", { class: "warnbox" }, f.error) : null,
+    on ? null : h("div", { class: "small muted" }, "The editor's switch is off, so these don't apply yet (Setup)."),
+    rows.length ? h("div", { class: "recent" }, rows) : h("div", { class: "small muted" }, "No folder chosen yet."),
+    other, SESSIONS.includes(f.other) ? warningOf(st, f.other) : null);
+}
+
 // ------------------------------------------------------------------ web search
 
 function searchSection(st) {
@@ -454,7 +543,8 @@ function verifySection(st) {
     S.checking = model || "private"; render();
     try {
       const { attestation } = await api("POST", "/api/check", model ? { model } : {});
-      S.state = await api("GET", "/api/state");
+      const n = ++S.asked;
+      take(n, await api("GET", "/api/state"));
       toast(model ? `${model}: ${attestation.level === "full" ? "verified" : "verified in part"}.` : "The enclave is verified.", "ok", 4000);
     } finally { S.checking = ""; render(); }
   });
@@ -526,7 +616,9 @@ function appSection(st) {
       h("div", {}, `DA Private Coder ${st.version}`)),
     h("div", { class: "row" }, h("button", { class: "small ghost", onclick: () => guarded(async () => {
       await api("POST", "/api/quit", {});
-      document.body.replaceChildren(h("p", { class: "lead" }, "DA Private Coder has quit. Sessions it opened go on in their terminals."));
+      clearInterval(looking);
+      document.body.replaceChildren(h("p", { class: "lead" }, "DA Private Coder has quit, so the sessions on it stop at "
+        + "their next request (open it again to go on). Claude Code as usual isn't affected."));
     }) }, "Quit")));
 }
 
@@ -538,14 +630,14 @@ function render() {
   applyTheme(st.theme);
   renderTop(st);
   const scroll = $("#page").scrollTop;
-  $("#page").replaceChildren(...[startSection(st), setupSection(st), modelsSection(st), searchSection(st),
-    verifySection(st), usageSection(st), appSection(st)].flat().filter(Boolean));
+  $("#page").replaceChildren(...[startSection(st), sessionsSection(st), setupSection(st), foldersSection(st),
+    modelsSection(st), searchSection(st), verifySection(st), usageSection(st), appSection(st)].flat().filter(Boolean));
   $("#page").scrollTop = scroll;
 }
 
 async function refresh() {
-  S.state = await api("GET", "/api/state");
-  render();
+  const n = ++S.asked;
+  take(n, await api("GET", "/api/state"));
 }
 
 // a profile's list of models (the one shown when not said)
@@ -571,5 +663,5 @@ function editing() {
 }
 
 // usage and the editor's settings can change outside the window: looked at again now and then
-setInterval(() => { if (!document.hidden && !editing()) guarded(refresh); }, 20000);
+const looking = setInterval(() => { if (!document.hidden && !editing()) guarded(refresh); }, 20000);
 guarded(async () => { await refresh(); await loadModels(); });

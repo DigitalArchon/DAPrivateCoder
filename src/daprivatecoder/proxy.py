@@ -67,6 +67,17 @@ PRIVATE_EFFORTS = ("low", "high", "max")
 CUSTOM_EFFORTS = ("low", "medium", "high")
 # Claude Code gives up on its model list after 3 seconds (its gateway model discovery)
 MODEL_LIST_SECONDS = 2.5
+# a provider's model list: how long it may take, and how soon it's asked for again after it couldn't be read
+CAPS_SECONDS = 20
+CAPS_RETRY_SECONDS = 30
+
+
+def with_effort(params: dict, effort: str) -> dict:
+    """`params` with the reasoning effort to send ("": none, for a model that takes none)."""
+    out = {k: v for k, v in params.items() if k != "reasoning_effort"}
+    if effort:
+        out["reasoning_effort"] = effort
+    return out
 
 
 class Refused(Exception):
@@ -164,12 +175,74 @@ def effort_for(asked: str, takes) -> str:
 
 def efforts_named(error: str, sent: str | None) -> tuple[str, ...]:
     """The efforts a model's refusal says it takes ("Kimi K3 supports thinking_effort values: low,
-    high, max (… value=medium)"; "reasoning_effort must be low, high, xhigh, max, or …"), or ()."""
+    high, max (… value=medium)"; "reasoning_effort must be low, high, xhigh, max, or …"), or (). A
+    list names two or more, as words of their own: "max_tokens", or "effort too high", lists none."""
     import re
-    if "effort" not in error.lower():
+    low = error.lower()
+    if "effort" not in low:
         return ()
-    named = [w for w in re.findall(r"[a-z]+", error.lower()) if w in LEVELS and w != sent]
-    return tuple(e for e in LEVELS if e in named)
+    named = set(re.findall(r"(?<![a-z_])(low|medium|high|xhigh|max)(?![a-z_])", low)) - {sent}
+    return tuple(e for e in LEVELS if e in named) if len(named) >= 2 else ()
+
+
+def effort_unsupported(error: str) -> bool:
+    """Whether a refusal says the model takes no reasoning effort at all (OpenAI's models that don't
+    reason: "Unsupported parameter: 'reasoning_effort' is not supported with this model.")."""
+    low = error.lower()
+    return "reasoning_effort" in low and any(w in low for w in (
+        "not supported", "unsupported", "unrecognized", "unknown parameter", "not allowed", "extra inputs"))
+
+
+def upstream_refusal(model: str, e: BaseException, provider: str, answering: bool = False) -> Refused:
+    """What Claude Code is told of a request for `model` that failed on its way to the provider (or,
+    `answering`, while it answered), by the provider's HTTP status. Asked again only when that may
+    help (a busy or failing provider, the network): Claude Code would otherwise ask up to ten times,
+    calling it a temporary server-side issue, of a balance that's run out or a key refused."""
+    from .llm.private_mode import ModelRetired
+    status = getattr(e, "status_code", None)
+    status = status if isinstance(status, int) else None
+    name = NAMES.get(provider, provider)
+    said = f"{model}: {e}"
+    if isinstance(e, ModelRetired):
+        return Refused(400, said, "invalid_request_error")
+    if status == 402:
+        return Refused(402, f"{model}: your {name} balance is too low for this request, so it wasn't run. Top it up, "
+                            f"then try again. ({name} said: {e})", "billing_error")
+    if status in (401, 403):
+        # never a 401 to Claude Code: it would take its own login for the one refused
+        return Refused(403, f"{model}: {name} refused the request (HTTP {status}): {e}")
+    if status == 429:
+        return Refused(429, said, "rate_limit_error", retry=True)
+    if status is not None and 400 <= status < 500:
+        return Refused(400, said, "invalid_request_error")
+    import openai
+    network = isinstance(e, (httpx.TransportError, openai.APIConnectionError, asyncio.TimeoutError))
+    return Refused(502, said, "api_error", retry=network or (status or 0) >= 500 or (answering and status is None))
+
+
+async def answered(events):
+    """`events` once the provider has answered (its first event, or "open" when its reply began), so
+    that a request it refuses is told Claude Code by status, before any reply has started; the
+    "open" markers aren't passed on."""
+    it = aiter(events)
+    try:
+        first = await anext(it)
+    except StopAsyncIteration:
+        first = None
+
+    async def rest():
+        try:
+            if first is not None and first[0] != "open":
+                yield first
+            if first is not None:
+                async for event in it:
+                    if event[0] != "open":
+                        yield event
+        finally:
+            close = getattr(it, "aclose", None)
+            if close is not None:
+                await close()
+    return rest()
 
 
 def _error_text(raw: bytes) -> str:
@@ -207,8 +280,6 @@ def _worth_retrying(e: BaseException) -> bool:
     """An attestation that couldn't be fetched (the network, NanoGPT's 5xx) may well be fetched next
     time; one that was fetched and didn't hold, or a key NanoGPT refused, won't."""
     from .llm.secure_http import ProviderError
-    if "couldn't be fetched" not in str(e):
-        return False
     cause = e.__cause__
     return isinstance(cause, httpx.TransportError) or (
         isinstance(cause, ProviderError) and (cause.status_code is None or cause.status_code >= 500))
@@ -225,9 +296,12 @@ class Proxy:
                  private_lister: Callable[[], Awaitable[list[str]]] | None = None,
                  provider_url: str = "", provider_key: Callable[[], str | None] | None = None,
                  plain_client: PlainClientFactory | None = None, tee_check: TeeCheck = attest_tee,
-                 provider_capabilities_loader: Callable[[], Awaitable[dict | None]] | None = None):
+                 provider_capabilities_loader: Callable[[], Awaitable[dict | None]] | None = None,
+                 gate: Callable[[], str] | None = None):
         """`base_url` and `key` are NanoGPT's (private and TEE models); a standard profile's provider
-        is at `provider_url`, with `provider_key`."""
+        is at `provider_url`, with `provider_key`. `gate` says why nothing may be sent now ("": it may;
+        gate.py: DA Private Coder closed, the editor switched off)."""
+        self._gate = gate
         self.profile = profile
         self.base_url = check_url(base_url, "NanoGPT's base URL").rstrip("/")
         self.token = token
@@ -252,6 +326,7 @@ class Proxy:
                 lambda: capabilities.fetch(self.provider, self.provider_url, self._client()))
         self._list_private = private_lister or (lambda: list_private_models(self.base_url, self._client()))
         self._caps: dict[str, dict | None] = {}
+        self._caps_failed: dict[str, float] = {}       # provider -> when its list last couldn't be read
         self._caps_lock = asyncio.Lock()
         # one enclave a session: its attestation, and the prompt cache's secret (llm/private_mode.py)
         self.enclave = Enclave(relay_url(self.base_url), on_attested=self._attested) \
@@ -269,29 +344,45 @@ class Proxy:
     def _provider_of(self, tier: str) -> str:
         return self.provider if tier == "standard" else "nanogpt"
 
-    def _stand_in(self, model: str) -> str:
-        """The profile's model for one it won't send to: its quick one for a quick model's work."""
-        return self.profile.fast_model if "haiku" in model.lower() else self.profile.model
+    def gated(self) -> str:
+        """Why nothing may be sent now ("": it may)."""
+        return self._gate() if self._gate is not None else ""
 
     def choose(self, asked: str) -> str:
-        """The model a request for `asked` goes to; raises Refused when it can't go anywhere."""
+        """The model a request for `asked` goes to; raises Refused when it can't go anywhere. A model is
+        never swapped for another the conversation doesn't show: one this session won't send to is
+        refused, saying why. Only Claude Code's own quick work under a Haiku name of Claude's (its
+        background tasks, unseen) goes to the profile's quick model."""
         p = self.profile
         model = private_id(asked) if is_private_mode(asked) else (asked.strip() or p.model)
         tier = self.tier(model)
         if tier == "private":
+            # from now on nothing of this session goes in the clear: set before anything is awaited, so
+            # a request alongside this one (Claude Code's quick model's) is held to it too
+            self.used_private = True
             return private_id(model)
-        if p.private:
-            # never in the clear: a model of Claude's (its own defaults, one picked by name) is
-            # stood in for by the profile's, the quick one for a quick model's work
-            return self._stand_in(model)
+        name = model.lower()
+        own = model in p.models
+        if not own and name.startswith("claude-") and "haiku" in name:
+            return self.choose(p.fast_model)
+        if not own and (name.startswith("claude-") or RANK[tier] < RANK[p.kind]):
+            raise Refused(400, self._not_here(model, tier), "invalid_request_error")
         if self.used_private:
             raise Refused(403, f"This session has used a private model, so {model} can't be used in it: everything "
                                "said so far would go to it in the clear. Start a new session for it.")
-        if RANK[tier] < RANK[p.kind] or model.lower().startswith("claude-"):
-            # below the session's kind (a TEE session never sends to a model in the clear), or a name of
-            # Claude's own that Claude Code asks for by itself: the profile's model stands in
-            return self._stand_in(model)
         return model
+
+    def _not_here(self, model: str, tier: str) -> str:
+        p = self.profile
+        label = {"private": "Private", "tee": "TEE", "standard": "Standard"}[p.kind]
+        pick = f"Pick one of its models with /model (Opus here is {p.opus_model})"
+        if model.lower().startswith("claude-"):
+            claude = (f", or anthropic/… for Claude through {NAMES[self.provider]}"
+                      if p.kind == "standard" and self.provider in ANTHROPIC_ENDPOINTS else "")
+            return (f"{model} is one of Claude's own models, and this conversation runs on DA Private Coder's {label} "
+                    f"models, so nothing was sent. {pick}{claude}; or start a conversation as usual for Claude.")
+        what = "end-to-end encrypted" if p.kind == "private" else "attested in an enclave"
+        return f"{model} isn't {what}, and this is a {label} conversation, so nothing was sent. {pick}."
 
     def _read_key(self, provider: str = "nanogpt") -> str | None:
         try:
@@ -349,10 +440,16 @@ class Proxy:
         it can't be read now (asked again next time)."""
         async with self._caps_lock:
             if provider not in self._caps:
-                try:
-                    self._caps[provider] = await self._caps_loaders[provider]()
-                except Exception:  # noqa: BLE001 - unknown for now: asked again next time
+                if time.monotonic() - self._caps_failed.get(provider, -CAPS_RETRY_SECONDS) < CAPS_RETRY_SECONDS:
                     return {}
+                try:
+                    caps = await asyncio.wait_for(self._caps_loaders[provider](), CAPS_SECONDS)
+                except Exception:  # noqa: BLE001 - unknown for now: asked again a little later
+                    caps = {}
+                if caps == {}:                       # read, but nothing in it: not kept either
+                    self._caps_failed[provider] = time.monotonic()
+                    return {}
+                self._caps[provider] = caps
             return self._caps[provider]
 
     async def sees(self, model: str, tier: str = "private") -> bool:
@@ -421,16 +518,23 @@ class Proxy:
         return (capabilities.lookup(caps, model) or {}).get("efforts")
 
     async def _effort(self, model: str, tier: str, asked: str) -> str:
-        return effort_for(asked, await self.efforts(model, tier))
+        """The effort `model` is sent for `asked` ("": none, a model that takes none)."""
+        takes = await self.efforts(model, tier)
+        return "" if takes == () else effort_for(asked, takes)
 
     def _learned(self, model: str, error: BaseException, sent: str | None) -> str | None:
-        """When `model` refused the effort it was sent and said which it takes: remember them, and the
-        one to send instead (None: not that kind of refusal)."""
-        takes = efforts_named(str(error), sent)
-        if not takes or not sent:
+        """When `model` refused the effort it was sent and said which it takes (or that it takes none):
+        remember them, and the one to send instead ("": none; None: not that kind of refusal)."""
+        if not sent:
             return None
-        self._efforts[model] = takes
-        return effort_for(sent, takes)
+        takes = efforts_named(str(error), sent)
+        if takes:
+            self._efforts[model] = takes
+            return effort_for(sent, takes)
+        if effort_unsupported(str(error)):
+            self._efforts[model] = ()
+            return ""
+        return None
 
     def _stream(self, client, model: str, messages, tools, params: dict, rec: dict):
         """The model's events; a model that refuses the effort before it answers, naming those it takes,
@@ -449,7 +553,7 @@ class Proxy:
                     raise
             rec.setdefault("effort_asked", sent)
             rec["effort"] = instead
-            async for event in client.stream(model, messages, tools, {**params, "reasoning_effort": instead}):
+            async for event in client.stream(model, messages, tools, with_effort(params, instead)):
                 yield event
         return events()
 
@@ -477,12 +581,12 @@ class Proxy:
         effort = await self._effort(model, tier, VISION_EFFORT)
         try:
             try:
-                text = await client.complete(model, messages, params={"reasoning_effort": effort})
+                text = await client.complete(model, messages, params=with_effort({}, effort))
             except Exception as e:
                 instead = self._learned(model, e, effort)
                 if instead is None or instead == effort:
                     raise
-                text = await client.complete(model, messages, params={"reasoning_effort": instead})
+                text = await client.complete(model, messages, params=with_effort({}, instead))
         except Exception as e:
             self._record("vision", model=model, tier=tier, status=502, error=str(e)[:300])
             raise
@@ -502,7 +606,10 @@ class Proxy:
         return await self.enclave.private_ids(read) if self.enclave is not None else []
 
     async def warm_up(self) -> None:
-        """Attest the enclaves and read the model lists before the first request needs them."""
+        """Attest the enclaves and read the model lists before the first request needs them (not while
+        nothing may be sent: DA Private Coder is closed, say)."""
+        if self.gated():
+            return
         if self.enclave is not None and any(is_private_mode(m) for m in self.profile.models):
             await self._private_ids()
             try:
@@ -549,6 +656,9 @@ class Proxy:
                 return self._error(Refused(400, "The request body isn't a JSON object.", "invalid_request_error"))
             asked = str(data.get("model") or "")
             try:
+                why = self.gated()
+                if why:
+                    raise Refused(403, why)
                 model = self.choose(asked)
                 tier = self.tier(model)
                 if tier == "standard" and is_claude(model) and self.provider in ANTHROPIC_ENDPOINTS:
@@ -573,7 +683,9 @@ class Proxy:
         ids = list(self.profile.models)
         listed: list[str] = []
         try:
-            if self.profile.private and self.enclave is not None:
+            if self.gated():
+                pass                          # nothing fetched: the profile's own models only
+            elif self.profile.private and self.enclave is not None:
                 listed = await asyncio.wait_for(self._private_ids(), MODEL_LIST_SECONDS)
             elif self.profile.kind == "tee":
                 caps = await asyncio.wait_for(self.capabilities("nanogpt"), MODEL_LIST_SECONDS) or {}
@@ -600,33 +712,42 @@ class Proxy:
         native = await self.sees(model, tier) if has_images(data) else False
         try:
             messages, tools, params = await to_openai(data, self._images(tier), native=native)
-        except Exception as e:  # noqa: BLE001 - Claude Code shows the reason
-            raise Refused(502, f"Couldn't prepare the request for {model}: {e}", "api_error") from e
+        except Refused:
+            raise
+        except Exception as e:  # noqa: BLE001 - Claude Code shows the reason (an image's description failed, say)
+            raise upstream_refusal(f"Couldn't prepare the request for {model}: {self.profile.vision_model}", e,
+                                   self._provider_of(self.tier(self.profile.vision_model or model))) from e
         wanted = effort_of(data, self.profile.reasoning)
-        params["reasoning_effort"] = effort = await self._effort(model, tier, wanted)
+        effort = await self._effort(model, tier, wanted)
+        params = with_effort(params, effort)
         route = self.profile.routes.get(model) if tier == "standard" else None
         params.update(routes.body(self.provider, route))      # which of the provider's hosts runs it, if chosen
-        if tier == "private":
-            self.used_private = True
         estimate = estimate_tokens(data)
         rec = {"path": path, "model": model, "asked_for": asked if asked and asked.strip().lower() != model.lower() else "",
                "sealed": tier == "private", "tier": tier, "provider": self._provider_of(tier), "sees": native,
                "effort": effort, **({"effort_asked": wanted} if wanted != effort else {}), "bytes_out": size,
                **({"route": routes.describe(self.provider, route)} if route else {})}
-        events = self._stream(client, model, messages, tools, params, rec)
-
         async def done(stats: dict, status: int, **extra) -> None:
             usage = stats.get("usage")
             self._record("request", **rec, status=status, seconds=round(time.monotonic() - started, 2), **extra,
                          **({"usage": await self._priced(model, openai_usage(usage), tier)} if usage else {}))
+
+        try:
+            # the provider's answer first: a request it refuses (no credit, its key, too long) is told by status
+            events = await answered(self._stream(client, model, messages, tools, params, rec))
+        except Exception as e:  # noqa: BLE001
+            refusal = upstream_refusal(model, e, self._provider_of(tier))
+            await done({}, refusal.status, error=str(e)[:300])
+            raise refusal from e
 
         if not data.get("stream"):
             stats: dict = {}
             try:
                 reply = await message(events, model, estimate, stats=stats)
             except Exception as e:  # noqa: BLE001
-                await done(stats, 502, error=str(e)[:300])
-                raise Refused(502, f"{model}: {e}", "api_error") from e
+                refusal = upstream_refusal(model, e, self._provider_of(tier), answering=True)
+                await done(stats, refusal.status, error=str(e)[:300])
+                raise refusal from e
             await done(stats, 200)
             return JSONResponse(reply)
 

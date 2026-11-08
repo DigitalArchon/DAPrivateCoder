@@ -35,7 +35,7 @@ PROVIDERS = {"nanogpt": "NanoGPT", "openrouter": "OpenRouter", "custom": "anothe
 REASONING = ("low", "medium", "high", "max")
 # web search (search.py): Linkup, which keeps nothing; Perplexity and Kagi; or none
 WEB_SEARCH = ("zero-retention", "best", "off")
-PROFILE_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
+PROFILE_NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,31}")        # the whole name (fullmatch)
 
 
 class ConfigError(Exception):
@@ -208,20 +208,26 @@ def _text(table: dict, key: str, where: str, default: str = "") -> str:
 
 
 def _profile(name: str, table: dict, where: str) -> Profile:
-    if not PROFILE_NAME.match(name):
+    if not PROFILE_NAME.fullmatch(name):
         raise ConfigError(f"{where}: a profile's name is lower-case letters, digits and dashes ({name!r} isn't).")
     if not isinstance(table, dict):
         raise ConfigError(f"{where}: [profiles.{name}] must be a table of settings.")
     where = f"{where} [profiles.{name}]"
     if "kind" in table:
         kind = _text(table, "kind", where).lower()
-    else:
-        private = table.get("private", False)        # how the first settings files said it
+    elif "private" in table:
+        private = table.get("private")               # how the first settings files said it
         if not isinstance(private, bool):
             raise ConfigError(f"{where}: private must be true or false.")
         kind = "private" if private else "standard"
+    else:
+        # claude-private, the window's Private and TEE sessions and the editor's choices run these by name
+        kind = name if name in ("private", "tee") else "standard"
     if kind not in KINDS:
         raise ConfigError(f"{where}: kind must be one of {', '.join(KINDS)} (not {kind!r}).")
+    if name in ("private", "tee") and kind != name:
+        raise ConfigError(f"{where}: the {name} profile is what {name} sessions run on, so its kind is {name} "
+                          f"(not {kind}). Give a profile of another kind a name of its own.")
     provider = _text(table, "provider", where, "nanogpt").lower()
     if provider not in PROVIDERS:
         raise ConfigError(f"{where}: provider must be one of {', '.join(PROVIDERS)} (not {provider!r}).")

@@ -49,16 +49,22 @@ def _get(service: str, user: str) -> str | None:
     except Exception as e:  # noqa: BLE001 - locked, not running yet (never kept: asked again)
         raise KeyringUnavailable(f"Your keyring couldn't be read ({e or type(e).__name__}). Unlock it, then try "
                                  "again.") from e
-    _known[(service, user)] = value
+    if value is not None:
+        _known[(service, user)] = value       # none isn't kept: one may be stored from a terminal meanwhile
     return value
 
 
 def account(provider: str = "nanogpt", base_url: str = "") -> str:
-    """The keyring entry for a provider's key: "nanogpt", "openrouter", or "custom:<host>" (each host
-    its own, so a key never goes to another server)."""
+    """The keyring entry for a provider's key: "nanogpt", "openrouter", or "custom:<host>[:<port>]"
+    (each server its own, two on one host included, so a key never goes to another server)."""
     if provider == "custom":
         from urllib.parse import urlparse
-        return f"custom:{(urlparse(base_url).hostname or '').lower()}"
+        u = urlparse(base_url)
+        try:
+            port = u.port
+        except ValueError:
+            port = None
+        return f"custom:{(u.hostname or '').lower()}{f':{port}' if port else ''}"
     return provider if provider == "openrouter" else USER
 
 
@@ -84,7 +90,11 @@ def delete_key(provider: str = "nanogpt", base_url: str = "") -> None:
         _backend().delete_password(SERVICE, user)
     except PasswordDeleteError:
         pass
-    _known[(SERVICE, user)] = None
+    except KeyringUnavailable:
+        raise
+    except Exception as e:  # noqa: BLE001 - locked, say: said to the user as it is
+        raise KeyringUnavailable(f"Your keyring couldn't remove the key: {e}") from e
+    _known.pop((SERVICE, user), None)
 
 
 def vibe_manager_key() -> str | None:

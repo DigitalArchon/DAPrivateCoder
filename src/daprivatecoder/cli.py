@@ -56,6 +56,13 @@ def claude_private() -> None:
 
 
 def _claude(argv: list[str]) -> int:
+    if argv[:1] == ["--folders"]:                    # the editor's switch (claude-editor)
+        from . import launcher
+        try:
+            launcher.run_for_folder(argv[1:])
+        except (ConfigError, launcher.LaunchError, OSError) as e:
+            return _fail("daprivatecoder", e)
+        return 1
     profile = PRIVATE
     if argv[:1] == ["--profile"] and len(argv) > 1:
         profile, argv = argv[1], argv[2:]
@@ -108,13 +115,41 @@ def _key(args) -> int:
 
 def _wrapper_state(value) -> str:
     from . import editor
-    if editor.owner(value) == "ours":
-        return f"on (DA Private Coder, its {editor.profile_of(value)} profile)"
+    named = editor.profile_of(value)
+    if named == editor.PER_FOLDER:
+        return "on (DA Private Coder: each folder as chosen, the rest as usual or as `other` says)"
+    if named:
+        return f"on (every session on DA Private Coder's {named} profile: claude-private set by hand)"
     return "off" if not value else f"another wrapper: {value}"
 
 
+def _kind_words(profile: str) -> str:
+    return {"private": "NanoGPT's private models", "tee": "NanoGPT's TEE models (attested, NOT end-to-end encrypted)",
+            "": "Claude as usual, on Anthropic's models"}.get(profile, f"the {profile} profile's models (NOT private: in the clear)")
+
+
+def _folders_said() -> str:
+    from . import folders
+    f = folders.load()
+    lines = [f"  {folder}: {_kind_words(profile)}" for folder, profile in sorted(f.folders.items())]
+    lines.append(f"  every other folder: {_kind_words(f.other)}")
+    return "\n".join(lines)
+
+
 def _editor(args) -> int:
-    from . import editor
+    from . import editor, folders
+    if args.action == "folder":
+        if not args.which or not args.profile:
+            raise CliError("Say the folder and how it runs: daprivatecoder editor folder PATH private|tee|standard|usual")
+        profile = "" if args.profile == "usual" else args.profile
+        if profile:
+            config.load().profile(profile)               # said now if there's no such profile
+        if not os.path.isdir(os.path.expanduser(args.which)):
+            raise CliError(f"{args.which} isn't a folder.")
+        folders.save(folders.with_folder(folders.load(), args.which, profile))
+        print(f"Claude Code in {folders.norm(args.which)} runs on {_kind_words(profile)}, in a new conversation, "
+              "wherever the editor's switch is on.\n" + _folders_said())
+        return 0
     found = [(name, path) for name, path in editor.editors()
              if not args.which or args.which.lower() in name.lower().replace(" ", "")]
     if not found:
@@ -123,10 +158,15 @@ def _editor(args) -> int:
     if args.action == "status":
         for name, path in found:
             print(f"{name}: {_wrapper_state(editor.current(path))}")
+        print("Folders:\n" + _folders_said())
         return 0
-    if args.action == "on":
-        config.load().profile(args.profile)              # said now if there's no such profile
-    wrapper = editor.wrapper_path(args.profile) if args.action == "on" else None
+    if args.action == "on" and args.other:
+        other = "" if args.other == "usual" else args.other
+        if other:
+            config.load().profile(other)                 # said now if there's no such profile
+        f = folders.load()
+        folders.save(folders.Folders(f.folders, other))
+    wrapper = editor.wrapper_path() if args.action == "on" else None
     for name, path in found:
         value = editor.current(path)
         if editor.owner(value) == "other":
@@ -135,12 +175,12 @@ def _editor(args) -> int:
         changed = editor.switch(path, wrapper)
         print(f"{name}: {'changed' if changed else 'already so'} ({path})")
     if wrapper:
-        what = {"private": "NanoGPT's private models", "tee": "NanoGPT's TEE models (attested, NOT end-to-end encrypted)",
-                }.get(args.profile, f"the {args.profile} profile's models (NOT private: in the clear)")
-        print(f"Claude Code sessions started in the editor from now on run on {what} "
-              "(open a new Claude Code tab, or reload the window).\nTo switch back: daprivatecoder editor off")
+        print("Claude Code in the editor now runs as each folder says (in a new conversation):\n" + _folders_said()
+              + "\nTo choose a folder: daprivatecoder editor folder PATH private|tee|standard|usual"
+              "\nTo switch back: daprivatecoder editor off")
     else:
-        print("Claude Code sessions started in the editor from now on run as usual, on Anthropic's models.")
+        print("Claude Code in the editor runs as usual, on Anthropic's models, in every folder. Conversations open on "
+              "DA Private Coder stop at their next request: start a new one.")
     return 0
 
 
@@ -272,8 +312,9 @@ def _log(args) -> int:
         tokens = f"{u.get('input', 0) + u.get('cache_read', 0):>7} in ({u.get('cache_read', 0)} cached) {u.get('output', 0):>6} out" \
             if u else " " * 20
         price = (f"${cost:.4f}{'~' if u.get('cost_estimated') else ''}" if cost is not None else "")
-        # a request refused here (no "sealed" in its record) never left this computer
-        how = "sealed" if r.get("sealed") or r.get("kind") == "vision" else "clear " if "sealed" in r else "unsent"
+        # by its tier, as the window says it (manager._sent): a request refused here never left this computer
+        from .manager import _sent
+        how = {"sealed": "sealed", "tee": "TEE   ", "clear": "clear "}.get(_sent(r), "unsent")
         what = r.get("model", "") + (" (vision)" if r.get("kind") == "vision" else "")
         extra = f" {r['error']}" if r.get("error") else ""
         print(f"{r.get('t', '')[:19]} {r.get('session', '')} {how} {r.get('status', ''):>3} {what:<30} {tokens} "
@@ -299,9 +340,11 @@ def _search_server(args) -> int:
 
 def _serve(args) -> int:
     import asyncio
+    import json
     import socket
+    import time
 
-    from . import launcher, proxy
+    from . import gate, launcher, proxy
     from .usagelog import UsageLog
     if args.parent:
         launcher.die_with_parent(args.parent)
@@ -317,15 +360,43 @@ def _serve(args) -> int:
         token = token or secrets.token_urlsafe(32)
     sock.setblocking(False)
     log = UsageLog(state_dir() / "requests.log", secrets.token_hex(4))
+    editors = [(name, Path(path)) for name, path in args.editor]
     log.write("session", profile=profile.name, profile_kind=profile.kind, private=profile.private, models=list(profile.models),
-              vision=profile.vision_model, provider=profile.provider, base_url=cfg.provider_url(profile), pid=os.getpid())
-    p = proxy.Proxy(profile, cfg.base_url, token, log=log, provider_url=cfg.provider_url(profile))
+              vision=profile.vision_model, provider=profile.provider, base_url=cfg.provider_url(profile), pid=os.getpid(),
+              folder=os.getcwd(), editor=", ".join(name for name, _ in editors))
+    # only while DA Private Coder is open, and the editor that started it (if one did) still runs its profile
+    p = proxy.Proxy(profile, cfg.base_url, token, log=log, provider_url=cfg.provider_url(profile),
+                    gate=gate.Gate(profile.name, editors).why)
 
     def ready(port: int) -> None:
         if args.fd is None:
             print(f"DA Private Coder's proxy for [{profile.name}] is on http://127.0.0.1:{port}\n"
                   f"  ANTHROPIC_BASE_URL=http://127.0.0.1:{port}\n  ANTHROPIC_AUTH_TOKEN={token}", flush=True)
-    asyncio.run(proxy.serve(p, sock, ready=ready, parent=args.parent))
+    # the session's --settings file goes with it (its token is of no use to anyone then): uvicorn hands a
+    # SIGTERM back to the handler it found once it has shut down, which is this
+    import signal
+    settings, about = launcher.settings_file(os.getpid()), launcher.session_file(os.getpid())
+    if args.fd is not None:
+        # what the window's Sessions says of it: what it runs, where, started by what
+        about.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(about, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_CLOEXEC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump({"session": log.session, "profile": profile.name, "kind": profile.kind, "folder": os.getcwd(),
+                       "editors": [[name, str(path)] for name, path in editors], "started": time.time()}, f)
+
+    def gone() -> None:
+        settings.unlink(missing_ok=True)
+        about.unlink(missing_ok=True)
+
+    def ended(signum, _frame) -> None:
+        gone()
+        signal.signal(signum, signal.SIG_DFL)
+        os.kill(os.getpid(), signum)
+    signal.signal(signal.SIGTERM, ended)
+    try:
+        asyncio.run(proxy.serve(p, sock, ready=ready, parent=args.parent))
+    finally:
+        gone()
     return 0
 
 
@@ -342,10 +413,12 @@ def _parser() -> argparse.ArgumentParser:
     k.add_argument("--from-vibe-manager", action="store_true", help="set: copy the key DA Vibe Manager stored")
     k.set_defaults(func=_key)
     e = sub.add_parser("editor", help="the switch for Claude Code in VSCodium and VS Code")
-    e.add_argument("action", choices=("on", "off", "status"))
-    e.add_argument("which", nargs="?", help="only this editor: vscodium or code")
-    e.add_argument("--profile", default=PRIVATE, help="on: the profile its sessions run on (default private; tee, "
-                   "standard: not end-to-end encrypted)")
+    e.add_argument("action", choices=("on", "off", "status", "folder"))
+    e.add_argument("which", nargs="?", help="on, off, status: only this editor (vscodium or code); folder: the folder")
+    e.add_argument("profile", nargs="?", help="folder: how it runs (private; tee, standard: not end-to-end encrypted; "
+                   "usual: Claude as usual)")
+    e.add_argument("--profile", dest="other", help="on: how every folder not chosen runs (private, tee, standard, "
+                   "or usual: the default)")
     e.set_defaults(func=_editor)
     sub.add_parser("status", help="what is set up here").set_defaults(func=_status)
     c = sub.add_parser("check", help="attest the profile's enclaves, and list its models and their prices")
@@ -360,6 +433,8 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("--fd", type=int, help=argparse.SUPPRESS)
     s.add_argument("--parent", type=int, help=argparse.SUPPRESS)
     s.add_argument("--config", help=argparse.SUPPRESS)
+    # the editor whose switch started the session (its name and settings file): it stops once that's off
+    s.add_argument("--editor", nargs=2, action="append", default=[], help=argparse.SUPPRESS)
     s.set_defaults(func=_serve)
     w = sub.add_parser("search-server", help="the web search tool for Claude Code (claude-private adds it)")
     w.add_argument("--profile", default=PRIVATE)

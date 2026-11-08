@@ -298,7 +298,72 @@ def listen() -> socket.socket:
     return sock
 
 
-def start_proxy(profile: Profile, sock: socket.socket, token: str, config_path: Path | None) -> subprocess.Popen:
+def sessions_dir() -> Path:
+    """Where each session's --settings file is while it runs (only this user can read them: they hold
+    the session's token, which Claude Code's command line would show every user of this computer)."""
+    return state_dir() / "sessions"
+
+
+def settings_file(pid: int) -> Path:
+    """The --settings file of the session whose proxy is `pid` (the proxy removes it as it ends)."""
+    return sessions_dir() / f"settings-{pid}.json"
+
+
+def session_file(pid: int) -> Path:
+    """What the window says of the session whose proxy is `pid`: its profile, folder, editor (cli.py)."""
+    return sessions_dir() / f"session-{pid}.json"
+
+
+def _pid_of(path: Path) -> int | None:
+    try:
+        return int(path.stem.split("-", 1)[1])
+    except (IndexError, ValueError):
+        return None
+
+
+def proxy_alive(pid: int | None) -> bool:
+    """Whether `pid` is a proxy of DA Private Coder's now (not a process that has its old number)."""
+    if not pid:
+        return False
+    try:
+        cmdline = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+    except OSError:
+        return False
+    return b"serve" in cmdline and any(b"daprivatecoder" in part for part in cmdline)
+
+
+def live_sessions() -> list[tuple[int, Path]]:
+    """(pid, session file) of each session running now."""
+    folder = sessions_dir()
+    found = []
+    for path in sorted(folder.glob("session-*.json")) if folder.is_dir() else ():
+        pid = _pid_of(path)
+        if proxy_alive(pid):
+            found.append((pid, path))
+    return found
+
+
+def write_settings(args: list[str], pid: int) -> list[str]:
+    """`args` with the --settings JSON in a file of its own (settings_file), named in its place. Those
+    of sessions that have ended without removing theirs go first."""
+    folder = sessions_dir()
+    folder.mkdir(parents=True, exist_ok=True)
+    os.chmod(folder, 0o700)
+    for old in list(folder.glob("settings-*.json")) + list(folder.glob("session-*.json")):
+        if not proxy_alive(_pid_of(old)):
+            old.unlink(missing_ok=True)
+    out = list(args)
+    at = out.index("--settings") + 1
+    path = settings_file(pid)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_CLOEXEC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(out[at])
+    out[at] = str(path)
+    return out
+
+
+def start_proxy(profile: Profile, sock: socket.socket, token: str, config_path: Path | None,
+                editors: list[tuple[str, Path]] = ()) -> subprocess.Popen:
     errors = state_dir() / "proxy-errors.log"
     errors.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -309,17 +374,52 @@ def start_proxy(profile: Profile, sock: socket.socket, token: str, config_path: 
     command = python_argv("serve", "--profile", profile.name, "--fd", str(sock.fileno()), "--parent", str(os.getpid()))
     if config_path is not None:
         command += ["--config", str(config_path)]
+    for name, path in editors:
+        command += ["--editor", name, str(path)]
     with open(errors, "ab") as log:
         return subprocess.Popen(command, pass_fds=(sock.fileno(),), stdin=subprocess.DEVNULL, stdout=log, stderr=log,
                                 start_new_session=True, env={**os.environ, "DAPRIVATECODER_TOKEN": token})
 
 
+def usual_env(base: dict[str, str]) -> dict[str, str]:
+    """The environment for Claude Code as usual: the caller's, without what the AppImage set for itself."""
+    drop = set(APPIMAGE_VARS) | set((base.get(APPRUN_SET) or "").split())
+    return {k: v for k, v in base.items() if k not in drop and not k.startswith("DAPRIVATECODER_")}
+
+
+def run_for_folder(argv: list[str]):
+    """claude-editor, the editor's switch: its Claude Code (first in `argv`) as the folder it starts in
+    says (folders.py), on that profile, or as usual: then exactly as the editor started it, nothing of
+    DA Private Coder's read or needed (its settings, whether it's open). Returns only by raising."""
+    from . import folders
+    from .config import load
+    wrapped, args = split_wrapper_args(argv)
+    if not wrapped:
+        raise LaunchError("`daprivatecoder claude --folders` is what the editor's switch runs: its Claude Code first, "
+                          "then that Claude Code's arguments.")
+    try:
+        profile_name = folders.choice(folders.load(), os.getcwd())[0]
+    except folders.FoldersError as e:
+        raise LaunchError(str(e)) from None
+    if not profile_name:
+        os.execve(wrapped, [wrapped, *args], usual_env(dict(os.environ)))
+    run(load(), profile_name, argv)
+
+
 def run(cfg: Config, profile_name: str, argv: list[str]):
     """Become Claude Code, on a proxy for `profile_name`. Returns only by raising."""
+    from . import editor, gate
     profile = cfg.profile(profile_name)
-    binary, args = split_wrapper_args(argv)
-    binary = binary or find_claude(cfg.claude)
-    if args and set(args) <= QUICK_ARGS:
+    wrapped, args = split_wrapper_args(argv)
+    # the editor's process wrapper: the editor whose switch this is, so the session stops when it's off
+    editors = editor.started_by(wrapped, profile.name) if wrapped else []
+    quick = bool(args) and set(args) <= QUICK_ARGS
+    if not quick and not wrapped and not gate.window_open():
+        # the editor's Claude Code starts all the same: its proxy says why in the conversation
+        raise LaunchError("DA Private Coder isn't open, so Claude Code wasn't started on it. Open DA Private Coder "
+                          "first (its window, or `daprivatecoder`), then run this again.")
+    binary = wrapped or find_claude(cfg.claude)
+    if quick:
         os.execv(binary, [binary, *args])
     token = secrets.token_urlsafe(32)
     sock = listen()
@@ -329,8 +429,9 @@ def run(cfg: Config, profile_name: str, argv: list[str]):
         raise LaunchError(f"Your managed Claude Code settings ({MANAGED_SETTINGS}) set {', '.join(clash)}, which would "
                           "override DA Private Coder's, so Claude Code wasn't started.")
     full_args = claude_args(profile, env, args, mcp_config(profile, cfg.path, dict(os.environ)))
-    start_proxy(profile, sock, token, cfg.path)
+    proxy = start_proxy(profile, sock, token, cfg.path, editors)
     sock.close()                                  # the proxy has it now
+    full_args = write_settings(full_args, proxy.pid)
     notice = search_notice(profile)
     if notice and sys.stderr.isatty():
         print(f"daprivatecoder: {notice}", file=sys.stderr)

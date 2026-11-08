@@ -82,12 +82,14 @@ def _data_url(block: dict) -> str | None:
 
 
 class ImageDescriber:
-    """Describes images through the vision helper, once per image."""
+    """Describes images through the vision helper, once per image: two requests carrying the same new
+    one at once (Claude Code's own and a subagent's) wait for the one description, paid for once."""
 
     def __init__(self, describe: Describe | None, model: str = ""):
         self._describe = describe
         self.model = model
         self._cache: dict[str, str] = {}
+        self._pending: dict[str, asyncio.Future] = {}
 
     async def text_for(self, block: dict, context: str) -> str:
         url = _data_url(block)
@@ -97,8 +99,15 @@ class ImageDescriber:
         if digest not in self._cache:
             if self._describe is None:
                 return "[An image was here. You can't see images, and no vision helper is set up.]"
+            task = self._pending.get(digest)
+            if task is None:
+                task = self._pending[digest] = asyncio.ensure_future(self._describe(url, context))
+                task.add_done_callback(lambda _t, d=digest: self._pending.pop(d, None))
             try:
-                self._cache[digest] = await self._describe(url, context)
+                # shielded: a request that goes away (Claude Code stopped it) leaves it to the others
+                self._cache[digest] = await asyncio.shield(task)
+            except asyncio.CancelledError:
+                raise
             except Exception as e:  # noqa: BLE001 - the assistant should know, and can carry on without it
                 return f"[An image was here, but the vision helper couldn't describe it: {e}]"
         return f"[Image, described for you by a vision model ({self.model}):]\n{self._cache[digest]}"
@@ -339,6 +348,8 @@ async def sse(events: AsyncIterator[tuple[str, object]], model: str, input_estim
     try:
         async with aclosing(paced):
             async for kind, val in paced:
+                if kind == "open":
+                    continue
                 if kind == "quiet":
                     last_ping = time.monotonic()
                     yield _sse("ping", {"type": "ping"})
@@ -363,7 +374,7 @@ async def sse(events: AsyncIterator[tuple[str, object]], model: str, input_estim
                     yield _sse("ping", {"type": "ping"})
     except Exception as e:  # noqa: BLE001 - told to Claude Code the way Anthropic tells errors mid-stream
         stats["error"] = str(e)
-        yield _sse("error", {"type": "error", "error": {"type": "api_error", "message": f"Private model: {e}"}})
+        yield _sse("error", {"type": "error", "error": {"type": "api_error", "message": f"{model}: {e}"}})
         return
     if text_open:
         yield _sse("content_block_stop", {"type": "content_block_stop", "index": index})

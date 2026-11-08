@@ -79,3 +79,25 @@ def test_a_broken_settings_file_is_said_plainly(capsys):
     assert "isn't a NanoGPT Private Mode model" in capsys.readouterr().err
     assert cli._launch("claude-private", "private", ["-p", "hi"]) == 1
     assert "nothing would be sent in the clear" in capsys.readouterr().err
+
+
+def test_a_key_found_missing_is_asked_for_again_and_each_custom_server_has_its_own(ring):
+    from daprivatecoder import creds
+    assert creds.get_key() is None
+    ring.store[("daprivatecoder", "nanogpt")] = "sk-stored-from-a-terminal"
+    assert creds.get_key() == "sk-stored-from-a-terminal"            # not "none" from before
+    assert creds.account("custom", "http://localhost:8443/v1") == "custom:localhost:8443"
+    assert creds.account("custom", "http://localhost:9000/v1") == "custom:localhost:9000"
+    assert creds.account("custom", "https://api.example.com/v1") == "custom:api.example.com"
+
+
+def test_a_settings_file_that_is_a_link_stays_one(tmp_path):
+    from daprivatecoder import editor
+    real = tmp_path / "dotfiles" / "settings.json"
+    real.parent.mkdir()
+    real.write_text('{\n    "editor.fontSize": 14\n}\n')
+    link = tmp_path / "User" / "settings.json"
+    link.parent.mkdir()
+    link.symlink_to(real)
+    assert editor.switch(link, "/x/claude-editor")
+    assert link.is_symlink() and editor.current(real) == "/x/claude-editor"

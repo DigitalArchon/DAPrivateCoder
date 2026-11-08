@@ -246,3 +246,18 @@ def test_tool_calls_a_server_gives_no_index_or_the_same_one_stay_apart():
         acc.feed(chunk([{"index": 0, **({"id": "a", "type": "function"} if part.startswith("{") else {}),
                          "function": {**({"name": "Read"} if part.startswith("{") else {}), "arguments": part}}]))
     assert [(c.id, c.arguments) for c in acc.finish().tool_calls] == [("a", '{"file_path": "/a"}')]
+
+
+async def test_one_image_carried_by_two_requests_at_once_is_described_once():
+    import asyncio
+    from daprivatecoder.llm.anthropic_bridge import ImageDescriber, b64_image
+    calls = []
+
+    async def describe(url, context):
+        calls.append(url)
+        await asyncio.sleep(0.05)
+        return "a failing test"
+    d = ImageDescriber(describe, "vision")
+    block = b64_image(b"\x89PNG same")
+    a, b = await asyncio.gather(d.text_for(block, ""), d.text_for(block, ""))
+    assert a == b and "a failing test" in a and len(calls) == 1

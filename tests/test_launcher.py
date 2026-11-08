@@ -151,31 +151,71 @@ out["count"] = ask("POST", "/v1/messages/count_tokens", msg)
 out["models"] = ask("GET", "/v1/models?limit=1000")
 out["message"] = ask("POST", "/v1/messages?beta=true", msg)
 out["intruder"] = ask("POST", "/v1/messages", msg, auth="guess")[0]
+at = sys.argv.index("--settings") + 1
+out["settings"] = json.load(open(sys.argv[at]))
+out["settings_mode"] = os.stat(sys.argv[at]).st_mode & 0o777
 open(os.environ["STAND_IN_RESULT"], "w").write(json.dumps(out))
 '''
+
+
+import contextlib
+
+
+@contextlib.contextmanager
+def window_open(env):
+    """DA Private Coder's window, as far as sessions can tell: a process holding its lock (gate.py)."""
+    holder = subprocess.Popen([sys.executable, "-c", "import sys, time\nfrom daprivatecoder import gate\n"
+                               "gate.hold()\nprint('held', flush=True)\nsys.stdin.read()"],
+                              env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    try:
+        assert holder.stdout.readline().strip() == "held"
+        yield
+    finally:
+        holder.kill()
+        holder.wait()
+
+
+def session_env(tmp_path, base_url="http://127.0.0.1:9/api/v1"):
+    cfg = tmp_path / "config" / "daprivatecoder" / "config.toml"
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    cfg.write_text(f'base_url = "{base_url}"\n[profiles.private]\nprivate = true\n'
+                   'model = "private/glm-5-3"\nfast_model = "private/deepseek-v4-1-flash"\n')
+    (tmp_path / "home").mkdir(exist_ok=True)
+    return {**os.environ, "HOME": str(tmp_path / "home"), "XDG_CONFIG_HOME": str(tmp_path / "config"),
+            "XDG_STATE_HOME": str(tmp_path / "state"), "STAND_IN_RESULT": str(tmp_path / "result.json"),
+            "PYTHON_KEYRING_BACKEND": "keyring.backends.null.Keyring"}
+
+
+def proxy_gone(session: dict, started: float) -> None:
+    while True:                                                   # the proxy goes with Claude Code
+        try:
+            os.kill(session["pid"], 0)
+        except ProcessLookupError:
+            return
+        assert time.monotonic() - started < 30, "the proxy outlived Claude Code"
+        time.sleep(0.1)
 
 
 def test_a_whole_session_with_a_stand_in_for_claude_code(tmp_path):
     """claude-private as the editor runs it: the proxy starts beside Claude Code (here a stand-in), serves
     it on 127.0.0.1 with the session's token, and stops when it exits. Nothing goes beyond this computer:
     the settings point at a NanoGPT that isn't one, on this machine."""
-    cfg = tmp_path / "config" / "daprivatecoder" / "config.toml"
-    cfg.parent.mkdir(parents=True)
-    cfg.write_text('base_url = "http://127.0.0.1:9/api/v1"\n[profiles.private]\nprivate = true\n'
-                   'model = "private/glm-5-3"\nfast_model = "private/deepseek-v4-1-flash"\n')
+    env = session_env(tmp_path)
     stand_in = program(tmp_path / "ext" / "resources" / "native-binary" / "claude", STAND_IN.format(python=sys.executable))
     result = tmp_path / "result.json"
-    env = {**os.environ, "XDG_CONFIG_HOME": str(tmp_path / "config"), "XDG_STATE_HOME": str(tmp_path / "state"),
-           "STAND_IN_RESULT": str(result), "PYTHON_KEYRING_BACKEND": "keyring.backends.null.Keyring"}
     started = time.monotonic()
-    done = subprocess.run([str(BIN / "claude-private"), str(stand_in), "--output-format", "stream-json"], env=env,
-                          capture_output=True, text=True, timeout=60)
+    with window_open(env):
+        done = subprocess.run([str(BIN / "claude-private"), str(stand_in), "--output-format", "stream-json"], env=env,
+                              capture_output=True, text=True, timeout=60)
     assert done.returncode == 0, done.stderr
     out = json.loads(result.read_text())
     assert out["argv"][0] == "--mcp-config" and out["argv"][2] == "--settings"   # a private profile searches (Linkup)
     assert out["argv"][4:] == ["--output-format", "stream-json"]
     assert json.loads(out["argv"][1])["mcpServers"]["daprivatecoder"]["args"][3:6] == ["search-server", "--profile", "private"]
-    assert json.loads(out["argv"][3])["env"]["ANTHROPIC_AUTH_TOKEN"] == out["env"]["ANTHROPIC_AUTH_TOKEN"]
+    # the session's token isn't on Claude Code's command line (any user of this computer can read that)
+    assert out["env"]["ANTHROPIC_AUTH_TOKEN"] not in " ".join(out["argv"])
+    assert out["settings"]["env"]["ANTHROPIC_AUTH_TOKEN"] == out["env"]["ANTHROPIC_AUTH_TOKEN"]
+    assert out["settings_mode"] == 0o600
     assert out["env"]["ANTHROPIC_MODEL"] == "private/glm-5-3" and out["env"]["ANTHROPIC_API_KEY"] == ""
     assert out["probe"] == 200 and out["intruder"] == 401
     assert out["count"][0] == 200 and json.loads(out["count"][1])["input_tokens"] > 0
@@ -184,13 +224,28 @@ def test_a_whole_session_with_a_stand_in_for_claude_code(tmp_path):
     assert status == 403 and "isn't NanoGPT" in body               # sealed or nothing: here, nothing
     session = next(r for r in read(tmp_path / "state" / "daprivatecoder" / "requests.log") if r["kind"] == "session")
     assert session["profile"] == "private" and session["private"] is True
-    while True:                                                   # the proxy goes with Claude Code
-        try:
-            os.kill(session["pid"], 0)
-        except ProcessLookupError:
-            break
-        assert time.monotonic() - started < 30, "the proxy outlived Claude Code"
-        time.sleep(0.1)
+    proxy_gone(session, started)
+    assert not Path(out["argv"][3]).exists()                       # its settings file goes with it
+
+
+def test_nothing_is_sent_while_da_private_coder_is_closed(tmp_path):
+    """Closed, a session the editor starts says so to Claude Code at each request (and goes on once it's
+    open again); one asked for in a terminal doesn't start at all."""
+    env = session_env(tmp_path)
+    stand_in = program(tmp_path / "ext" / "resources" / "native-binary" / "claude", STAND_IN.format(python=sys.executable))
+    started = time.monotonic()
+    done = subprocess.run([str(BIN / "claude-private"), str(stand_in)], env=env, capture_output=True, text=True,
+                          timeout=60)
+    assert done.returncode == 0, done.stderr
+    out = json.loads((tmp_path / "result.json").read_text())
+    status, body = out["message"]
+    assert status == 403 and "DA Private Coder is closed, so nothing was sent" in body
+    assert out["count"][0] == 403 and out["probe"] == 200
+    session = next(r for r in read(tmp_path / "state" / "daprivatecoder" / "requests.log") if r["kind"] == "session")
+    proxy_gone(session, started)
+    terminal = subprocess.run([str(BIN / "claude-private"), "-p", "hi"], env=env, capture_output=True, text=True,
+                              timeout=60)
+    assert terminal.returncode != 0 and "DA Private Coder isn't open" in terminal.stderr
 
 
 def test_the_search_server_comes_first_with_what_it_needs(tmp_path):
@@ -226,3 +281,47 @@ def test_claude_code_gets_nothing_the_appimage_set_for_itself():
     from daprivatecoder.launcher import mcp_config
     server = mcp_config(PRIVATE_SEARCH, None, base)["mcpServers"]["daprivatecoder"]
     assert server["env"]["SSL_CERT_FILE"] == "/etc/ssl/certs/ca-certificates.crt"   # the search server's TLS: the host's store
+
+
+USUAL = '''\
+#!{python}
+import json, os, sys, urllib.request
+if "ANTHROPIC_BASE_URL" in os.environ:               # on the proxy: once it answers, its session is written down
+    urllib.request.urlopen(urllib.request.Request(os.environ["ANTHROPIC_BASE_URL"] + "/api/hello", method="HEAD",
+        headers={{"authorization": "Bearer " + os.environ["ANTHROPIC_AUTH_TOKEN"]}}), timeout=30).close()
+json.dump({{"argv": sys.argv[1:], "env": dict(os.environ), "cwd": os.getcwd()}}, open(os.environ["STAND_IN_RESULT"], "w"))
+'''
+
+
+def test_the_editors_script_runs_each_folder_as_it_was_chosen(tmp_path):
+    """claude-editor: a folder not chosen gets Claude Code as the editor started it, untouched (and even
+    with DA Private Coder closed, or its settings broken); a folder chosen, its kind of session."""
+    from daprivatecoder import folders
+    env = session_env(tmp_path)
+    env["ANTHROPIC_API_KEY"] = "sk-ant-mine"                        # the user's own way to Claude: kept as usual
+    usual = program(tmp_path / "ext" / "resources" / "native-binary" / "claude", USUAL.format(python=sys.executable))
+    chosen, other = tmp_path / "secret", tmp_path / "other"
+    chosen.mkdir(), other.mkdir()
+    (tmp_path / "config" / "daprivatecoder" / "config.toml").write_text("this isn't TOML [")
+    run = [sys.executable, "-I", "-m", "daprivatecoder", "claude", "--folders", str(usual), "--output-format", "stream-json"]
+    done = subprocess.run(run, env=env, cwd=other, capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0, done.stderr
+    out = json.loads((tmp_path / "result.json").read_text())
+    assert out["argv"] == ["--output-format", "stream-json"] and out["cwd"] == str(other)
+    assert "ANTHROPIC_BASE_URL" not in out["env"] and out["env"]["ANTHROPIC_API_KEY"] == "sk-ant-mine"
+    session_env(tmp_path)                                           # the settings as they were
+    xdg = {k: env[k] for k in ("XDG_CONFIG_HOME",)}
+    old = os.environ.get("XDG_CONFIG_HOME")
+    os.environ.update(xdg)
+    try:
+        folders.save(folders.with_folder(folders.Folders(), str(chosen), "private"))
+    finally:
+        os.environ.pop("XDG_CONFIG_HOME") if old is None else os.environ.update(XDG_CONFIG_HOME=old)
+    with window_open(env):
+        done = subprocess.run(run, env=env, cwd=chosen, capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0, done.stderr
+    out = json.loads((tmp_path / "result.json").read_text())
+    assert out["env"]["ANTHROPIC_BASE_URL"].startswith("http://127.0.0.1:") and out["env"]["ANTHROPIC_API_KEY"] == ""
+    assert out["env"]["ANTHROPIC_MODEL"] == "private/glm-5-3" and out["cwd"] == str(chosen)
+    session = [r for r in read(tmp_path / "state" / "daprivatecoder" / "requests.log") if r["kind"] == "session"][-1]
+    assert session["folder"] == str(chosen)

@@ -95,6 +95,7 @@ class LLMClient:
         kwargs.update(_split_params(params))
         acc = StreamAccumulator()
         stream = await self._client.chat.completions.create(**kwargs)
+        yield "open", None                 # the provider took it, and its reply has begun
         try:
             async for chunk in stream:
                 for event in acc.feed(chunk):

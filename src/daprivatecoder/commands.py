@@ -6,10 +6,9 @@ is now, or from source, its Python. A path inside the AppImage won't do: it is m
 each time it runs. The scripts are written again when the window starts, so they follow an AppImage
 that has moved. A file there that isn't DA Private Coder's is never overwritten.
 
-They are only for typing in a terminal: the window runs the app itself, and the editor's switch
-writes claude-private when it is turned on (editor.wrapper_path). For a TEE or standard profile, the
-editor runs a script of the same kind kept out of the PATH (wrapper_dir: claude-tee, claude-standard),
-which DA Private Coder rewrites the same way."""
+They are only for typing in a terminal: the window runs the app itself. The editor's switch names a
+script of the same kind kept out of the PATH (wrapper_dir: claude-editor), which runs each of the
+editor's Claude Code sessions as its folder says (folders.py), and is rewritten the same way."""
 
 from __future__ import annotations
 
@@ -78,32 +77,33 @@ def refresh() -> None:
     stale = [name for name in COMMANDS if state(name) == "stale" and MARK in _text(path_of(name))]
     if stale:
         install(stale)
-    folder = wrapper_dir()
-    if folder.is_dir():
-        for path in sorted(folder.glob("claude-*")):
-            profile = path.name.removeprefix("claude-")
-            if MARK in _text(path) and _text(path) != wrapper_script(profile):
-                _write(path, wrapper_script(profile))
+    path = wrapper_dir() / EDITOR_SCRIPT
+    if MARK in _text(path) and _text(path) != editor_script():
+        _write(path, editor_script())
 
 
-# ---------------------------------------------------------------------- the editor's, for other profiles
+# ---------------------------------------------------------------------- the editor's
+
+EDITOR_SCRIPT = "claude-editor"
+
 
 def wrapper_dir() -> Path:
-    """Where the editor's scripts for profiles other than the private one are: out of the PATH."""
+    """Where the editor's script is: out of the PATH."""
     base = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
     return Path(base) / "daprivatecoder" / "editor"
 
 
-def wrapper_script(profile: str) -> str:
-    argv = target_argv() + ["claude", "--profile", profile]
-    return f'#!/bin/sh\n{MARK}: Claude Code on its {profile} profile, for the editor.\nexec {shlex.join(argv)} "$@"\n'
+def editor_script() -> str:
+    argv = target_argv() + ["claude", "--folders"]
+    return (f'#!/bin/sh\n{MARK}: Claude Code in the editor, on DA Private Coder or as usual, as its folder says.\n'
+            f'exec {shlex.join(argv)} "$@"\n')
 
 
-def write_wrapper(profile: str) -> Path:
-    """The editor's script for `profile` (a TEE or standard one), written if it isn't as it should be."""
-    path = wrapper_dir() / f"claude-{profile}"
-    if _text(path) != wrapper_script(profile):
-        _write(path, wrapper_script(profile))
+def write_editor_script() -> Path:
+    """The editor's script, written if it isn't as it should be."""
+    path = wrapper_dir() / EDITOR_SCRIPT
+    if _text(path) != editor_script():
+        _write(path, editor_script())
     return path
 
 

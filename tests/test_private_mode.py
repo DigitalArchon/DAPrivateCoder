@@ -113,7 +113,7 @@ async def test_sealed_request_protocol():
     client = relay.client()
     events = await collect(client)
     result = events[-1][1]
-    assert events[0] == ("text", "Checking.")
+    assert events[0] == ("open", None) and events[1] == ("text", "Checking.")   # "open": the sealed reply began
     assert result.tool_calls[0].name == "Bash" and json.loads(result.tool_calls[0].arguments) == {"command": "df -h"}
     assert relay.verifies == 1 and relay.keys == [KEY]           # sealed to the attested key
     pre, auth = relay.preflights[0]
@@ -367,3 +367,13 @@ def test_the_appimage_locks_the_encryption_stack_as_pyproject_pins_it():
         locked = re.search(rf"^{re.escape(name)}==(\S+) \\$", lock, re.MULTILINE)
         assert locked, f"{name} is not in the AppImage lock"
         assert f"{name}=={locked.group(1)}" in deps, f"pyproject.toml pins {name} otherwise than the AppImage lock"
+
+
+async def test_an_error_the_enclave_sends_partway_is_said_as_it_is():
+    """The model stopping partway with a reason ("context too long") isn't passed over for "the reply
+    ended before it was complete": Claude Code is told the reason."""
+    reply = chunk({"role": "assistant", "content": "Half"}) + 'data: {"error": {"message": "context length exceeded", "code": 400}}\n\n'
+    client = Relay(replies=[(200, reply)]).client()
+    with pytest.raises(PrivateModeError, match="the model stopped: context length exceeded") as e:
+        await collect(client)
+    assert e.value.status_code == 400

@@ -1,7 +1,9 @@
 """The editor switch. Claude Code's extension in VSCodium (or VS Code) starts Claude Code through
-`claude-private` while its claudeCode.claudeProcessWrapper setting names it, and as usual when it
-doesn't. The extension takes that setting only from the user's settings, never a workspace's, so
-the switch is for every window of that editor; sessions started after the switch use it.
+DA Private Coder's claude-editor while its claudeCode.claudeProcessWrapper setting names it, and as
+usual when it doesn't. The extension takes that setting only from the user's settings, never a
+workspace's, so the switch is for every window of that editor: claude-editor then runs each session
+as its folder says (folders.py), on DA Private Coder or as usual, so windows can differ. A session
+started on DA Private Coder stops once the switch is off or its folder says otherwise (gate.py).
 
 The settings file is JSON with comments, often edited by hand: only that one entry is changed, in
 place, and the rest of the text is kept as it was. The result is checked (every other setting the
@@ -12,16 +14,23 @@ from __future__ import annotations
 import json
 import os
 import re
-import sys
 import tempfile
 from pathlib import Path
 
 KEY = "claudeCode.claudeProcessWrapper"
+# what profile_of says of claude-editor: each session as its folder says
+PER_FOLDER = ":folders"
 EDITORS = (
     ("VSCodium", "~/.config/VSCodium/User/settings.json"),
     ("VSCodium (Flatpak)", "~/.var/app/com.vscodium.codium/config/VSCodium/User/settings.json"),
     ("VS Code", "~/.config/Code/User/settings.json"),
 )
+# where each keeps its extensions, and so the Claude Code binary its extension runs
+EXTENSIONS = {
+    "VSCodium": "~/.vscode-oss/extensions",
+    "VSCodium (Flatpak)": "~/.var/app/com.vscodium.codium/data/vscode/extensions",
+    "VS Code": "~/.vscode/extensions",
+}
 _SPACE = " \t\r\n"
 
 
@@ -189,23 +198,12 @@ def editors() -> list[tuple[str, Path]]:
     return [(name, Path(os.path.expanduser(p))) for name, p in EDITORS if Path(os.path.expanduser(p)).parent.is_dir()]
 
 
-def wrapper_path(profile: str = "private") -> str:
-    """The program the editor should run for `profile`'s sessions. For the private one, claude-private:
-    DA Private Coder's command in ~/.local/bin (written now if it isn't there), which stays where it is;
-    from source, the one beside this Python will do too. For another, its script out of the PATH
-    (commands.wrapper_dir). Never one inside the AppImage, which is mounted somewhere new each run."""
+def wrapper_path() -> str:
+    """The program the editor should run: claude-editor, DA Private Coder's script out of the PATH
+    (commands.wrapper_dir, written now if it isn't as it should be), which stays where it is. Never one
+    inside the AppImage, which is mounted somewhere new each run."""
     from . import commands
-    if profile != "private":
-        return str(commands.write_wrapper(profile))
-    if commands.state("claude-private") in ("missing", "stale"):
-        commands.install(["claude-private"])
-    if commands.state("claude-private") == "current":
-        return str(commands.path_of("claude-private"))
-    beside = Path(sys.executable).parent / "claude-private"
-    if not os.environ.get("APPIMAGE") and beside.is_file() and os.access(beside, os.X_OK):
-        return str(beside)
-    raise EditorError(f"{commands.path_of('claude-private')} is someone else's program, so DA Private Coder's "
-                      "claude-private couldn't be put there for the editor to run.")
+    return str(commands.write_editor_script())
 
 
 def owner(value) -> str:
@@ -217,16 +215,47 @@ def owner(value) -> str:
 
 
 def profile_of(value) -> str:
-    """The profile a process wrapper of DA Private Coder's runs ("private" for claude-private), or ""."""
+    """What a process wrapper of DA Private Coder's runs: PER_FOLDER for claude-editor (as each folder
+    says), "private" for claude-private (set by hand: every session private); "" for another program."""
     from . import commands
     if not isinstance(value, str):
         return ""
     if os.path.basename(value) == "claude-private":
         return "private"
     path = Path(os.path.expanduser(value))
-    if path.parent == commands.wrapper_dir() and path.name.startswith("claude-"):
-        return path.name.removeprefix("claude-")
+    if path.parent == commands.wrapper_dir() and path.name == commands.EDITOR_SCRIPT:
+        return PER_FOLDER
     return ""
+
+
+# how each is opened on a folder, as installed here (the first found)
+OPEN = {
+    "VSCodium": (("codium",), ("vscodium",)),
+    "VSCodium (Flatpak)": (("flatpak", "run", "com.vscodium.codium"),),
+    "VS Code": (("code",),),
+}
+
+
+def open_command(name: str) -> list[str] | None:
+    """The command that opens editor `name` (on a folder given after it), or None: not found here."""
+    import shutil
+    for command in OPEN.get(name, ()):
+        found = shutil.which(command[0])
+        if found and (command[0] != "flatpak" or Path(os.path.expanduser(dict(EDITORS)[name])).parent.is_dir()):
+            return [found, *command[1:]]
+    return None
+
+
+def started_by(binary: str, profile: str) -> list[tuple[str, Path]]:
+    """The editor (name, settings file) whose switch started a session of `profile` running `binary`,
+    its extension's Claude Code: the editor whose extensions hold it; else any whose switch names
+    `profile` now ([]: none, so not the editor's)."""
+    real = os.path.realpath(binary)
+    for name, settings in EDITORS:
+        root = os.path.realpath(os.path.expanduser(EXTENSIONS[name]))
+        if real.startswith(root + os.sep):
+            return [(name, Path(os.path.expanduser(settings)))]
+    return [(name, path) for name, path in editors() if profile_of(current(path)) in (profile, PER_FOLDER)]
 
 
 def current(path: Path) -> str | None:
@@ -237,6 +266,7 @@ def current(path: Path) -> str | None:
 
 
 def _write(path: Path, text: str) -> None:
+    path = Path(os.path.realpath(path))          # through a link (stow, chezmoi, home-manager): it stays one
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".")
     try:

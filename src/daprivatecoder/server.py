@@ -40,7 +40,8 @@ def create_app(token: str, manager: Manager, desktop=None, on_quit: Callable[[],
     def api(handler):
         async def endpoint(request: Request) -> Response:
             given = request.headers.get("x-token")
-            if given is None or not hmac.compare_digest(given, token):
+            # as bytes: a header with characters beyond ASCII is a wrong token, not an error
+            if given is None or not hmac.compare_digest(given.encode("utf-8", "surrogateescape"), token.encode()):
                 return JSONResponse({"error": "This page isn't DA Private Coder's window."}, status_code=403, headers=HEADERS)
             try:
                 body = await request.json() if request.method == "POST" and await request.body() else {}
@@ -75,7 +76,18 @@ def create_app(token: str, manager: Manager, desktop=None, on_quit: Callable[[],
         return await in_thread(manager.state)
 
     async def editor_switch(request, body):
-        await in_thread(manager.set_editor, str(body.get("name") or ""), bool(body.get("on")),
+        await in_thread(manager.set_editor, str(body.get("name") or ""), bool(body.get("on")))
+        return await in_thread(manager.state)
+
+    async def folder(request, body):
+        if "other" in body:
+            await in_thread(manager.set_other, str(body.get("other") or ""))
+        else:
+            await in_thread(manager.set_folder, str(body.get("folder") or ""), str(body.get("profile") or ""))
+        return await in_thread(manager.state)
+
+    async def open_editor(request, body):
+        await in_thread(manager.open_in_editor, str(body.get("name") or ""), str(body.get("folder") or ""),
                         str(body.get("profile") or "private"))
         return await in_thread(manager.state)
 
@@ -133,6 +145,8 @@ def create_app(token: str, manager: Manager, desktop=None, on_quit: Callable[[],
         Route("/api/key", api(key), methods=["POST"]),
         Route("/api/commands", api(install), methods=["POST"]),
         Route("/api/editor", api(editor_switch), methods=["POST"]),
+        Route("/api/folder", api(folder), methods=["POST"]),
+        Route("/api/open-editor", api(open_editor), methods=["POST"]),
         Route("/api/profile", api(profile), methods=["POST"]),
         Route("/api/theme", api(theme), methods=["POST"]),
         Route("/api/hosts", api(hosts), methods=["POST"]),

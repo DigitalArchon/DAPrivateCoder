@@ -143,3 +143,17 @@ def test_the_three_kinds_of_session_are_always_there_and_the_first_files_still_l
                 '[profiles.nano]\nprivate = false\nmodel = "z-ai/glm-5.3"\n')
     assert cfg.profile("private").model == "private/kimi-k3" and cfg.profile("nano").kind == "standard"
     assert cfg.profile("tee") == config.DEFAULTS.profile("tee") and cfg.profile("standard").kind == "standard"
+
+
+def test_the_private_and_tee_profiles_are_those_kinds_whatever_a_hand_written_file_leaves_out():
+    """claude-private, the window's Private session and the editor's choices run [profiles.private] by
+    name: one written without a kind is private (its models then must be), never standard in the clear."""
+    with pytest.raises(ConfigError, match="A private profile only uses those"):
+        parse('[profiles.private]\nmodel = "private/glm-5-3"\nfast_model = "z-ai/glm-5.3"\n')
+    assert parse('[profiles.private]\nmodel = "private/glm-5-3"\n').profile("private").kind == "private"
+    assert parse('[profiles.tee]\nmodel = "TEE/glm-5.3"\n').profile("tee").kind == "tee"
+    for name, kind in (("private", "standard"), ("tee", "private")):
+        with pytest.raises(ConfigError, match=f"the {name} profile is what {name} sessions run on"):
+            parse(f'[profiles.{name}]\nkind = "{kind}"\nmodel = "private/glm-5-3"\n')
+    with pytest.raises(ConfigError, match="a profile's name"):
+        parse('[profiles."dev\\n"]\nmodel = "z-ai/glm-5.3"\n')

@@ -12,7 +12,7 @@ import time
 from dataclasses import asdict, replace
 from pathlib import Path
 
-from . import __version__, commands, config, creds, editor, hostenv, launch, usagelog
+from . import __version__, commands, config, creds, editor, folders, gate, hostenv, launch, usagelog
 from .config import ConfigError
 from .llm import capabilities, routes
 from .llm.client import is_tee
@@ -83,10 +83,12 @@ class Manager:
                 "start": data.get("start") if data.get("start") in SESSIONS else "private"}
 
     def _save_prefs(self, prefs: dict) -> None:
+        import tempfile
         path = prefs_path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(prefs, indent=1))
+        fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".")
+        with os.fdopen(fd, "w") as f:
+            f.write(json.dumps(prefs, indent=1))
         os.replace(tmp, path)
 
     def state(self) -> dict:
@@ -123,8 +125,16 @@ class Manager:
         for name, path in editor.editors():
             value = editor.current(path)
             state = {"ours": "on", "": "off"}.get(editor.owner(value), "other")      # other: another program's
+            # mode: PER_FOLDER (each folder as chosen), or a profile (claude-private set by hand: all private)
             out["editors"].append({"name": name, "path": str(path), "value": value or "", "state": state,
-                                   "profile": editor.profile_of(value)})
+                                   "mode": editor.profile_of(value), "opens": editor.open_command(name) is not None})
+        try:
+            chosen = folders.load()
+            out["folders"] = {"list": [{"folder": f, "profile": p} for f, p in sorted(chosen.folders.items())],
+                              "other": chosen.other, "error": ""}
+        except folders.FoldersError as e:
+            out["folders"] = {"list": [], "other": "", "error": str(e)}
+        out["sessions"] = self.sessions()
         out["usage"] = self.usage()
         out["attestation"] = self.last_attestation()
         out["tee_attestations"] = self.tee_attestations()
@@ -220,7 +230,8 @@ class Manager:
             raise UserError(f"{', '.join(map(str, taken))} is someone else's program, so it was left as it is.")
         return done
 
-    def set_editor(self, name: str, on: bool, profile: str = "private") -> None:
+    def set_editor(self, name: str, on: bool) -> None:
+        """The editor's switch: on, its Claude Code runs as each folder says (set_folder); off, as usual."""
         found = dict(editor.editors())
         if name not in found:
             raise UserError(f"{name}'s settings weren't found here.")
@@ -228,9 +239,77 @@ class Manager:
         value = editor.current(path)
         if editor.owner(value) == "other":
             raise UserError(f"{name}'s Claude Code already runs through another program ({value}): it was left as it is.")
-        if on:
+        editor.switch(path, editor.wrapper_path() if on else None)
+
+    def set_folder(self, folder: str, profile: str) -> None:
+        """How the editor's Claude Code runs in `folder` (and the folders in it): on `profile`, or as
+        usual ("")."""
+        folder = os.path.expanduser((folder or "").strip())
+        if profile:
             config.load().profile(profile)                 # said now if there's no such profile
-        editor.switch(path, editor.wrapper_path(profile) if on else None)
+        if profile and not os.path.isdir(folder):
+            raise UserError(f"{folder or 'That'} isn't a folder.")
+        folders.save(folders.with_folder(self._folders(), folder, profile))
+
+    def set_other(self, profile: str) -> None:
+        """How the editor's Claude Code runs in every folder not chosen: as usual (""), or on `profile`."""
+        if profile:
+            config.load().profile(profile)
+        f = self._folders()
+        folders.save(folders.Folders(f.folders, profile))
+
+    @staticmethod
+    def _folders() -> folders.Folders:
+        try:
+            return folders.load()
+        except folders.FoldersError as e:
+            raise UserError(str(e)) from None
+
+    def open_in_editor(self, name: str, folder: str, profile: str, popen=None) -> None:
+        """`folder` in editor `name`, its Claude Code on `profile`: the folder chosen so, the editor's switch
+        on, and the editor opened on it."""
+        folder = os.path.expanduser((folder or "").strip())
+        if not folder:
+            raise UserError("Choose the folder to work in first.")
+        if not os.path.isdir(folder):
+            raise UserError(f"{folder} isn't a folder.")
+        command = editor.open_command(name)
+        if command is None:
+            raise UserError(f"{name} couldn't be found here to open it.")
+        self.set_folder(folder, profile)
+        self.set_editor(name, True)
+        import subprocess
+        (popen or subprocess.Popen)([*command, folder], env=hostenv.host_env(), stdin=subprocess.DEVNULL,
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        prefs = self.prefs()
+        prefs["recent"] = [folder] + [f for f in prefs["recent"] if f != folder][:RECENT - 1]
+        self._save_prefs(prefs)
+
+    def sessions(self) -> list[dict]:
+        """The sessions running on DA Private Coder now: what started each, in which folder, on which
+        profile; the last request it made and how it went; and why it would stop at its next one."""
+        from . import launcher
+        records = usagelog.read(config.state_dir() / "requests.log")
+        last: dict[str, dict] = {}
+        for r in records:
+            if r.get("kind") == "request" and r.get("session"):
+                last[r["session"]] = r
+        out = []
+        for pid, path in launcher.live_sessions():
+            try:
+                info = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            editors = [(n, Path(p)) for n, p in info.get("editors") or []]
+            r = last.get(info.get("session"))
+            out.append({"pid": pid, "profile": info.get("profile", ""), "kind": info.get("kind", ""),
+                        "folder": info.get("folder", ""), "editor": ", ".join(n for n, _ in editors),
+                        "started": info.get("started"),
+                        "last": {"t": r.get("t", "")[:19].replace("T", " "), "model": r.get("model", ""),
+                                 "asked_for": r.get("asked_for", ""), "sent": _sent(r), "status": r.get("status"),
+                                 "error": str(r.get("error") or "")[:300], "provider": r.get("provider", "")} if r else None,
+                        "stops": gate.Gate(info.get("profile", ""), editors, info.get("folder", "")).why()})
+        return sorted(out, key=lambda s: s.get("started") or 0, reverse=True)
 
     # ------------------------------------------------------------------ settings
 
@@ -307,7 +386,7 @@ class Manager:
             caps = await capabilities.fetch(p.provider, url) or {}
             ids = sorted(m for m, c in caps.items() if c.get("tools"))
         else:
-            caps, ids = None, await self._listed(url, creds.get_key("custom", url))
+            caps, ids = None, await self._listed(url, await in_thread(creds.get_key, "custom", url))
         out = []
         for m in ids:
             c = capabilities.lookup(caps, m) or {} if caps else {}
@@ -366,7 +445,7 @@ class Manager:
         from .proxy import attest_tee
         if not is_tee(model):
             raise UserError(f"{model} isn't one of NanoGPT's TEE models.")
-        key = creds.get_key()
+        key = await in_thread(creds.get_key)
         if not key:
             raise UserError("NanoGPT shows a TEE model's attestation only with your API key: store it first (Setup).")
         try:

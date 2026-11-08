@@ -83,6 +83,21 @@ api(base, token, "POST", "/api/profile", {"profile": "private", "fields": {"mode
 # the commands the AppImage dispatches: claude-private (no Claude Code here: it says so), the search server
 said = run("claude-private", "-p", "hi")
 check(said.returncode == 1 and "Claude Code isn't installed" in said.stderr, f"{NAME}: claude-private runs, and says what's missing")
+# the editor's script (claude-editor): Claude Code in a folder not chosen runs as usual, as the editor
+# started it, with nothing of the AppImage's (its mount, the CA store AppRun chose) or DA Private Coder's
+import tempfile  # noqa: E402
+
+fake_dir = tempfile.mkdtemp()
+with open(f"{fake_dir}/claude", "w") as f:
+    f.write('#!/bin/sh\nenv > "$0.env"\necho "$@" > "$0.args"\n')
+os.chmod(f"{fake_dir}/claude", 0o755)
+usual = run("claude", "--folders", f"{fake_dir}/claude", "-p", "hi")
+seen = dict(line.split("=", 1) for line in open(f"{fake_dir}/claude.env").read().splitlines() if "=" in line) \
+    if os.path.exists(f"{fake_dir}/claude.env") else {}
+check(usual.returncode == 0 and open(f"{fake_dir}/claude.args").read().strip() == "-p hi"
+      and not any(k.startswith(("APPIMAGE", "APPDIR", "DAPRIVATECODER_", "ANTHROPIC_")) for k in seen)
+      and ("SSL_CERT_FILE" in ENV) == ("SSL_CERT_FILE" in seen),
+      f"{NAME}: the editor's Claude Code in a folder not chosen runs as usual" + ("" if usual.returncode == 0 else f" ({usual.stderr[-300:]})"))
 mcp = run("search-server", "--profile", "private", stdin="".join(json.dumps(m) + "\n" for m in (
     {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}}},
     {"jsonrpc": "2.0", "id": 2, "method": "tools/list"})))

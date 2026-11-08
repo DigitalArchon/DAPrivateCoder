@@ -206,6 +206,9 @@ def main(argv: list[str] | None = None) -> None:
             use_browser, notice = True, f"{problem}. Running in your web browser until then."
             print(notice, file=sys.stderr)
     desktop = None if use_browser else Desktop()
+    # DA Private Coder is open: sessions may send while this process runs, however it ends (gate.py)
+    from . import gate
+    gate.hold()
     manager = Manager(ui_notice=notice, can_choose_folder=desktop is not None)
     try:
         commands.refresh()                   # an AppImage that moved: the commands it installed follow it

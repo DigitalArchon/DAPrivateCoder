@@ -212,3 +212,13 @@ select.inline { padding-top: 2px; padding-bottom: 2px; font-size: 13px; }
 label.tick { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 label.tick input { margin: 0; }
 .spaced { margin-top: 10px; }
+/* Running now: each session on DA Private Coder, and where its last request went */
+.session { display: flex; flex-direction: column; gap: 3px; padding: 6px 0; border-top: 1px solid var(--border); }
+.session:first-of-type { border-top: 0; }
+.session > .row { flex-wrap: nowrap; min-width: 0; }
+.session .path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono);
+  font-size: 12.5px; direction: rtl; text-align: left; }
+.session .small { overflow-wrap: anywhere; }
+.bad-text { color: var(--danger); }
+.recent .item .path.link { cursor: pointer; }
+.recent .item .path.link:hover { text-decoration: underline; }

@@ -49,10 +49,12 @@ def test_installing_writes_ours_and_never_touches_someone_elses(monkeypatch, tmp
     assert commands.state("daprivatecoder") == "taken"
 
 
-def test_the_editor_runs_the_installed_command(monkeypatch, tmp_path):
+def test_the_editor_runs_its_script_out_of_the_path(monkeypatch, tmp_path):
     monkeypatch.setenv("APPIMAGE", "/apps/DAPrivateCoder.AppImage")
-    path = editor.wrapper_path()                                    # installed now if it wasn't
-    assert path == str(commands.path_of("claude-private")) and commands.state("claude-private") == "current"
+    path = editor.wrapper_path()                                    # written now if it wasn't
+    assert path == str(commands.wrapper_dir() / "claude-editor") and editor.profile_of(path) == editor.PER_FOLDER
+    assert 'exec /apps/DAPrivateCoder.AppImage claude --folders "$@"' in Path(path).read_text()
+    assert commands.state("claude-private") == "missing"            # the terminal's commands are another matter
 
 
 # ---------------------------------------------------------------------- a terminal
@@ -119,7 +121,9 @@ async def test_setting_it_up_from_the_window(window, ring, tmp_path):
     status, st = await call(app, "GET", "/api/state")
     assert status == 200 and not any(st["ready"].values()) and st["key"]["stored"] is False
     assert st["config"]["profiles"]["private"]["model"] == "private/glm-5-3" and st["claude"]["error"]
-    assert st["editors"] == [{"name": "VSCodium", "path": str(settings), "value": "", "state": "off", "profile": ""}]
+    assert st["editors"] == [{"name": "VSCodium", "path": str(settings), "value": "", "state": "off", "mode": "",
+                              "opens": False}]
+    assert st["folders"] == {"list": [], "other": "", "error": ""} and st["sessions"] == []
     status, st = await call(app, "POST", "/api/key", {"key": "not a key"})
     assert status == 400 and "isn't an API key" in st["error"]
     ring.store[("davibemanager", "provider:NanoGPT")] = "sk-dvm"
@@ -248,9 +252,9 @@ async def test_an_editor_on_another_programs_wrapper_is_left_as_it_is(window, ca
         ["", "", "ours", "other", "other"]
     st = (await call(app, "POST", "/api/editor", {"name": "VSCodium", "on": True}))[1]
     assert st["editors"][0]["state"] == "on" and "// mine" in settings.read_text()
-    assert editor.current(settings) == str(commands.path_of("claude-private"))
+    assert editor.current(settings) == str(commands.wrapper_dir() / "claude-editor")
     assert cli.main(["editor", "status"]) == 0
-    assert "VSCodium: on (DA Private Coder, its private profile)" in capsys.readouterr().out
+    assert "VSCodium: on (DA Private Coder: each folder as chosen" in capsys.readouterr().out
     settings.write_text('{"claudeCode.claudeProcessWrapper": "/opt/wrap"}')
     status, said = await call(app, "POST", "/api/editor", {"name": "VSCodium", "on": True})
     assert status == 400 and "another program" in said["error"] and editor.current(settings) == "/opt/wrap"
@@ -266,14 +270,14 @@ async def test_tee_and_standard_sessions_from_the_window(window, ring, monkeypat
     assert st["start"] == "tee" and (await call(app, "POST", "/api/start", {"session": "secret"}))[0] == 400
     await call(app, "POST", "/api/open", {"folder": str(project), "profile": "tee"})
     assert started[-1][0][-3:] == ["claude", "--profile", "tee"]
-    # the editor on a TEE profile runs DA Private Coder's script for it, kept out of the PATH
-    st = (await call(app, "POST", "/api/editor", {"name": "VSCodium", "on": True, "profile": "tee"}))[1]
-    wrapper = commands.wrapper_dir() / "claude-tee"
-    assert st["editors"][0]["state"] == "on" and st["editors"][0]["profile"] == "tee"
-    assert editor.current(settings) == str(wrapper) and 'claude --profile tee "$@"' in wrapper.read_text()
+    # the editor runs DA Private Coder's script, kept out of the PATH, as each folder says
+    st = (await call(app, "POST", "/api/editor", {"name": "VSCodium", "on": True}))[1]
+    wrapper = commands.wrapper_dir() / "claude-editor"
+    assert st["editors"][0]["state"] == "on" and st["editors"][0]["mode"] == editor.PER_FOLDER
+    assert editor.current(settings) == str(wrapper) and 'claude --folders "$@"' in wrapper.read_text()
     monkeypatch.setenv("APPIMAGE", "/moved/DAPrivateCoder.AppImage")             # the AppImage moved: it follows
     commands.refresh()
-    assert "exec /moved/DAPrivateCoder.AppImage claude --profile tee" in wrapper.read_text()
+    assert "exec /moved/DAPrivateCoder.AppImage claude --folders" in wrapper.read_text()
     # a standard profile on OpenRouter: its own key, a host for a model
     await call(app, "POST", "/api/profile", {"profile": "standard", "fields": {"provider": "openrouter"}})
     st = (await call(app, "GET", "/api/state"))[1]
@@ -332,3 +336,66 @@ async def test_each_profiles_models_come_from_its_provider(window, monkeypatch):
     monkeypatch.setattr(manager.routes, "fetch_hosts", hosts)
     listed = (await call(app, "POST", "/api/hosts", {"profile": "standard", "model": "z-ai/glm-5.3"}))[1]
     assert listed["hosts"][0]["id"] == "parasail"
+
+
+async def test_some_folders_on_da_private_coder_in_the_editor_the_rest_as_usual(window, tmp_path, monkeypatch):
+    """Windows can differ: a folder chosen runs on its kind of session in the editor, any other as
+    usual (or as `other` says); Open in VSCodium chooses the folder, switches the editor on, opens it."""
+    from daprivatecoder import folders, gate
+    app, started, settings, _ = window
+    private, tee = tmp_path / "secret-project", tmp_path / "work"
+    private.mkdir(), tee.mkdir()
+    (private / "sub").mkdir()
+    opened = []
+    monkeypatch.setattr(editor, "open_command", lambda name: ["/usr/bin/codium"])
+    monkeypatch.setattr("subprocess.Popen", lambda argv, **kw: opened.append((argv, kw)))
+    st = (await call(app, "POST", "/api/open-editor", {"name": "VSCodium", "folder": str(private), "profile": "private"}))[1]
+    assert opened[-1][0] == ["/usr/bin/codium", str(private)] and opened[-1][1]["start_new_session"]
+    assert st["editors"][0]["state"] == "on" and st["folders"]["list"] == [{"folder": str(private), "profile": "private"}]
+    st = (await call(app, "POST", "/api/folder", {"folder": str(tee), "profile": "tee"}))[1]
+    assert [f["profile"] for f in st["folders"]["list"]] == ["private", "tee"]
+    f = folders.load()
+    assert folders.choice(f, str(private / "sub")) == ("private", str(private))     # a folder inside counts
+    assert folders.choice(f, str(tee)) == ("tee", str(tee))
+    assert folders.choice(f, str(tmp_path)) == ("", "")                            # any other: Claude as usual
+    st = (await call(app, "POST", "/api/folder", {"other": "standard"}))[1]
+    assert st["folders"]["other"] == "standard" and folders.choice(folders.load(), "/")[0] == "standard"
+    status, said = await call(app, "POST", "/api/folder", {"folder": str(tmp_path / "gone"), "profile": "private"})
+    assert status == 400 and "isn't a folder" in said["error"]
+    st = (await call(app, "POST", "/api/folder", {"folder": str(tee), "profile": ""}))[1]
+    assert [f["folder"] for f in st["folders"]["list"]] == [str(private)]
+
+    # a session the editor started in a folder stops once that folder says otherwise, or the switch is off
+    g = gate.Gate("private", [("VSCodium", settings)], str(private / "sub"))
+    monkeypatch.setattr(gate, "window_open", lambda: True)
+    assert g.why() == ""
+    await call(app, "POST", "/api/folder", {"folder": str(private), "profile": "tee"})
+    assert "now runs DA Private Coder's TEE sessions in VSCodium" in g.why()
+    await call(app, "POST", "/api/folder", {"folder": str(private), "profile": ""})
+    await call(app, "POST", "/api/folder", {"other": ""})
+    assert "now runs Claude as usual in VSCodium" in g.why()
+    await call(app, "POST", "/api/folder", {"folder": str(private), "profile": "private"})
+    assert g.why() == ""
+    await call(app, "POST", "/api/editor", {"name": "VSCodium", "on": False})
+    assert "switched off for VSCodium" in g.why()
+    monkeypatch.setattr(gate, "window_open", lambda: False)
+    assert g.why().startswith("DA Private Coder is closed, so nothing was sent")
+
+
+async def test_the_window_lists_the_sessions_running_now_and_where_their_requests_went(window, tmp_path, monkeypatch):
+    from daprivatecoder import launcher
+    from daprivatecoder.usagelog import UsageLog
+    app, *_ = window
+    me = os.getpid()
+    monkeypatch.setattr(launcher, "proxy_alive", lambda pid: pid == me)
+    launcher.sessions_dir().mkdir(parents=True)
+    launcher.session_file(me).write_text(json.dumps({"session": "s1", "profile": "private", "kind": "private",
+                                                     "folder": str(tmp_path), "editors": [], "started": 1}))
+    launcher.session_file(1).write_text(json.dumps({"session": "gone", "profile": "tee"}))   # its proxy has ended
+    log = UsageLog(config.state_dir() / "requests.log", "s1")
+    log.write("request", model="private/kimi-k3", tier="private", sealed=True, status=200)
+    st = (await call(app, "GET", "/api/state"))[1]
+    [s] = st["sessions"]
+    assert s["pid"] == me and s["kind"] == "private" and s["folder"] == str(tmp_path) and s["editor"] == ""
+    assert s["last"]["model"] == "private/kimi-k3" and s["last"]["sent"] == "sealed" and s["last"]["status"] == 200
+    assert s["stops"].startswith("DA Private Coder is closed")       # this test holds no window open

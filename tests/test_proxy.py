@@ -150,11 +150,10 @@ async def test_only_the_sessions_claude_code_gets_in():
     assert r.status_code == 404 and "not GET /v1/organizations" in r.json()["error"]["message"]
 
 
-async def test_a_private_session_seals_everything_whatever_model_is_asked_for():
+async def test_a_private_session_seals_everything_and_runs_only_the_model_it_says():
     p, fake = make()
     for asked, sent in (("private/glm-5-3", "private/glm-5-3"), (" Private/Kimi-K3 ", "private/kimi-k3"),
-                        ("claude-haiku-4-5-20251001", "private/deepseek-v4-1-flash"),     # Claude Code's quick default
-                        ("claude-opus-5-5", "private/glm-5-3"),                          # a Claude model picked by name
+                        ("claude-haiku-4-5-20251001", "private/deepseek-v4-1-flash"),     # Claude Code's quick work
                         (None, "private/glm-5-3")):
         r = await call(p, "POST", "/v1/messages?beta=true", message(asked))
         assert r.status_code == 200 and fake.calls[-1][0] == sent, asked
@@ -163,6 +162,12 @@ async def test_a_private_session_seals_everything_whatever_model_is_asked_for():
     assert fake.keys and set(fake.keys) == {"sk-nano"}
     assert {c[3]["reasoning_effort"] for c in fake.calls} == {"low"}   # Claude Code said none: the profile's
     assert p.used_private
+    # a model the conversation would show but this session won't send to isn't swapped for another: refused
+    for asked, why in (("claude-opus-5-5", "is one of Claude's own models"), ("z-ai/glm-5.3", "isn't end-to-end encrypted")):
+        r = await call(p, "POST", "/v1/messages", message(asked))
+        assert r.status_code == 400 and why in r.json()["error"]["message"] and r.headers["x-should-retry"] == "false"
+        assert "private/kimi-k3" in r.json()["error"]["message"]          # what /model opus is here
+    assert len(fake.calls) == 4
 
 
 async def test_the_model_thinks_as_hard_as_claude_code_says_at_the_nearest_level_it_takes(tmp_path):
@@ -268,7 +273,7 @@ async def test_a_model_that_sees_gets_images_and_one_that_doesnt_has_them_descri
     assert records[1]["model"] == "private/deepseek-v4-1-flash" and records[1]["usage"]["input"] == 900
 
 
-async def test_whether_a_model_sees_is_never_guessed_when_nanogpts_list_cant_be_read(tmp_path):
+async def test_whether_a_model_sees_is_never_guessed_when_nanogpts_list_cant_be_read(tmp_path, monkeypatch):
     log = UsageLog(tmp_path / "requests.log", "s1")
     p, fake = make(log=log)
     up = {"now": False}
@@ -278,6 +283,7 @@ async def test_whether_a_model_sees_is_never_guessed_when_nanogpts_list_cant_be_
             raise httpx.ConnectError("NanoGPT is down")
         return capabilities.parse(CAPS)
     p._caps_loaders["nanogpt"] = flaky
+    monkeypatch.setattr(proxy_mod, "CAPS_RETRY_SECONDS", 0)            # asked again at once (30 s, live)
     tool_image = {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1",
                                                "content": [bridge.b64_image(PNG)]}]}
     body = message("private/kimi-k3", messages=[tool_image])
@@ -375,16 +381,17 @@ async def test_a_tee_session_attests_each_model_before_anything_goes_to_it(tmp_p
     plain, attester = FakePlain(), Attester(level="partial")
     p, fake = make(TEE, plain=plain, attester=attester, log=log)
     for asked, sent in (("TEE/glm-5.3", "TEE/glm-5.3"), ("TEE/kimi-k3", "TEE/kimi-k3"), ("TEE/glm-5.3", "TEE/glm-5.3"),
-                        ("z-ai/glm-5.3", "TEE/glm-5.3"),                   # never below TEE: its own model stands in
                         ("claude-haiku-4-5", "TEE/glm-5.3-flash")):
         r = await call(p, "POST", "/v1/messages", message(asked))
         assert r.status_code == 200 and plain.calls[-1][0] == sent, asked
+    r = await call(p, "POST", "/v1/messages", message("z-ai/glm-5.3"))      # never below TEE: refused, not swapped
+    assert r.status_code == 400 and "isn't attested in an enclave" in r.json()["error"]["message"]
     assert [m for _, _, m in attester.asked] == ["TEE/glm-5.3", "TEE/kimi-k3", "TEE/glm-5.3-flash"]   # once each
     assert attester.asked[0][:2] == (BASE, "sk-nano") and set(plain.made) == {(BASE, "sk-nano")}
     assert "provider" not in plain.calls[0][3]                         # never routed: the enclave is NanoGPT's
     attested = [r for r in read(tmp_path / "requests.log") if r["kind"] == "attested_tee"]
     assert attested[0]["level"] == "partial" and attested[0]["shortfalls"]
-    assert {r["tier"] for r in read(tmp_path / "requests.log") if r["kind"] == "request"} == {"tee"}
+    assert {r.get("tier") for r in read(tmp_path / "requests.log") if r["kind"] == "request"} == {"tee", None}  # None: refused
     monkeypatch.setattr(proxy_mod, "TEE_REATTEST_SECONDS", 0)
     await call(p, "POST", "/v1/messages", message("TEE/glm-5.3"))
     assert len(attester.asked) == 4                                    # attested again when it's old
@@ -399,11 +406,19 @@ async def test_nothing_goes_to_a_tee_model_whose_enclave_doesnt_attest():
     r = await call(p, "POST", "/v1/messages", message("TEE/glm-5.3"))
     assert r.status_code == 502 and "didn't attest, so nothing was sent" in r.text and not plain.calls
     assert r.headers["x-should-retry"] == "false"                      # it won't hold next time either
-    unreachable = TeeRefused("TEE/glm-5.3's attestation couldn't be fetched: down")
-    unreachable.__cause__ = ProviderError("nano-gpt answered HTTP 503", status_code=503)
-    p, _ = make(TEE, plain=plain, attester=Attester(fail=unreachable))
+    # as llm/tee.py says each: what failed decides, not the words (its 5xx is "couldn't fetch")
+    for said in ("TEE/glm-5.3's attestation couldn't be fetched: down",
+                 "nano-gpt couldn't fetch TEE/glm-5.3's attestation just now (503); this is on the provider's side"):
+        unreachable = TeeRefused(said)
+        unreachable.__cause__ = ProviderError("nano-gpt answered HTTP 503", status_code=503)
+        p, _ = make(TEE, plain=plain, attester=Attester(fail=unreachable))
+        r = await call(p, "POST", "/v1/messages", message("TEE/glm-5.3"))
+        assert r.status_code == 502 and "x-should-retry" not in r.headers and not plain.calls, said   # asked again
+    no_attestation = TeeRefused("TEE/deepseek-v4.1-flash offers no attestation")
+    no_attestation.__cause__ = ProviderError("nano-gpt answered HTTP 400", status_code=400)
+    p, _ = make(TEE, plain=plain, attester=Attester(fail=no_attestation))
     r = await call(p, "POST", "/v1/messages", message("TEE/glm-5.3"))
-    assert r.status_code == 502 and "x-should-retry" not in r.headers and not plain.calls     # asked again
+    assert r.headers["x-should-retry"] == "false"
 
 
 async def test_images_are_described_only_by_a_helper_as_protected_as_the_request():
@@ -495,3 +510,122 @@ def test_the_upstream_url_doesnt_double_v1():
 def test_a_plain_http_base_url_is_refused():
     with pytest.raises(ValueError, match="plain http"):
         Proxy(PRIVATE, "http://nano-gpt.com/api/v1", TOKEN)
+
+
+class Refusing(FakePrivate):
+    """A provider that refuses a request before it answers (as its HTTP status says), or stops partway."""
+
+    def __init__(self, error, partway=False):
+        super().__init__()
+        self.error, self.partway = error, partway
+
+    def stream(self, model, messages, tools=None, params=None):
+        self.calls.append((model, messages, tools, params))
+        error, partway = self.error, self.partway
+
+        async def go():
+            if partway:
+                yield "open", None
+                yield "text", "Half an answer"
+            raise error
+            yield
+        return go()
+
+
+def nanogpt_refused(status, said='{"error":"Insufficient balance"}'):
+    from daprivatecoder.llm.private_mode import PrivateModeError
+    return PrivateModeError(f"NanoGPT refused the Private Mode request (HTTP {status}): {said}", status, said)
+
+
+async def test_a_request_the_provider_refuses_is_told_by_its_status_and_asked_again_only_when_that_helps():
+    """An empty balance isn't a temporary server-side issue to be asked about ten times (Nov 8 2026: it
+    was a 502): each refusal reaches Claude Code before any reply begins, by what it is."""
+    for status, code, kind, retry in ((402, 402, "billing_error", False), (401, 403, "permission_error", False),
+                                      (400, 400, "invalid_request_error", False), (429, 429, "rate_limit_error", True),
+                                      (503, 502, "api_error", True), (None, 502, "api_error", False)):
+        for stream in (True, False):
+            p, fake = make(fake=Refusing(nanogpt_refused(status)))
+            r = await call(p, "POST", "/v1/messages", message("private/kimi-k3", stream=stream))
+            assert (r.status_code, r.json()["error"]["type"]) == (code, kind), (status, stream)
+            assert ("x-should-retry" in r.headers) == (not retry), (status, stream)
+    p, fake = make(fake=Refusing(nanogpt_refused(402)))
+    said = (await call(p, "POST", "/v1/messages", message("private/kimi-k3"))).json()["error"]["message"]
+    assert "NanoGPT balance is too low for this request" in said and "Top it up" in said
+
+
+async def test_a_model_that_stops_partway_says_so_in_the_stream_by_its_name():
+    from daprivatecoder.llm.private_mode import PrivateModeError
+    p, fake = make(fake=Refusing(PrivateModeError("the model stopped: context length exceeded"), partway=True))
+    r = await call(p, "POST", "/v1/messages", message("private/kimi-k3"))
+    assert r.status_code == 200 and said(r) == "Half an answer"
+    error = [d for n, d in parse(r.content) if n == "error"][0]["error"]
+    assert error["message"] == "private/kimi-k3: the model stopped: context length exceeded"
+
+
+async def test_nothing_is_sent_or_fetched_while_the_gate_says_so():
+    """DA Private Coder closed, or the editor that started the session switched off (gate.py): every
+    request is refused, saying so, and goes once it may again."""
+    p, fake = make()
+    why = {"now": "DA Private Coder is closed, so nothing was sent. Open it to go on with this conversation."}
+    p._gate = lambda: why["now"]
+    r = await call(p, "POST", "/v1/messages", message("private/glm-5-3"))
+    assert r.status_code == 403 and r.headers["x-should-retry"] == "false" and not fake.calls
+    assert r.json()["error"]["message"] == why["now"]
+    listed = (await call(p, "GET", "/v1/models")).json()["data"]
+    assert [m["id"] for m in listed] == list(PRIVATE.models)         # NanoGPT's list wasn't read
+    assert (await call(p, "POST", "/v1/messages/count_tokens", message("private/glm-5-3"))).status_code == 403
+    why["now"] = ""
+    assert (await call(p, "POST", "/v1/messages", message("private/glm-5-3"))).status_code == 200
+
+
+def test_a_refusal_lists_the_efforts_a_model_takes_only_as_words_of_their_own():
+    from daprivatecoder.proxy import effort_unsupported, efforts_named
+    assert efforts_named("reasoning_effort requires max_tokens >= 1024", "high") == ()
+    assert efforts_named("reasoning effort is too high for this model", "max") == ()
+    assert efforts_named("Kimi K3 supports thinking_effort values: low, high, max (value=medium)", "medium") == \
+        ("low", "high", "max")
+    assert effort_unsupported("Unsupported parameter: 'reasoning_effort' is not supported with this model.")
+    assert not effort_unsupported("reasoning_effort must be low, high, xhigh, max")
+
+
+class NoEffort(FakePrivate):
+    """A model that takes no reasoning effort at all (OpenAI's that don't reason)."""
+
+    def stream(self, model, messages, tools=None, params=None):
+        if "reasoning_effort" in (params or {}):
+            self.calls.append((model, messages, tools, params))
+            from daprivatecoder.llm.private_mode import PrivateModeError
+
+            async def no():
+                raise PrivateModeError("Unsupported parameter: 'reasoning_effort' is not supported with this model.", 400)
+                yield
+            return no()
+        return super().stream(model, messages, tools, params)
+
+
+async def test_a_model_that_takes_no_effort_is_asked_again_without_one_and_from_then_on():
+    p, fake = make(fake=NoEffort())
+    for _ in range(2):
+        r = await call(p, "POST", "/v1/messages", message("private/glm-5-3"))
+        assert r.status_code == 200 and "reasoning_effort" not in fake.calls[-1][3]
+    assert len(fake.calls) == 3                                      # refused once, then never sent one
+
+
+async def test_a_private_model_asked_for_holds_the_session_to_it_before_anything_is_awaited():
+    p, fake = make(NANO, provider_url="https://nano-gpt.com/api/v1")
+    p.choose("private/kimi-k3")
+    assert p.used_private
+    with pytest.raises(proxy_mod.Refused, match="has used a private model"):
+        p.choose("z-ai/glm-5.3")
+
+
+async def test_a_model_list_that_comes_back_empty_isnt_kept(monkeypatch):
+    p, fake = make()
+    answers = [[], CAPS]
+
+    async def load():
+        return capabilities.parse(answers.pop(0))
+    p._caps_loaders["nanogpt"] = load
+    monkeypatch.setattr(proxy_mod, "CAPS_RETRY_SECONDS", 0)
+    assert await p.capabilities() == {}
+    assert "TEE/kimi-k3" in await p.capabilities()                   # read again, and kept now
