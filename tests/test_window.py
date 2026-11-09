@@ -165,6 +165,16 @@ def test_the_owner_of_a_connection_is_read_from_the_kernels_table(tmp_path):
     assert _socket_owner(("127.0.0.1", 54885), ("127.0.0.1", 42509), (str(table),)) is None
 
 
+def test_nothing_dropped_on_the_window_loads_in_its_place():
+    """A dropped link or file was loaded in place of the page: every drop is cancelled, but for words
+    dropped into a text field."""
+    import re
+    script = (Path(manager.__file__).parent / "web" / "app.js").read_text()
+    assert re.search(r'for \(const kind of \["dragover", "drop"\]\) \{\s*document\.addEventListener\(kind, '
+                     r'\(e\) => \{ if \(!intoField\(e\)\) e\.preventDefault\(\); \}\);', script)
+    assert '!types.includes("Files")' in script
+
+
 def test_the_page_takes_the_token_out_of_the_address_bar():
     script = (Path(manager.__file__).parent / "web" / "app.js").read_text()
     assert 'sessionStorage.setItem("dpc-token"' in script and 'history.replaceState(null, "", "/")' in script

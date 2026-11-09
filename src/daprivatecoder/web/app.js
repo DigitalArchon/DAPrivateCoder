@@ -761,6 +761,17 @@ async function loadModels(profile, fresh = false) {
 }
 
 $("#refresh-btn").addEventListener("click", () => guarded(async () => { S.hosts = {}; await refresh(); await loadModels("", true); }));
+
+// A link or a file dropped on the window would load in its place: in the app window, a web page (or a
+// file) where DA Private Coder's was, as if it were the app's. Every drop is cancelled, but for words
+// dropped into a text field, which go into it as typed ones would.
+function intoField(e) {
+  const types = [...((e.dataTransfer && e.dataTransfer.types) || [])];
+  return e.target instanceof Element && Boolean(e.target.closest("input, textarea")) && !types.includes("Files");
+}
+for (const kind of ["dragover", "drop"]) {
+  document.addEventListener(kind, (e) => { if (!intoField(e)) e.preventDefault(); });
+}
 // whether the user is in the middle of something the page would lose if drawn again: a field or a
 // list with the focus, or a key typed and not yet saved
 function editing() {
