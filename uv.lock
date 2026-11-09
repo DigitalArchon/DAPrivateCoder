@@ -489,9 +489,11 @@ source = { editable = "." }
 dependencies = [
     { name = "brotli" },
     { name = "certifi" },
+    { name = "dnspython" },
     { name = "httpx" },
     { name = "keyring" },
     { name = "openai" },
+    { name = "pyasn1" },
     { name = "pyhpke" },
     { name = "pywebview" },
     { name = "starlette" },
@@ -510,9 +512,11 @@ dev = [
 requires-dist = [
     { name = "brotli", specifier = ">=1.2.1" },
     { name = "certifi", specifier = ">=2026.10.19" },
+    { name = "dnspython", specifier = ">=2.9.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "keyring", specifier = ">=25.7" },
     { name = "openai", specifier = ">=3.37" },
+    { name = "pyasn1", specifier = ">=0.6.5" },
     { name = "pyhpke", specifier = "==0.6.5" },
     { name = "pywebview", specifier = ">=6.2" },
     { name = "starlette", specifier = ">=1.9" },

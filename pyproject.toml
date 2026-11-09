@@ -32,6 +32,13 @@ dependencies = [
     "tinfoil==0.15.0",
     "tinfoil-ehbp==0.4.1",
     "pyhpke==0.6.5",
+    # pyasn1, which tinfoil and sigstore decode attestation certificates' extensions with: 0.6.5 fixes
+    # four denials of service in its decoders (GHSA-2qm8-x737-gmw5, GHSA-fm9c-5rcf-2q5p,
+    # GHSA-mm57-4v3p-rchx, GHSA-9m75-vc3g-4x39; Oct 2026). dnspython, under pydantic's email-validator:
+    # 2.9.0 fixes one in its name parser (GHSA-45c3-73f7-pv4m). Both locks pin past them already; the
+    # floors keep it so (as DA Assistant's private-mode.in does)
+    "pyasn1>=0.6.5",
+    "dnspython>=2.9.0",
     # The window (app.py), on the host's GTK and WebKitGTK through PyGObject (built from source into the
     # AppImage, packaging/appimage/sdists.lock; from source, the system's)
     "pywebview>=6.2",
