@@ -40,3 +40,23 @@ def ring(tmp_path, monkeypatch):
     creds.forget()
     yield memory
     creds.forget()
+
+
+@pytest.fixture
+def suspend(monkeypatch):
+    """`suspend(hours)`: the computer sleeps that long. The boot clock (dcap.since_boot) moves on;
+    time.monotonic, which stops while the computer is suspended, doesn't (and the event loop keeps
+    running on it). As DA Toolkit's tests have it."""
+    import time
+
+    if not hasattr(time, "CLOCK_BOOTTIME"):
+        pytest.skip("no CLOCK_BOOTTIME here")
+    slept = [0.0]
+    real = time.clock_gettime
+    monkeypatch.setattr(time, "clock_gettime",
+                        lambda which: real(which) + (slept[0] if which == time.CLOCK_BOOTTIME else 0))
+
+    def sleep(hours: float) -> None:
+        slept[0] += hours * 3600
+
+    return sleep
