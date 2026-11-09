@@ -111,10 +111,11 @@ const PROVIDERS = { nanogpt: "NanoGPT", openrouter: "OpenRouter", custom: "Anoth
 
 const chipOf = (kind) => h("span", { class: `chip ${KINDS[kind].chip[0]}` }, KINDS[kind].chip[1]);
 
+// a provider of your own by its address, without the user name and password one may have in it
 function providerName(st, profile) {
   const p = st.config && st.config.profiles[profile];
   if (!p || p.kind !== "standard") return "NanoGPT";
-  return p.provider === "custom" ? (p.base_url || "your provider") : PROVIDERS[p.provider];
+  return p.provider === "custom" ? (p.base_url_shown || "your provider") : PROVIDERS[p.provider];
 }
 
 // what a session of `kind` is, in a sentence; and for one that isn't private, what it gives away
@@ -408,7 +409,8 @@ function providerRows(st, tab, p, save) {
     rows.push(h("div", { class: "model-row" }, h("label", {}, "Address"), h("div", { class: "row" }, url,
       h("button", { class: "small primary", onclick: go }, "Save"))),
       h("div", { class: "model-row" }, h("span", {}), h("div", { class: "small muted" },
-        "The provider's OpenAI-compatible API address. It must be https, except on this computer or your local network.")));
+        "The provider's OpenAI-compatible API address. It must be https, except on this computer or your local network. "
+        + "A user name and password in it are kept in your keyring, not in the settings file.")));
   }
   const pk = st.provider_key;
   if (pk && !S.customUrl) {

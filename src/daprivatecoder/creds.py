@@ -1,5 +1,6 @@
 """The API keys (NanoGPT's, and a standard profile's provider's: OpenRouter, another), in the OS
-keyring (Secret Service on Linux). After DA Vibe Manager's creds.py.
+keyring (Secret Service on Linux), and an address with a user name and password written into it, as it
+was typed (config.py keeps it without them). After DA Vibe Manager's creds.py.
 
 Right after login the keyring may not be there yet, or still be locked. A key that can't be read
 then is not a key that isn't there: reading raises KeyringUnavailable, and a key that isn't stored
@@ -118,6 +119,44 @@ def delete_key(provider: str = "nanogpt", base_url: str = "") -> None:
         raise
     except Exception as e:  # noqa: BLE001 - locked, say: said to the user as it is
         raise KeyringUnavailable(f"Your keyring couldn't remove the key: {e}") from e
+    _known.pop((SERVICE, user), None)
+
+
+# the keyring entry of an address typed with a user name and password (`setting`: config.py's name for
+# where it is, "base_url" or "profiles.standard.base_url"), as DA Assistant names its own
+ADDRESS = "{}_with_password"
+
+
+def address(setting: str) -> str | None:
+    """The address `setting` was typed as, user name and password and all, if the keyring has one."""
+    return _get(SERVICE, ADDRESS.format(setting))
+
+
+def keep_address(setting: str, value: str) -> None:
+    """Keep `value`, an address with a user name and password written into it, as `setting`'s."""
+    user = ADDRESS.format(setting)
+    if _known.get((SERVICE, user)) == value:
+        return                                # it has it already: nothing is written
+    try:
+        _backend().set_password(SERVICE, user, value)
+    except KeyringUnavailable:
+        raise
+    except Exception as e:  # noqa: BLE001 - said to the user as it is
+        raise KeyringUnavailable(f"Your keyring couldn't store the address's password: {e}") from e
+    _known[(SERVICE, user)] = value
+
+
+def forget_address(setting: str) -> None:
+    """Take the address kept for `setting` out of the keyring, if there is one."""
+    user = ADDRESS.format(setting)
+    try:
+        _backend().delete_password(SERVICE, user)
+    except PasswordDeleteError:
+        pass
+    except KeyringUnavailable:
+        raise
+    except Exception as e:  # noqa: BLE001 - said to the user as it is
+        raise KeyringUnavailable(f"Your keyring couldn't remove the address's password: {e}") from e
     _known.pop((SERVICE, user), None)
 
 

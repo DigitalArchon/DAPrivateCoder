@@ -24,6 +24,7 @@ from pathlib import Path
 
 from . import __version__, config
 from .config import ConfigError, state_dir
+from .netpolicy import shown
 
 PRIVATE = "private"
 # the window's own options (app.py): with none of the commands, they open it
@@ -35,7 +36,8 @@ class CliError(Exception):
 
 
 def _fail(prog: str, e: Exception) -> int:
-    print(f"{prog}: {e}", file=sys.stderr)
+    from .netpolicy import addresses_shown
+    print(f"{prog}: {addresses_shown(str(e))}", file=sys.stderr)      # no address with its password in it
     return 1
 
 
@@ -82,7 +84,7 @@ def _key(args) -> int:
         base_url = cfg.provider_url(cfg.profile("standard"))
         if not base_url:
             raise CliError("The standard profile's provider isn't a custom one: set provider and base_url first.")
-        name = f"the provider at {base_url}"
+        name = f"the provider at {shown(base_url)}"
     flag = "" if provider == "nanogpt" else f" --provider {provider}"
     if args.action == "status":
         key = creds.get_key(provider, base_url)
@@ -193,7 +195,7 @@ def _editor(args) -> int:
 def _status(args) -> int:
     from . import creds, editor, launcher
     cfg = config.load()
-    print(f"DA Private Coder {__version__}\nSettings: {cfg.path}\nNanoGPT: {cfg.base_url}")
+    print(f"DA Private Coder {__version__}\nSettings: {cfg.path}\nNanoGPT: {shown(cfg.base_url)}")
     searches = {"zero-retention": "Linkup (keeps nothing)", "best": "Perplexity and Kagi (not zero retention)",
                 "off": "off"}
     for p in cfg.profiles.values():
@@ -226,7 +228,7 @@ def _check(args) -> int:
     cfg = config.load()
     profile = cfg.profile(args.profile)
     if profile.kind != "standard" and not offers_private_mode(cfg.base_url):
-        raise CliError(f"{cfg.base_url} isn't NanoGPT, so it has no Private Mode or TEE models.")
+        raise CliError(f"{shown(cfg.base_url)} isn't NanoGPT, so it has no Private Mode or TEE models.")
 
     def line(m: str, c: dict, markup: float = 1.0) -> str:
         price = c.get("pricing")
@@ -279,7 +281,7 @@ def _check(args) -> int:
         url = cfg.provider_url(profile)
         caps = await capabilities.fetch(profile.provider, url)
         if caps is None:
-            print(f"{url} lists nothing of what its models can do or cost.")
+            print(f"{shown(url)} lists nothing of what its models can do or cost.")
             return 0
         print(f"{config.PROVIDERS[profile.provider]}: the profile's models (prices per million tokens, input / cached "
               "input / output). Not private: they're sent in the clear.")
@@ -366,7 +368,7 @@ def _serve(args) -> int:
     log = UsageLog(state_dir() / "requests.log", secrets.token_hex(4))
     editors = [(name, Path(path)) for name, path in args.editor]
     log.write("session", profile=profile.name, profile_kind=profile.kind, private=profile.private, models=list(profile.models),
-              vision=profile.vision_model, provider=profile.provider, base_url=cfg.provider_url(profile), pid=os.getpid(),
+              vision=profile.vision_model, provider=profile.provider, base_url=shown(cfg.provider_url(profile)), pid=os.getpid(),
               folder=os.getcwd(), editor=", ".join(name for name, _ in editors))
     # only while DA Private Coder is open, and the editor that started it (if one did) still runs its profile
     p = proxy.Proxy(profile, cfg.base_url, token, log=log, provider_url=cfg.provider_url(profile),

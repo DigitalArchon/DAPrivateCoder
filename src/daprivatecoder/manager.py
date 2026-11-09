@@ -17,6 +17,7 @@ from .config import ConfigError
 from .llm import capabilities, routes
 from .llm.client import is_tee
 from .llm.private_mode import Enclave, list_private_models, offers_private_mode, relay_url
+from .netpolicy import shown
 from .search import NAMES as SEARCH_NAMES
 
 PROFILE_FIELDS = ("model", "opus_model", "fast_model", "vision_model", "reasoning", "web_search", "provider", "base_url")
@@ -99,8 +100,10 @@ class Manager:
                      "can_choose_folder": self.can_choose_folder, "tray": self.tray, **self.prefs()}
         try:
             cfg = config.load()
-            out["config"] = {"base_url": cfg.base_url, "path": str(cfg.path),
-                             "profiles": {n: asdict(p) for n, p in cfg.profiles.items()}}
+            # an address with a password: as typed for its field, never so in what the window says of it
+            out["config"] = {"base_url": shown(cfg.base_url), "path": str(cfg.path),
+                             "profiles": {n: {**asdict(p), "base_url_shown": shown(p.base_url)}
+                                          for n, p in cfg.profiles.items()}}
             out["config_error"] = ""
         except ConfigError as e:
             cfg, out["config"], out["config_error"] = None, None, str(e)
@@ -381,7 +384,7 @@ class Manager:
         if hit and not fresh and time.monotonic() - hit[0] < MODELS_FOR:
             return hit[1]
         if p.kind != "standard" and not offers_private_mode(cfg.base_url):
-            raise UserError(f"{cfg.base_url} isn't NanoGPT, so it has no Private Mode or TEE models.")
+            raise UserError(f"{shown(cfg.base_url)} isn't NanoGPT, so it has no Private Mode or TEE models.")
         caps: dict | None
         if p.kind == "private":
             ids = await list_private_models(cfg.base_url)
@@ -417,7 +420,8 @@ class Manager:
         check_url(url, "Your provider's base URL")
         async with httpx.AsyncClient(timeout=30, follow_redirects=False) as client:
             r = await client.get(url.rstrip("/") + "/models", headers={"Authorization": f"Bearer {key}"} if key else {})
-            r.raise_for_status()
+            if r.status_code >= 300:            # said without the address's password (httpx's own error quotes it)
+                raise UserError(f"{shown(url)} answered HTTP {r.status_code} when asked for its models.")
             data = r.json().get("data") if isinstance(r.json(), dict) else None
         return sorted(m["id"] for m in data or [] if isinstance(m, dict) and isinstance(m.get("id"), str))
 
@@ -439,7 +443,7 @@ class Manager:
         if model:
             return await self.check_tee(cfg, model)
         if not offers_private_mode(cfg.base_url):
-            raise UserError(f"{cfg.base_url} isn't NanoGPT, so it has no Private Mode.")
+            raise UserError(f"{shown(cfg.base_url)} isn't NanoGPT, so it has no Private Mode.")
         try:
             att = (await Enclave(relay_url(cfg.base_url)).current()).attestation
         except Exception as e:  # noqa: BLE001 - said as it is

@@ -7,7 +7,10 @@ fc00::/7), link-local, and `.local` names. An onion service is authenticated and
 end by Tor itself, so http to a `.onion` name counts as secure. A URL outside all that which isn't
 https is refused with an explanation, never used and never rewritten.
 
-And an API key goes only where a header can carry it (key_problem).
+A user name and password written into an address (a provider of your own behind a password) are
+never said: every message and log names the address as shown() has it, and the settings file keeps it
+without them (config.py; the keyring has it as typed). And an API key goes only where a header can
+carry it (key_problem).
 """
 
 from __future__ import annotations
@@ -25,6 +28,11 @@ _PRIVATE_NETS = tuple(ipaddress.ip_network(n) for n in (
 
 # What no API key has in it: a backslash, white space, a control character (DA Assistant's netguard)
 _UNSAFE = re.compile(r"[\\\s\x00-\x1f\x7f]")
+# Everything of a text up to its last "@" before a query or a fragment, the scheme and "//" aside: where
+# an address that can't be read may have a user name and password (DA Assistant's netguard)
+_UP_TO_AT = re.compile(r"^((?:[^:/?#]+:)?//)?[^?#]*@")
+# an address in a text, as an error message quotes one
+_ADDRESS_IN_TEXT = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s'\"<>]+")
 
 
 class InsecureURL(ValueError):
@@ -80,15 +88,61 @@ def check_url(url: str, what: str = "This address") -> str:
         parsed = urlparse(url)
         host = parsed.hostname
     except ValueError as e:              # one urlparse can't take (http://[::1]@evil.example/)
-        raise InsecureURL(f"{what} isn't an address DA Private Coder can use ({e}): {url[:80]!r}") from None
+        raise InsecureURL(f"{what} isn't an address DA Private Coder can use ({e}): {shown(url)[:80]!r}") from None
     if parsed.scheme not in ("http", "https") or not host:
-        raise InsecureURL(f"{what} must be a full https:// URL (got {url[:80]!r})")
+        raise InsecureURL(f"{what} must be a full https:// URL (got {shown(url)[:80]!r})")
     if not is_secure(url):
         raise InsecureURL(
             f"{what} uses plain http to {host}, which isn't on this machine, the local network or a "
             "Tor onion service. Use its https:// address instead."
         )
     return url
+
+
+def shown(url: str | None) -> str:
+    """`url` as it may be shown, logged or copied into a bug report: without the user name and password
+    an address may carry (https://alice:secret@host/v1 is https://…@host/v1).
+
+    For any text at all, and never raising: what is said of an address that can't be used names it too.
+    One that can't be read as an address (half typed, without a scheme, with a port no address can
+    have) says nothing certain of where its host begins, so all it has up to its last "@" goes. (DA
+    Assistant's netguard.shown, Nov 2026.)"""
+    text = str(url or "")
+    try:
+        parsed = urlparse(text)
+        parsed.port                 # raises on a port that is not a number
+    except ValueError:
+        parsed = None
+    if parsed is None or not parsed.netloc:
+        return _UP_TO_AT.sub(r"\1…@", text, count=1)
+    if "@" not in parsed.netloc:
+        return text
+    return parsed._replace(netloc="…@" + parsed.netloc.rsplit("@", 1)[1]).geturl()
+
+
+def without_password(url: str | None) -> str:
+    """`url` with the user name and password written into it taken out, as shown() does, but leaving an
+    address, not a placeholder, where they were: what the settings file keeps of an address whose
+    password is in the keyring. Text with neither is returned as it is. (DA Assistant's netguard.)"""
+    text = str(url or "")
+    if "@" not in text:
+        return text
+    try:
+        parsed = urlparse(text)
+        parsed.port                 # raises on a port that is not a number
+    except ValueError:
+        parsed = None
+    if parsed is None or not parsed.netloc:
+        return _UP_TO_AT.sub(r"\1", text, count=1)
+    if "@" not in parsed.netloc:
+        return text
+    return parsed._replace(netloc=parsed.netloc.rsplit("@", 1)[1]).geturl()
+
+
+def addresses_shown(text: str) -> str:
+    """`text` with every address in it as shown() has it: for an error that quotes the address a
+    request went to, as httpx's do ("… for url 'https://alice:secret@host/v1/models'")."""
+    return _ADDRESS_IN_TEXT.sub(lambda m: shown(m.group(0)), str(text))
 
 
 def key_problem(key: str | None, name: str = "the provider") -> str | None:

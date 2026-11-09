@@ -18,6 +18,7 @@ from . import creds
 from .config import ConfigError
 from .editor import EditorError
 from .manager import Manager, UserError, in_thread
+from .netpolicy import addresses_shown
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
 HEADERS = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "X-Content-Type-Options": "nosniff"}
@@ -52,9 +53,11 @@ def create_app(token: str, manager: Manager, desktop=None, on_quit: Callable[[],
             try:
                 result = await handler(request, body)
             except (UserError, ConfigError, EditorError, creds.KeyringUnavailable) as e:
-                return JSONResponse({"error": str(e)}, status_code=400, headers=HEADERS)
+                return JSONResponse({"error": addresses_shown(str(e))}, status_code=400, headers=HEADERS)
             except Exception as e:  # noqa: BLE001 - the window says it, rather than nothing happening
-                return JSONResponse({"error": f"{type(e).__name__}: {e}"}, status_code=500, headers=HEADERS)
+                # an address it quotes never with its password (httpx's errors name the URL they were for)
+                return JSONResponse({"error": addresses_shown(f"{type(e).__name__}: {e}")}, status_code=500,
+                                    headers=HEADERS)
             return JSONResponse(result if result is not None else {"ok": True}, headers=HEADERS)
         return endpoint
 

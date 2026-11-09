@@ -351,6 +351,26 @@ async def test_each_profiles_models_come_from_its_provider(window, monkeypatch):
     assert listed["hosts"][0]["id"] == "parasail"
 
 
+async def test_a_password_in_a_providers_address_is_kept_in_the_keyring_and_never_said(window, ring, monkeypatch):
+    """The Address field keeps what was typed; the settings file and whatever the window says of it
+    don't: the password is in the keyring (config.py)."""
+    app, *_ = window
+    typed = "https://bob:hunter2@llm.example/v1"
+    st = (await call(app, "POST", "/api/profile", {"profile": "standard",
+                                                   "fields": {"provider": "custom", "base_url": typed}}))[1]
+    p = st["config"]["profiles"]["standard"]
+    assert p["base_url"] == typed and p["base_url_shown"] == "https://…@llm.example/v1"
+    assert "hunter2" not in config.config_path().read_text()
+    assert ring.store[("daprivatecoder", "profiles.standard.base_url_with_password")] == typed
+    # the server refusing its list of models: httpx's error names the URL it was for, password and all
+    import httpx
+    real = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *a, **kw: real(*a, **{
+        "transport": httpx.MockTransport(lambda r: httpx.Response(401, json={"error": "who?"})), **kw}))
+    status, said = await call(app, "GET", "/api/models?profile=standard&fresh=1")
+    assert status >= 400 and "hunter2" not in said["error"] and "llm.example" in said["error"]
+
+
 async def test_some_folders_on_da_private_coder_in_the_editor_the_rest_as_usual(window, tmp_path, monkeypatch):
     """Windows can differ: a folder chosen runs on its kind of session in the editor, any other as
     usual (or as `other` says); Open in VSCodium chooses the folder, switches the editor on, opens it."""

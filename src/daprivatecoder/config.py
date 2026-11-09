@@ -1,6 +1,7 @@
 """DA Private Coder's settings: ~/.config/daprivatecoder/config.toml, written with the defaults (and
 what each one means) on first use. It never holds secrets: the NanoGPT key lives in the keyring
-(creds.py). The window saves them by writing the whole file again, with the same notes (render).
+(creds.py), and so does an address typed with a user name and password (_as_typed). The window saves
+them by writing the whole file again, with the same notes (render).
 
 A profile is a way to start Claude Code: the models it uses, and how their requests travel (its
 kind). A private profile takes NanoGPT Private Mode models only (private/…), so every request is
@@ -21,7 +22,7 @@ from pathlib import Path
 
 from .llm import routes as routes_mod
 from .llm.client import RANK, private_id, tier_of
-from .netpolicy import InsecureURL, check_url
+from .netpolicy import InsecureURL, check_url, shown, without_password
 
 APP_ID = "daprivatecoder"
 NANOGPT_BASE_URL = "https://nano-gpt.com/api/v1"
@@ -97,6 +98,9 @@ class Config:
     claude: str = ""
     profiles: dict[str, Profile] = field(default_factory=dict)
     path: Path | None = None
+    # the addresses whose password the keyring couldn't be asked for when the file was read (_as_typed):
+    # saved, they don't take out the one it may have
+    unread: frozenset = field(default=frozenset(), compare=False, repr=False)
 
     def profile(self, name: str) -> Profile:
         try:
@@ -206,6 +210,72 @@ def render(cfg: Config) -> str:
 
 
 DEFAULT_TEXT = render(DEFAULTS)
+
+# ---------------------------------------------------------------------- addresses with a password in them
+
+# The settings that are addresses (NanoGPT's base_url, a profile's own provider's) may have a user name
+# and password written into them: a provider of your own behind a password. The file has the address
+# without them (netpolicy.without_password), and the keyring the address as typed, under the setting's
+# name (creds.address): put back together when the file is read, and only while the file's address is
+# that one less its password, so a password goes to no address but the one it was typed for, whatever
+# the file is edited to. Until Nov 2026 the address went into the file as typed. (DA Assistant's
+# config.py, 729a415.)
+
+
+def _addresses(cfg: Config) -> list[tuple[str, str]]:
+    """(setting, address) for each address `cfg` has: NanoGPT's, and each profile's own provider's (one
+    whose provider is custom: another's isn't written, render)."""
+    return [("base_url", cfg.base_url)] + [(f"profiles.{name}.base_url", p.base_url) for name, p in cfg.profiles.items()
+                                           if p.provider == "custom" and p.base_url]
+
+
+def _with_address(cfg: Config, setting: str, value: str) -> Config:
+    if setting == "base_url":
+        return replace(cfg, base_url=value)
+    name = setting.split(".")[1]
+    return cfg.with_profile(replace(cfg.profiles[name], base_url=value))
+
+
+def _has_password(url: str) -> bool:
+    return without_password(url) != url
+
+
+def _as_typed(cfg: Config) -> Config:
+    """`cfg`, as its file has it, with each address as it was typed: the file's, with the user name and
+    password the keyring has for it. One the file has a password in (written so before, or typed in by
+    hand) is moved to the keyring, and out of the file once it's there; where the keyring can't take
+    it, it stays in the file and is used, as it was."""
+    from . import creds
+    loose = []
+    for setting, written in _addresses(cfg):
+        if _has_password(written):
+            loose.append((setting, written))
+            continue
+        try:
+            stored = creds.address(setting)
+        except creds.KeyringUnavailable:
+            # used without: a server that needs its password says so
+            cfg = replace(cfg, unread=cfg.unread | {setting})
+            continue
+        if stored and without_password(stored) == written:
+            cfg = _with_address(cfg, setting, stored)
+    if loose:
+        try:
+            for setting, written in loose:
+                creds.keep_address(setting, written)
+            save(cfg)                       # the file again, without them (and with its notes, as the window writes it)
+        except (creds.KeyringUnavailable, ConfigError, OSError):
+            pass                            # used as they are, and moved at the next save that can
+    return cfg
+
+
+def _in_file(path: Path) -> dict[str, str]:
+    """The addresses the file at `path` has now, by setting ({} if it can't be read)."""
+    try:
+        return dict(_addresses(parse(path.read_text(), path)))
+    except (OSError, ConfigError):
+        return {}
+
 
 # ---------------------------------------------------------------------- the file, read
 
@@ -320,7 +390,8 @@ def parse(text: str, path: Path | None = None) -> Config:
 
 
 def load(path: Path | None = None) -> Config:
-    """The settings, from `path` (default: config_path()), written with the defaults if there are none."""
+    """The settings, from `path` (default: config_path()), written with the defaults if there are none;
+    each address as it was typed (_as_typed)."""
     path = path or config_path()
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -329,14 +400,43 @@ def load(path: Path | None = None) -> Config:
         text = path.read_text()
     except OSError as e:
         raise ConfigError(f"{path} couldn't be read: {e}") from None
-    return parse(text, path)
+    return _as_typed(parse(text, path))
 
 
 def save(cfg: Config, path: Path | None = None) -> Config:
-    """Write `cfg` (checked first: what is written is read back the same) and return it as read."""
+    """Write `cfg` (checked first: what is written is read back the same) and return it as read, each
+    address as typed. An address with a user name and password goes to the keyring as typed, and into
+    the file without them; one without takes out of the keyring any kept for its setting. A password
+    the keyring can't take is written nowhere, and nothing is saved, but for one the file has already,
+    with that very address, which stays there as it was."""
+    from . import creds
     path = path or cfg.path or config_path()
-    text = render(cfg)
-    saved = parse(text, path)                    # refuses what it couldn't load again
+    typed = dict(_addresses(cfg))
+    loose = {setting: value for setting, value in typed.items() if _has_password(value)}
+    on_file = cfg
+    for setting, value in loose.items():
+        on_file = _with_address(on_file, setting, without_password(value))
+    parse(render(on_file), path)                 # refuses what it couldn't load again, before anything is kept
+    there = None
+    for setting, value in loose.items():
+        try:
+            creds.keep_address(setting, value)
+        except creds.KeyringUnavailable as e:
+            there = _in_file(path) if there is None else there
+            if there.get(setting) != value:
+                raise ConfigError(f"{shown(value)} has a user name and password in it, which are kept in your "
+                                  f"keyring, and the keyring couldn't take them ({e}). Nothing was saved: unlock "
+                                  "your keyring, or leave them out of the address.") from None
+            on_file = _with_address(on_file, setting, value)    # in the file already: it stays, until the keyring can take it
+    for setting in ["base_url"] + [f"profiles.{name}.base_url" for name in cfg.profiles]:
+        if setting not in loose and setting not in cfg.unread:
+            try:
+                if creds.address(setting):
+                    creds.forget_address(setting)    # taken out of the address, or the address gone
+            except creds.KeyringUnavailable:
+                pass                                # and never put back: it fits no address but its own
+    text = render(on_file)
+    saved = parse(text, path)
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".")
     try:
@@ -346,4 +446,7 @@ def save(cfg: Config, path: Path | None = None) -> Config:
     except BaseException:
         os.unlink(tmp)
         raise
+    for setting, written in _addresses(saved):
+        if setting in typed and without_password(typed[setting]) == without_password(written):
+            saved = _with_address(saved, setting, typed[setting])
     return saved

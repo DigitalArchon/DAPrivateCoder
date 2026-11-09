@@ -42,7 +42,7 @@ from .llm.dcap import since_boot
 from .llm.anthropic_bridge import VISION_PROMPT, ImageDescriber, estimate_tokens, has_images, message, sse, to_openai
 from .llm.client import RANK, LLMClient, is_claude, is_private_mode, is_tee, private_id, tier_of
 from .llm.private_mode import Attestation, Enclave, PrivateModeClient, list_private_models, offers_private_mode, relay_url
-from .netpolicy import check_url, key_problem
+from .netpolicy import addresses_shown, check_url, key_problem, shown
 from .usagelog import UsageLog
 
 MODEL_PATHS = frozenset({("POST", "/v1/messages"), ("POST", "/v1/messages/count_tokens"), ("GET", "/v1/models")})
@@ -446,7 +446,7 @@ class Proxy:
 
     def _private(self, model: str):
         if self.enclave is None:
-            raise Refused(403, f"{model} is a NanoGPT Private Mode model, and {self.base_url} isn't NanoGPT: "
+            raise Refused(403, f"{model} is a NanoGPT Private Mode model, and {shown(self.base_url)} isn't NanoGPT: "
                                "nothing was sent.")
         return self._private_client(self.base_url, self._read_key(), self.enclave)
 
@@ -723,7 +723,9 @@ class Proxy:
     @staticmethod
     def _error(e: Refused):
         from starlette.responses import JSONResponse
-        return JSONResponse({"type": "error", "error": {"type": e.kind, "message": str(e)}}, status_code=e.status,
+        # an address in it never with its password (an error from the network can quote one)
+        return JSONResponse({"type": "error", "error": {"type": e.kind, "message": addresses_shown(str(e))}},
+                            status_code=e.status,
                             headers={} if e.retry else {"x-should-retry": "false"})
 
     async def model_list(self) -> dict:
@@ -848,7 +850,7 @@ class Proxy:
             raise Refused(502, f"Could not reach {name}: {e}", "api_error", retry=True) from e
         if resp.is_redirect:
             # never followed: the key would go wherever it points
-            where = resp.headers.get("location", "")[:200]
+            where = shown(resp.headers.get("location", ""))[:200]
             await resp.aclose()
             raise Refused(502, f"{name} redirected the request to {where}; refusing to follow.", "api_error")
         out_headers = {k: v for k, v in resp.headers.items() if k.lower() in RETURN_HEADERS}
