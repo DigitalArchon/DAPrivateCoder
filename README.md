@@ -198,7 +198,9 @@ runs the model:
 
 - **NanoGPT** (with your NanoGPT key), **OpenRouter** (with an OpenRouter key), or **another
   provider** with an OpenAI-compatible API (its address: https, or http only on this computer or
-  your network; a key if it needs one). Each key is in your keyring, set in the window.
+  your network; a key if it needs one). Each key is in your keyring, set in the window. A user name
+  and password written into the address (`https://user:password@host/v1`) are kept in your keyring
+  too, not in the settings file, and nothing the app shows or logs names them.
 - **Runs on** (per model, NanoGPT and OpenRouter): the provider's own choice of host (on NanoGPT,
   what a subscription covers), or the fastest, the cheapest, the quickest to answer, or a host you
   pick from the provider's list, with its precision, price and speed; FP8 or better by default.
@@ -283,7 +285,10 @@ not on Claude Code's command line, which every user of the computer can see. The
 Manager, after DAToolkit and SealedLore.
 
 The window is a small local web page (served on 127.0.0.1 with a token for each launch) shown with
-your system's GTK and WebKitGTK, as DA Vibe Manager's is.
+your system's GTK and WebKitGTK, as DA Vibe Manager's is. In a web browser, it's opened with a
+one-time address only your own programs can use, which takes the browser on to the window: the token
+itself is on no command line, which every user of the computer can read. A link or file dropped on
+the window doesn't load in its place.
 
 ## Running from source
 
