@@ -183,6 +183,19 @@ async def test_attestation_cached_then_expires():
     assert relay.verifies == 2
 
 
+async def test_the_enclave_is_attested_again_after_a_sleep(suspend):
+    """Aged by time.monotonic, which stops while the computer is suspended: a laptop woken after hours
+    took the attestation made before it slept for a few minutes old, and sealed to it."""
+    relay = Relay(replies=[(200, TOOL_REPLY)] * 3)
+    client = relay.client(Enclave(RELAY, verifier=relay.verifier))
+    await collect(client)
+    await collect(client)
+    assert relay.verifies == 1
+    suspend(2)
+    await collect(client)
+    assert relay.verifies == 2
+
+
 async def test_only_private_models_are_sent():
     relay = Relay()
     with pytest.raises(PrivateModeError, match="isn't a Private Mode model"):

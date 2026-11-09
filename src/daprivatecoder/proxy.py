@@ -38,6 +38,7 @@ import httpx
 from . import creds
 from .config import Profile
 from .llm import capabilities, routes
+from .llm.dcap import since_boot
 from .llm.anthropic_bridge import VISION_PROMPT, ImageDescriber, estimate_tokens, has_images, message, sse, to_openai
 from .llm.client import RANK, LLMClient, is_claude, is_private_mode, is_tee, private_id, tier_of
 from .llm.private_mode import Attestation, Enclave, PrivateModeClient, list_private_models, offers_private_mode, relay_url
@@ -284,7 +285,8 @@ def _error_text(raw: bytes) -> str:
 PrivateClientFactory = Callable[[str, str, Enclave], object]   # (base_url, key, enclave) -> PrivateModeClient
 PlainClientFactory = Callable[[str, "str | None"], object]     # (base_url, key) -> LLMClient
 TeeCheck = Callable[[str, str, str], dict]                     # (NanoGPT's base_url, key, model) -> attestation
-# a TEE model's enclave is attested again after this, before its next request (as DA Vibe Manager does)
+# a TEE model's enclave is attested again after this, before its next request (as DA Vibe Manager does), on a
+# clock that runs on while the computer sleeps (dcap.since_boot: time.monotonic stops during a suspend)
 TEE_REATTEST_SECONDS = 900
 # providers with an Anthropic endpoint, where a Claude model goes as Claude Code wrote the request
 ANTHROPIC_ENDPOINTS = ("nanogpt", "openrouter")
@@ -507,7 +509,7 @@ class Proxy:
         than TEE_REATTEST_SECONDS is made again first. Raises Refused when it doesn't hold."""
         async with self._tee_lock:
             hit = self._tee.get(model)
-            if hit and time.monotonic() - hit[0] < TEE_REATTEST_SECONDS:
+            if hit and since_boot() - hit[0] < TEE_REATTEST_SECONDS:
                 return hit[1]
             key = self._read_key() or ""
             try:
@@ -516,7 +518,7 @@ class Proxy:
                 self._record("attested_tee", model=model, error=str(e)[:300])
                 raise Refused(502, f"{model}'s enclave didn't attest, so nothing was sent to it: {e}", "api_error",
                               retry=_worth_retrying(e)) from e
-            self._tee[model] = (time.monotonic(), att)
+            self._tee[model] = (since_boot(), att)
             self._record("attested_tee", model=model, **{k: att.get(k) for k in (
                 "level", "summary", "shortfalls", "tcb_status", "gpus", "instances", "signing_address")})
             return att

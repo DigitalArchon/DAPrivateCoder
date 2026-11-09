@@ -397,6 +397,19 @@ async def test_a_tee_session_attests_each_model_before_anything_goes_to_it(tmp_p
     assert len(attester.asked) == 4                                    # attested again when it's old
 
 
+async def test_a_tee_models_enclave_is_attested_again_after_a_sleep(suspend):
+    """15 minutes on time.monotonic, which stops while the computer is suspended: a session woken after a
+    night took the attestation made before it for minutes old."""
+    attester = Attester()
+    p, _ = make(TEE, plain=FakePlain(), attester=attester)
+    for _ in range(2):
+        assert (await call(p, "POST", "/v1/messages", message("TEE/glm-5.3"))).status_code == 200
+    assert len(attester.asked) == 1
+    suspend(1)
+    assert (await call(p, "POST", "/v1/messages", message("TEE/glm-5.3"))).status_code == 200
+    assert len(attester.asked) == 2
+
+
 async def test_nothing_goes_to_a_tee_model_whose_enclave_doesnt_attest():
     from daprivatecoder.llm.secure_http import ProviderError
     from daprivatecoder.llm.tee import TeeRefused

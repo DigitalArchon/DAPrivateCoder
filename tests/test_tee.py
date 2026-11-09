@@ -524,6 +524,24 @@ def test_the_boot_clock_is_read_and_the_monotonic_one_only_without_it(monkeypatc
     assert dcap.since_boot() == 50.0
 
 
+def test_nvidias_keys_are_fetched_again_after_a_sleep(suspend, monkeypatch):
+    """NVIDIA's keys, kept for an hour, were aged by time.monotonic too."""
+    monkeypatch.setattr(nras, "_keys", {"at": 0.0, "keys": {}})
+    asked = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        asked.append(str(request.url))
+        return httpx.Response(200, json={"keys": [{"kid": "k1"}]})
+
+    session = httpx.Client(transport=httpx.MockTransport(handler))
+    for _ in range(2):
+        assert "k1" in nras._jwks(session)
+    assert asked == [nras.JWKS_URL]
+    suspend(2)
+    nras._jwks(session)
+    assert asked == [nras.JWKS_URL] * 2
+
+
 def test_intels_collateral_is_fetched_again_after_a_sleep(suspend, monkeypatch):
     """Intel's collateral was aged by time.monotonic, which stops while the machine is suspended: a laptop
     that slept for hours took it for as fresh as when it went to sleep."""
