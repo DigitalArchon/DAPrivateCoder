@@ -124,3 +124,59 @@ def test_every_locked_package_carries_a_hash():
             assert "--hash=sha256:" in hashes, f"{name}.lock: {package}=={version}"
     tools = dict(re.findall(r"^([\w.-]+)==(\S+)", (PACKAGING / "lock-requirements.lock").read_text(), re.M))
     assert (tools["pip"], tools["pip-tools"]) == ("26.2.2", "7.6.1")
+
+
+# ---------------------------------------------------------------------- what of the build machine gets in
+
+def test_nothing_of_the_build_machine_gets_in():
+    build = (PACKAGING / "build.sh").read_text()
+    for rule in ("-root-owned -no-xattrs", "--invalidation-mode unchecked-hash", "PYTHONHASHSEED=0",
+                 '-ffile-prefix-map=$W/=', "direct_url.json -delete", 'grep -rlaF "$W/AppDir" "$W/AppDir"'):
+        assert rule in build, rule
+
+
+def test_bytecode_names_its_source_as_it_is_inside_the_image(tmp_path):
+    """compileall as build.sh runs it, on a folder laid out as the AppDir is: each .pyc unchecked-hash,
+    naming /usr/python/lib/..., not the folder the build ran in. (DA Assistant's test, 8cfe093.)"""
+    import marshal
+    import os
+    import subprocess
+    import sys
+
+    build = (PACKAGING / "build.sh").read_text()
+    command = next(line for line in _commands(build) if "-m compileall" in line)
+    # -B: its interpreter would otherwise write its own imports' bytecode first, dated, and compileall
+    # would leave those as they are
+    assert '"$PY" -B -m compileall' in command
+    lib = tmp_path / "AppDir" / "usr" / "python" / "lib" / "python3.12"
+    lib.mkdir(parents=True)
+    (lib / "mod.py").write_text("def f():\n    return 1\n")
+    subprocess.run(["bash", "-c", command], check=True,
+                   env={"PATH": os.environ.get("PATH", ""), "PY": sys.executable, "W": str(tmp_path)})
+    names = []
+    for pyc in tmp_path.rglob("*.pyc"):
+        data = pyc.read_bytes()
+        assert int.from_bytes(data[4:8], "little") == 1, pyc         # unchecked-hash
+        code = marshal.loads(data[16:])
+        names += [code.co_filename, code.co_consts[0].co_filename]
+    assert sorted(set(names)) == ["/usr/python/lib/python3.12/mod.py"]
+
+
+def test_console_scripts_that_name_the_build_python_are_left_out(tmp_path):
+    import os
+    import subprocess
+
+    build = (PACKAGING / "build.sh").read_text()
+    start = build.index('for script in "$W"/AppDir/usr/python/bin/*; do')
+    loop = build[start:build.index("\ndone\n", start) + 6]
+    bin_dir = tmp_path / "AppDir" / "usr" / "python" / "bin"
+    bin_dir.mkdir(parents=True)
+    scripts = {"daprivatecoder": f"#!{tmp_path}/AppDir/usr/python/bin/python3\nfrom daprivatecoder.cli import main\n",
+               "pydoc3.12": "#!/bin/sh\n'''exec' \"$(dirname -- \"$0\")/python3.12\"\n",
+               "python3.12": "\x7fELF\x02\x01\x01\0" + "\0" * 64}
+    for name, text in scripts.items():
+        (bin_dir / name).write_text(text, encoding="latin-1")
+    (bin_dir / "python3").symlink_to("python3.12")
+    subprocess.run(["bash", "-c", f"set -euo pipefail\n{loop}"], check=True,
+                   env={"PATH": os.environ.get("PATH", ""), "W": str(tmp_path)})
+    assert sorted(os.listdir(bin_dir)) == ["pydoc3.12", "python3", "python3.12"]

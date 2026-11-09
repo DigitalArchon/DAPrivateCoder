@@ -70,6 +70,17 @@ Runtime packages are installed only as prebuilt wheels; the few without one (`SD
 stack (tinfoil, tinfoil-ehbp, pyhpke) is pinned exactly in `pyproject.toml` as well, and the tests
 check that the lock agrees.
 
+What keeps the result the same wherever it is built: each source is unpacked into a fixed directory
+and the build path is mapped out of compiled code (`-ffile-prefix-map`); bytecode is compiled once,
+with a fixed hash seed, as *unchecked-hash* `.pyc` files, which store their source's hash where a date
+would go and are loaded without being checked against the source (nothing can change it on the
+read-only image); files are owned by root with no extended attributes, and dated `SOURCE_DATE_EPOCH`.
+
+Nor does the build's own folder get in. Each `.pyc` names its source as it is inside the image
+(`/usr/python/lib/...`); pip's `direct_url.json` files and the console scripts it writes
+(`daprivatecoder`, `keyring`, ...), whose `#!` line names the build's Python, are left out; and the
+build stops if anything in the image still names that folder.
+
 ## Verifying a release
 
 1. Check out the release's tag.
