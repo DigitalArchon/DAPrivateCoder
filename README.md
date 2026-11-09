@@ -26,7 +26,8 @@ and standard models of NanoGPT, OpenRouter or another OpenAI-compatible provider
 - **Sealed:** everything Claude Code sends to the model: your prompts, the files and command
   output it reads, and images (for a model that can't see, a private model describes them).
 - **Checked before anything is sent:** the enclave's hardware report (AMD SEV-SNP or Intel TDX),
-  checked against Sigstore's record of Tinfoil's router release, again every five minutes. A reply
+  checked against Sigstore's record of Tinfoil's router release, again every five minutes (the time
+  the computer slept included), every fetch of it over https only, redirects included. A reply
   must come back sealed by the enclave and marked as Private Mode, or it is refused. A private model
   NanoGPT has retired is refused before anything is sent.
 - **NanoGPT sees:** your account, which model, when, how much, and how many tokens.
@@ -159,14 +160,38 @@ each request: sealed, TEE, or clear.
 
 **TEE** sessions run NanoGPT's `TEE/` models (by default GLM-5.3, Kimi K3 for `/model opus`, and
 GLM-5.3 Flash for quick tasks and images). Before anything is sent to one, its enclave is attested,
-and again every 15 minutes: its Intel TDX quote is verified up to Intel's root, with Intel's
-revocation lists and TCB ratings, and its GPUs' evidence by NVIDIA's attestation service, all bound
-to a nonce of this session's (DA Vibe Manager's verifier). An enclave that doesn't hold gets
-nothing. Some attest only in part, which **Enclave checks** in the window says: NanoGPT's TEE GLM
-models pass through RedPill's gateway, whose enclave is checked but not the model's own. Either way,
-**NanoGPT's gateway reads every prompt and reply in the clear**: the enclave protects them from the
-host that runs the model, not from NanoGPT. A TEE session never sends to a model in the clear: a
-request for one is refused, saying so.
+and again every 15 minutes, the time the computer slept included: its Intel TDX quote is verified up
+to Intel's root (every certificate in its chain one allowed to issue it), with Intel's revocation
+lists and TCB ratings, and its GPUs' evidence by NVIDIA's attestation service, all bound to a nonce
+of this session's (DA Vibe Manager's verifier). An enclave that doesn't hold gets nothing.
+
+Each reply is then checked against the record NanoGPT keeps of it, signed by the attested key: the
+record's hash of the reply must be that of the exact bytes that came, and where RedPill's gateway
+keeps a signed receipt, it must hold too, saying the model the reply came from was verified. The
+check comes once the reply has reached Claude Code: it never holds a reply up or changes it.
+**Usage** marks each TEE request with what it found:
+
+- **reply verified**: the record is of the reply that came, byte for byte;
+- **reply signed**: signed by the attested key, but NanoGPT rebuilds this model's replies, so the
+  text can't be compared;
+- **⚠ reply not verified**: no record of the reply could be read (some models' providers keep none),
+  so nothing shows it came from the attested enclave;
+- **⚠ reply check failed**: the reply doesn't match its record. The enclave is attested again before
+  anything more is sent to that model.
+
+NanoGPT's TEE models attest only in part for now, which **Enclave checks** in the window says, and
+why: most pass through RedPill's gateway, whose enclave is checked but not the model's own; and
+through NanoGPT the receipts' keys aren't in the quote. The quote binds the key that signs each
+reply's record, so the record's tie to the attested enclave holds; the receipt's own key is only
+published beside it, so a receipt's word that the model was verified rests on NanoGPT, not on the
+hardware.
+
+What an attestation doesn't prove: which software the enclave runs (no measurement is compared with a
+published one: it shows genuine, current hardware holding a live key bound to this session's nonce,
+not what runs on it), or what was sent (the record hashes the request as NanoGPT forwarded it, which
+this app can't reproduce). And either way, **NanoGPT's gateway reads every prompt and reply in the
+clear**: the enclave protects them from the host that runs the model, not from NanoGPT. A TEE session
+never sends to a model in the clear: a request for one is refused, saying so.
 
 **Standard** sessions run any model of their provider, **in the clear** to it and to the host that
 runs the model:
