@@ -33,6 +33,7 @@ import json
 import os
 import secrets
 import socket
+import sys
 import time
 from typing import Awaitable, Callable
 
@@ -601,7 +602,6 @@ class Proxy:
                 outcome, detail = "unchecked", str(e)[:300]
             if outcome == "failed":
                 self._doubted.add(model)
-                import sys
                 print(f"daprivatecoder: {model}'s reply didn't match the record its attested enclave signed: its "
                       "enclave is attested again before anything more is sent to it.", file=sys.stderr, flush=True)
             self._record("tee_reply", of=rec.get("ref"), model=model, reply=outcome, **({"detail": detail} if detail else {}))
