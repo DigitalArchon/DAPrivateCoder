@@ -12,16 +12,23 @@ space inside a key, an address or a name hid it from every check, and the provid
 and with compatibility forms (fullwidth digits) as their plain ones (safety/hidden.py, DA Toolkit's
 and DA Vibe Manager's). Plain words go through ("cinnamon", "firefox"): on their own they say
 nothing about the user, and no search would be possible without them. Claude Code also asks before
-each search, showing it."""
+each search, showing it.
+
+The address of every page Claude Code reads with WebFetch is checked the same way (check_url, run
+as its PreToolUse hook: launcher.session_settings), as DA Vibe Manager checks its assistant's: an
+address carries data out as well as a search does."""
 
 from __future__ import annotations
 
 import ipaddress
+import json
 import os
 import pwd
 import re
 import socket
+import sys
 import unicodedata
+from urllib.parse import unquote_plus, urlsplit
 
 from .safety.hidden import visible
 
@@ -86,14 +93,21 @@ def readings(text: str) -> list[str]:
     return [shown] + ([plain] if plain != shown else [])
 
 
-def check(query: str, known: list[str] | None = None) -> list[str]:
+def _secrets(text: str, runs: bool = True) -> list[re.Match]:
+    found = [m for pattern in SECRETS for m in pattern.finditer(text)]
+    if runs:
+        found += [m for m in _RANDOM.finditer(text) if re.search(r"\d", m.group()) and re.search(r"[A-Za-z]", m.group())]
+    return found
+
+
+def check(query: str, known: list[str] | None = None, runs: bool = True) -> list[str]:
     """The parts of `query` that mustn't leave in a search (empty: it may be searched); a secret cut to
-    its first four characters, so the refusal doesn't carry it again."""
+    its first four characters, so the refusal doesn't carry it again. `runs`: a long run of letters and
+    digits counts as a secret (not in an address, whose pages have long names of their own)."""
     found: list[str] = []
     who = names() if known is None else known
     for text in readings(query):
-        secret = [m for pattern in SECRETS for m in pattern.finditer(text)]
-        secret += [m for m in _RANDOM.finditer(text) if re.search(r"\d", m.group()) and re.search(r"[A-Za-z]", m.group())]
+        secret = _secrets(text, runs)
         low = text.lower()
         named = [(m, name) for name in who for m in re.finditer(rf"(?<![\w]){re.escape(name.lower())}(?![\w])", low)]
         named += [(m, m.group()) for m in [*_EMAIL.finditer(text), *_MAC.finditer(text)]]
@@ -102,3 +116,47 @@ def check(query: str, known: list[str] | None = None) -> list[str]:
         found += [shown for m, shown in named if not any(m.start() < s.end() and s.start() < m.end() for s in secret)]
         found += [s.group()[:4] + "…" for s in secret]
     return list(dict.fromkeys(found))
+
+
+def check_url(url: str, known: list[str] | None = None) -> list[str]:
+    """The parts of a web address that mustn't leave in it (empty: it may be read), as for a search: in
+    its path, query and fragment, and in its host's labels before the site's own name
+    (data.attacker.example), where a page's address carries data out as well as a search does. The
+    site itself is what is read, and isn't checked (an address on this computer's network goes no
+    further than the network)."""
+    try:
+        parts = urlsplit(visible(str(url or "")).strip())
+        host = parts.hostname or ""
+    except ValueError:
+        return ["an address that can't be read"]
+    rest = unquote_plus(" ".join((parts.path, parts.query, parts.fragment)))
+    labels = [x for x in host.rstrip(".").split(".") if x]
+    sub = " ".join(labels[:-2]) if len(labels) > 2 and not re.fullmatch(r"[\d.]+", host) else ""
+    found = check(" ".join([*re.split(r"[/?&=#+;]+", rest), sub]), known, runs=False)
+    # a token=… whole, and a password in the address itself (https://bob:…@host)
+    found += [m.group()[:4] + "…" for text in readings(rest + " " + str(url or "")) for m in _secrets(text, runs=False)]
+    return list(dict.fromkeys(found))
+
+
+def fetch_hook(stdin=None, stdout=None) -> int:
+    """Claude Code's PreToolUse hook for WebFetch (launcher.session_settings: `python -I -m
+    daprivatecoder.identity`): an address that names this computer, holds a secret or what can't be
+    read is refused before Claude Code reads the page, whatever the permission mode."""
+    stdin, stdout = stdin or sys.stdin, stdout or sys.stdout
+    try:
+        event = json.load(stdin)
+        url = event["tool_input"]["url"]
+        found = check_url(url) if isinstance(url, str) else ["an address that isn't text"]
+    except (ValueError, KeyError, TypeError):
+        found = ["a request the check couldn't read"]
+    if found:
+        reason = ("Not fetched: the address names this computer or its user, or holds a secret ("
+                  + ", ".join(repr(x) for x in found[:5]) + "). It leaves in the clear, as a search does: read a "
+                  "general page instead (the project's documentation, its issues or releases).")
+        json.dump({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                                          "permissionDecisionReason": reason}}, stdout)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(fetch_hook())

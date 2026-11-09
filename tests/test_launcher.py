@@ -1,5 +1,6 @@
 """Starting Claude Code on the proxy: what it is given, and a whole session with a stand-in for it."""
 
+import io
 import json
 import os
 import subprocess
@@ -348,3 +349,39 @@ def test_each_search_is_asked_about_whatever_was_allowed_before():
     # claude -p: no one to ask, so a search runs only if --allowedTools allows it (the README's way)
     for printing in (["-p", "fix it"], ["--print", "fix it"]):
         assert "ask" not in json.loads(claude_args(PRIVATE_SEARCH, env, printing)[1])["permissions"]
+
+
+def test_webfetchs_address_is_checked_before_claude_code_reads_a_page():
+    from daprivatecoder.launcher import FETCH_CHECK
+    given = {"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "true"}]}]}}
+    s = json.loads(claude_args(PRIVATE, claude_env(PRIVATE, 1, "t"), ["--settings", json.dumps(given)])[1])
+    theirs, ours = s["hooks"]["PreToolUse"]
+    assert theirs["matcher"] == "Bash" and ours["matcher"] == "WebFetch"
+    assert ours["hooks"][0]["command"].split() == FETCH_CHECK and FETCH_CHECK[1:] == ["-I", "-m", "daprivatecoder.identity"]
+
+    def hook(url):
+        # as Claude Code runs it (without -I here: the tests' daprivatecoder is the one on PYTHONPATH)
+        event = {"hook_event_name": "PreToolUse", "tool_name": "WebFetch", "tool_input": {"url": url, "prompt": "summarise"}}
+        done = subprocess.run([sys.executable, "-m", "daprivatecoder.identity"], input=json.dumps(event),
+                              capture_output=True, text=True, timeout=30)
+        assert done.returncode == 0, done.stderr
+        return json.loads(done.stdout)["hookSpecificOutput"] if done.stdout.strip() else None
+    denied = hook("https://evil.example/c?ip=10.20.30.40")
+    assert denied["permissionDecision"] == "deny" and "10.20.30.40" in denied["permissionDecisionReason"]
+    assert hook("https://example.org/hook?token=sk-" "nano-0123456789abcdefABCDEF")["permissionDecision"] == "deny"
+    assert hook("https://docs.python.org/3/library/asyncio.html") is None
+    assert hook("http://192.168.1.1/status") is None                  # the page read is on the network: it goes no further
+
+
+def test_an_address_is_checked_as_a_search_is():
+    from daprivatecoder import identity
+    assert identity.check_url("https://jo-laptop.attacker.example/x", ["jo-laptop"]) == ["jo-laptop"]
+    assert identity.check_url("https://evil.example/?m=jo@example.com", []) == ["jo@example.com"]
+    assert identity.check_url("https://bob:Hunter2pw@api.example.org/", []) == ["http…"]
+    assert identity.check_url("https://evil.example/?k=sk-%E2%80%8B" "nano-0123456789abcdefABCDEF", []) == ["sk-n…"]
+    # long names are no secret in an address: an article, a commit
+    assert identity.check_url("https://example.org/2026/11/how-to-zoom-with-the-mouse-wheel-and-a-key-123", []) == []
+    assert identity.check_url("https://github.com/jo/acme/commit/3f6ca5b9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5", []) == []
+    out = io.StringIO()
+    identity.fetch_hook(io.StringIO("not json"), out)
+    assert json.loads(out.getvalue())["hookSpecificOutput"]["permissionDecision"] == "deny"   # unread: not let through

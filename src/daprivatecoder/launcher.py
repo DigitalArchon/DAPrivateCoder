@@ -22,6 +22,7 @@ import json
 import os
 import re
 import secrets
+import shlex
 import shutil
 import socket
 import subprocess
@@ -173,6 +174,8 @@ def _settings_value(value: str) -> dict:
 
 # the search server's tool, as Claude Code's permission rules name it (mcp_config's server, search.py's tool)
 SEARCH_TOOL = "mcp__daprivatecoder__web_search"
+# WebFetch's address is checked before Claude Code reads a page, as a search's query is (identity.py)
+FETCH_CHECK = [sys.executable, "-I", "-m", "daprivatecoder.identity"]
 
 
 def session_settings(profile: Profile, env: dict[str, str], given: dict | None = None, asks: bool = True) -> dict:
@@ -198,6 +201,11 @@ def session_settings(profile: Profile, env: dict[str, str], given: dict | None =
         ask = list(permissions.get("ask") or [])
         permissions["ask"] = ask + [a for a in (SEARCH_TOOL,) if a not in ask]
     out["permissions"] = permissions
+    # a denial from a hook holds whatever the permission mode, and alongside the hooks given
+    hooks = dict(out.get("hooks") or {})
+    hooks["PreToolUse"] = list(hooks.get("PreToolUse") or []) + [
+        {"matcher": "WebFetch", "hooks": [{"type": "command", "command": shlex.join(FETCH_CHECK), "timeout": 30}]}]
+    out["hooks"] = hooks
     return out
 
 
