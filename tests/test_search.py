@@ -193,3 +193,24 @@ async def test_the_query_sent_is_the_one_checked():
     s, nano = server("best")
     await s.search({"query": "starlette​ streaming⁠ response", "sites": ["www.star​lette.io"]})
     assert nano.asked[0]["query"] == "starlette streaming response" and nano.asked[0]["includeDomains"] == ["www.starlette.io"]
+
+
+@pytest.mark.parametrize("query", ["hf_" "AbCdEfGhIjKlMnOpQrStUvWxYz012345 invalid", "stripe sk_" "live_51HabcdefghijklmnopqrstuvwxYZ",
+                                   "maps AIza" "SyA-abcdefghijklmnopqrstuvwxyz12345 quota", "curl https://bob:Hunter2pw@api.example.org",
+                                   "api_key=abc123def456 rejected", "hooks.slack.com/services/" "T0000/B0000/XXXXXXXXXXXX 404",
+                                   "SG." "abcdefghijklmnopqrstuv.abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG 401"])
+async def test_more_secrets_never_leave_and_the_refusal_shows_only_their_start(query):
+    s, nano = server("best")
+    text, failed = await s.search({"query": query})
+    assert failed and text.startswith("Not searched") and not nano.asked
+    for kept in ("AbCdEfGhIjKl", "51Habcdefghij", "abcdefghijklmnopqrstuvwxyz12345", "Hunter2pw", "abc123def456", "XXXXXXXXXXXX",
+                 "abcdefghijklmnopqrstuv."):
+        assert kept not in text
+
+
+@pytest.mark.parametrize("query", ["rotate an api key every 90 days", "github personal access token scopes",
+                                   "password manager for linux"])
+async def test_talking_about_secrets_is_not_one(query):
+    s, nano = server("best")
+    _, failed = await s.search({"query": query})
+    assert not failed and nano.asked

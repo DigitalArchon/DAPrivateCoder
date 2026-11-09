@@ -29,14 +29,23 @@ _EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 _MAC = re.compile(r"\b[0-9a-f]{2}(?::[0-9a-f]{2}){5}\b", re.I)
 _IPV4 = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b")
 SECRETS = tuple(re.compile(p) for p in (
-    r"-----BEGIN [A-Z ]*PRIVATE KEY-----",
+    r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY",
     r"\bsk-[A-Za-z0-9_-]{16,}",                          # OpenAI, Anthropic, NanoGPT and the like
     r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}",       # GitHub
     r"\bgithub_pat_[A-Za-z0-9_]{20,}",
-    r"\bglpat-[A-Za-z0-9_-]{16,}",                       # GitLab
+    r"\bgl(?:pat|ptt|dt|rt|cbt)-[A-Za-z0-9_-]{16,}",     # GitLab
     r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b",                    # AWS
-    r"\bxox[abposr]-[A-Za-z0-9-]{10,}",                  # Slack
+    r"\b(?:xox[abeoprs]|xapp)-[A-Za-z0-9-]{10,}",        # Slack
+    r"\b[sr]k_(?:live|test)_[A-Za-z0-9]{16,}",           # Stripe
+    r"\bAIza[0-9A-Za-z_-]{35}",                          # Google
+    r"\bhf_[A-Za-z0-9]{30,}",                            # Hugging Face
+    r"\bnpm_[A-Za-z0-9]{30,}",                           # npm
+    r"\bpypi-AgE[A-Za-z0-9_-]{50,}",                     # PyPI
+    r"\bSG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}",     # SendGrid
     r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.",      # a JSON web token
+    r"\bhooks\.slack\.com/(?:services|workflows|triggers)/\S+", r"\bdiscord(?:app)?\.com/api/webhooks/\d+/\S+",
+    r"\b[a-z][a-z0-9+.-]*://[^\s:/@]+:[^\s@/]+@",        # a password in an address
+    r"(?i)\b[\w.-]*(?:password|passwd|pwd|passphrase|secret|token|api[_-]?key|access[_-]?key)[\w.-]*=[^\s&]+",
 ))
 # a long run of letters and digits mixed: a key, a token, a hash
 _RANDOM = re.compile(r"[A-Za-z0-9+/_=-]{32,}")
@@ -78,18 +87,18 @@ def readings(text: str) -> list[str]:
 
 
 def check(query: str, known: list[str] | None = None) -> list[str]:
-    """The parts of `query` that mustn't leave in a search (empty: it may be searched)."""
+    """The parts of `query` that mustn't leave in a search (empty: it may be searched); a secret cut to
+    its first four characters, so the refusal doesn't carry it again."""
     found: list[str] = []
     who = names() if known is None else known
     for text in readings(query):
+        secret = [m for pattern in SECRETS for m in pattern.finditer(text)]
+        secret += [m for m in _RANDOM.finditer(text) if re.search(r"\d", m.group()) and re.search(r"[A-Za-z]", m.group())]
         low = text.lower()
-        for name in who:
-            if re.search(rf"(?<![\w]){re.escape(name.lower())}(?![\w])", low):
-                found.append(name)
-        found += _EMAIL.findall(text) + _MAC.findall(text)
-        found += [ip for ip in _IPV4.findall(text) if _private_ip(ip)]
-        for pattern in SECRETS:
-            found += [m.group() for m in pattern.finditer(text)]
-        found += [m.group() for m in _RANDOM.finditer(text)
-                  if re.search(r"\d", m.group()) and re.search(r"[A-Za-z]", m.group())]
+        named = [(m, name) for name in who for m in re.finditer(rf"(?<![\w]){re.escape(name.lower())}(?![\w])", low)]
+        named += [(m, m.group()) for m in [*_EMAIL.finditer(text), *_MAC.finditer(text)]]
+        named += [(m, m.group()) for m in _IPV4.finditer(text) if _private_ip(m.group())]
+        # (bob:PASSWORD@host reads as an e-mail address too: the secret shows it, cut)
+        found += [shown for m, shown in named if not any(m.start() < s.end() and s.start() < m.end() for s in secret)]
+        found += [s.group()[:4] + "…" for s in secret]
     return list(dict.fromkeys(found))
