@@ -15,7 +15,7 @@ def test_a_second_launch_brings_the_first_up_and_says_how(monkeypatch):
     assert asked == [1]
 
 
-def test_a_name_another_user_holds_is_taken_for_no_copy_of_ours(monkeypatch):
+def test_a_name_another_user_holds_is_taken_for_no_copy_of_ours(monkeypatch, capsys):
     """An abstract socket's name has no permissions: another user could bind ours first, and every
     launch then took itself for a second copy, asked the squatter to show its window, and quit."""
     import socket
@@ -39,11 +39,12 @@ def test_a_name_another_user_holds_is_taken_for_no_copy_of_ours(monkeypatch):
                 pass
     thread = threading.Thread(target=answer, daemon=True)
     thread.start()
-    monkeypatch.setattr(tray, "_peer_uid", lambda sock: os.getuid() + 1)      # it is someone else's
+    monkeypatch.setattr(tray, "peer_uid", lambda sock: os.getuid() + 1)      # it is someone else's
     try:
         assert tray.claim_single_instance(lambda: "never") == (True, "")
         thread.join(3)
         assert heard in ([], [b""]), "it was asked nothing"
+        assert "Another user's program holds DA Private Coder's name" in capsys.readouterr().err
     finally:
         squatter.close()
 
@@ -54,7 +55,7 @@ def test_another_users_program_is_told_nothing_and_shows_nothing(monkeypatch):
     monkeypatch.setattr(tray, "_socket_name", lambda: f"\0daprivatecoder-test-other-{os.getpid()}".encode())
     asked = []
     assert tray.claim_single_instance(lambda: asked.append(1) or "window") == (True, "")
-    monkeypatch.setattr(tray, "_peer_uid", lambda sock: os.getuid() + 1)
+    monkeypatch.setattr(tray, "peer_uid", lambda sock: os.getuid() + 1)
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as c:
         c.settimeout(2)
         c.connect(tray._socket_name())
@@ -72,7 +73,7 @@ def test_the_peer_of_a_unix_socket_is_who_the_kernel_says():
 
     a, b = socket.socketpair()
     with a, b:
-        assert tray._peer_uid(a) == tray._peer_uid(b) == os.getuid()
+        assert tray.peer_uid(a) == tray.peer_uid(b) == os.getuid()
 
 
 def test_with_no_tray_there_is_none_to_hide_to(monkeypatch):

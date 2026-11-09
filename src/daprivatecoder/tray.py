@@ -8,10 +8,11 @@ extension) would otherwise hide the window to an icon nobody can see. With none,
 and closing the window quits the app, as before.
 
 A second launch (from the menu, say, while the window is in the tray) finds the first through an
-abstract Unix socket named for this user and asks it to show its window, then exits. An abstract name
-has no permissions, so another user could take it first: each end checks who the other is (the
-kernel's SO_PEERCRED), and a name another user holds is taken for none, rather than for this app
-already running (every launch would otherwise have asked the squatter, and quit).
+abstract Unix socket named for this user and asks it to show its window, then exits. Anyone on this
+computer can take an abstract name, so each side asks the other's user (SO_PEERCRED): a launch hands
+over only to a copy of this user's, and a copy shows its window only for this user's launches. A name
+another user took makes no copy of this one's exit: it runs, unfound by later launches. (As DA Vibe
+Manager's tray.py does, Nov 2026.)
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from __future__ import annotations
 import os
 import socket
 import struct
+import sys
 import threading
 from pathlib import Path
 from typing import Callable
@@ -31,14 +33,13 @@ def _socket_name() -> bytes:
     return f"\0daprivatecoder-{os.getuid()}".encode()
 
 
-def _peer_uid(sock: socket.socket) -> int | None:
-    """The user id of the process at the other end of a connected Unix socket (None if it can't be told)."""
+def peer_uid(sock: socket.socket) -> int | None:
+    """The user of the process at the other end of a Unix socket (SO_PEERCRED), or None."""
     try:
-        _pid, uid, _gid = struct.unpack("3i", sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED,
-                                                              struct.calcsize("3i")))
-    except (OSError, AttributeError, struct.error):
+        creds = sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i"))
+    except OSError:
         return None
-    return uid
+    return struct.unpack("3i", creds)[1]
 
 
 def claim_single_instance(on_show: Callable[[], str]) -> tuple[bool, str]:
@@ -54,8 +55,10 @@ def claim_single_instance(on_show: Callable[[], str]) -> tuple[bool, str]:
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as c:
                 c.settimeout(2)
                 c.connect(_socket_name())
-                if _peer_uid(c) != os.getuid():
-                    return True, ""     # another user's: this runs as the only copy (just not found by later ones)
+                if peer_uid(c) != os.getuid():
+                    # another user holds this user's name (anyone may take an abstract one): no copy of ours
+                    print(f"Another user's program holds {NAME}'s name for this user; starting anyway.", file=sys.stderr)
+                    return True, ""
                 c.sendall(b"show\n")
                 try:
                     said = c.recv(256).decode("utf-8", "replace").strip()
@@ -73,8 +76,8 @@ def claim_single_instance(on_show: Callable[[], str]) -> tuple[bool, str]:
             except OSError:
                 return
             with conn:
-                if _peer_uid(conn) != os.getuid():
-                    continue            # another user's program: it is told nothing, and nothing is shown
+                if peer_uid(conn) != os.getuid():
+                    continue                # only this user's own launches bring the window up
                 conn.settimeout(2)
                 try:
                     if conn.recv(64).startswith(b"show"):
