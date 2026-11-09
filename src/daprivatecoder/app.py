@@ -1,7 +1,7 @@
 """The window: the local server (server.py) shown in a small app window (pywebview on the host's
 GTK and WebKitGTK), or in the web browser when there's no WebKitGTK or no display. After DA Vibe
-Manager's app.py, without its tray: closing the window ends the app (sessions it opened go on in
-their own terminals)."""
+Manager's app.py. Closing the window hides it to the tray (tray.py), where there is one: DA Private
+Coder is still open, so the sessions on it go on until Quit. With no tray, closing it quits."""
 
 from __future__ import annotations
 
@@ -37,10 +37,38 @@ def _free_port() -> int:
 class Desktop:
     """What the page can't do itself inside the app window: the folder chooser (GTK's, on the main
     thread). The page reaches it through the server (token only): pywebview's own JS bridge builds
-    its functions with `new Function`, which the page's Content-Security-Policy rightly refuses."""
+    its functions with `new Function`, which the page's Content-Security-Policy rightly refuses.
+    Also the window's place in the tray: shown, or hidden there."""
 
     def __init__(self):
         self.window = None
+        self.tray = None
+        self.visible = True
+        self._told = False
+
+    @property
+    def has_tray(self) -> bool:
+        return bool(self.tray and self.tray.available)
+
+    def show(self) -> None:
+        """On the GTK main thread."""
+        if self.window is not None:
+            self.window.show()
+            self.window.restore()
+            self.visible = True
+
+    def hide(self) -> None:
+        """To the tray (on the GTK main thread). The first time, a notification says what it means: the
+        sessions on DA Private Coder go on, which a closed window would otherwise suggest they don't."""
+        if self.window is None or not self.has_tray:
+            return
+        self.window.hide()
+        self.visible = False
+        if not self._told:
+            self._told = True
+            from .tray import notify
+            notify("DA Private Coder is still running in the tray",
+                   "Sessions using it keep working. To stop them, choose Quit from its tray icon.")
 
     def choose_folder(self, start: str = "") -> str:
         """The folder the user picks ("" if they cancel). Blocks until they do."""
@@ -196,6 +224,21 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--port", type=int, default=0, help="port to listen on (default: random)")
     args = ap.parse_args(argv)
 
+    # one copy at a time: a second launch (the menu, while this one is in the tray) brings this one up
+    from . import tray as tray_mod
+    shown: dict = {}
+
+    def show_from_elsewhere() -> str:
+        if shown.get("show"):
+            return shown["show"]()
+        return "starting"
+    first, said = tray_mod.claim_single_instance(show_from_elsewhere)
+    if not first:
+        print({"window": f"{NAME} is already running: its window was brought up.",
+               "browser": f"{NAME} is already running: it was opened in your web browser."}.get(
+            said, f"{NAME} is already running (with --no-open, at the address it printed)."), file=sys.stderr)
+        return
+
     token = secrets.token_urlsafe(32)
     port = args.port or _free_port()
     use_browser = args.browser or args.no_open
@@ -238,6 +281,11 @@ def main(argv: list[str] | None = None) -> None:
             if not args.no_open:
                 import webbrowser
                 webbrowser.open(url)
+
+                def open_again() -> str:
+                    webbrowser.open(url)
+                    return "browser"
+                shown["show"] = open_again
             while thread.is_alive():          # until Quit in the page, or Ctrl+C
                 thread.join(0.5)
         else:
@@ -251,11 +299,22 @@ def main(argv: list[str] | None = None) -> None:
             desktop.window = window
 
             def on_closing():
+                if desktop.has_tray and not server.should_exit:
+                    desktop.hide()
+                    return False                 # still open, in the tray: its sessions go on
                 server.should_exit = True
                 return True
             window.events.closing += on_closing
 
+            def show_window() -> str:
+                GLib.idle_add(lambda: (desktop.show(), False)[1])
+                return "window"
+
             def on_started():
+                desktop.tray = tray_mod.Tray(on_open=desktop.show, on_quit=quit_all)
+                manager.tray = desktop.has_tray
+                shown["show"] = show_window
+
                 def close(*_):
                     quit_all()
                     return False

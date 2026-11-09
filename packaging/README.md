@@ -12,6 +12,7 @@ what only Vibe Manager carries (tor, the Claude Code CLI): Claude Code here is t
 | Every Python dependency, pinned with hashes, Tinfoil's SDK among them | **Claude Code**: the CLI, or the one in the VSCodium or VS Code extension |
 | PyGObject and pycairo, built from pinned sources | The Secret Service keyring (GNOME Keyring, KWallet) |
 | A fallback `libgirepository-2.0` for hosts that lack it | A terminal, and the CA store (`/etc/ssl`), used before the bundled certifi |
+| | The tray, if there is one: XApp (Mint), Ayatana or AppIndicator (KDE, CachyOS, GNOME's extension) |
 
 WebKitGTK is deliberately **not** bundled: it should get the distribution's security updates, not
 wait for a DA Private Coder release. Without it, DA Private Coder opens in the default web browser

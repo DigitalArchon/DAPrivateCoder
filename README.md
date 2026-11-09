@@ -12,8 +12,9 @@ usual, on Anthropic's models.
 Its window sets it up (your NanoGPT key, the switch for your editor and which folders it covers),
 chooses the models and how Claude Code searches the web, checks the enclave, opens Claude Code in a
 folder, shows each session running on it and where its last request went, and what each request
-cost, never what was said. **Claude Code runs on DA Private Coder only while it is open**: closed,
-nothing more is sent (see [While it's open](#while-its-open)).
+cost, never what was said. **Claude Code runs on DA Private Coder only while it is open**: once you
+quit it, nothing more is sent. Closing its window keeps it open in the tray (see
+[While it's open](#while-its-open)).
 
 For convenience it also runs Claude Code on models that **aren't** end-to-end encrypted, and says so
 wherever you choose them: NanoGPT's TEE models, each enclave attested before anything is sent to it,
@@ -95,7 +96,12 @@ will stop.
 ## While it's open
 
 DA Private Coder runs Claude Code only while it is open (its window, or `daprivatecoder --browser`).
-Closed, or quit, every session on it stops at its next request, saying "DA Private Coder is closed,
+Closing the window doesn't close it where your desktop has a tray: it stays there, its sessions keep
+working, and the first time a notification says so. Its tray icon opens the window again (as does
+launching it again), and **Quit**, in its menu or at the bottom of the window, closes it. Without a
+tray (GNOME without the AppIndicator extension, say), closing the window quits.
+
+Once it has quit, every session on it stops at its next request, saying "DA Private Coder is closed,
 so nothing was sent"; opened again, each goes on where it was. `claude-private` in a terminal doesn't
 start at all while it's closed, and the editor's Claude Code in a folder chosen for it says so in the
 conversation. Nothing reaches NanoGPT without it open.

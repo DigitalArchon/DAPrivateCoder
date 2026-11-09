@@ -67,6 +67,7 @@ class Manager:
     def __init__(self, ui_notice: str = "", can_choose_folder: bool = False):
         self.ui_notice = ui_notice
         self.can_choose_folder = can_choose_folder
+        self.tray = False            # whether closing the window keeps DA Private Coder open, in the tray (app.py)
         self._models: dict[tuple, tuple[float, list[dict]]] = {}
         self.log = usagelog.UsageLog(config.state_dir() / "requests.log", "window")
 
@@ -95,7 +96,7 @@ class Manager:
         """Everything the window shows (blocking: the keyring is asked)."""
         from . import launcher
         out: dict = {"version": __version__, "ui_notice": self.ui_notice, "appimage": bool(os.environ.get("APPIMAGE")),
-                     "can_choose_folder": self.can_choose_folder, **self.prefs()}
+                     "can_choose_folder": self.can_choose_folder, "tray": self.tray, **self.prefs()}
         try:
             cfg = config.load()
             out["config"] = {"base_url": cfg.base_url, "path": str(cfg.path),

@@ -5,6 +5,8 @@
 // which writes the same files the commands do.
 
 const TOKEN = new URLSearchParams(location.search).get("t") || "";
+// in the app window (app.py adds desktop=1), not a web browser
+const DESKTOP = new URLSearchParams(location.search).get("desktop") === "1";
 const $ = (sel) => document.querySelector(sel);
 // kept across renders, as the folder typed is: the Models tab shown (a profile), each profile's models and
 // the hosts listed for a model, the key whose Replace field is open, a route being chosen (and, per model,
@@ -694,6 +696,10 @@ function appSection(st) {
       st.config ? h("div", {}, "Settings: ", h("span", { class: "mono" }, st.config.path)) : null,
       h("div", {}, "Request log: ", h("span", { class: "mono" }, st.usage.log)),
       h("div", {}, `DA Private Coder ${st.version}`)),
+    // what closing the window does: in the tray, DA Private Coder is still open and its sessions go on
+    st.tray ? h("div", { class: "small muted spaced" }, "Closing this window keeps DA Private Coder running in the tray, so "
+      + "sessions using it keep working. You can also quit from the tray icon.")
+      : DESKTOP ? h("div", { class: "small muted spaced" }, "Closing this window quits DA Private Coder.") : null,
     h("div", { class: "row spaced" }, h("button", { class: "small", onclick: () => guarded(async () => {
       await api("POST", "/api/quit", {});
       clearInterval(looking);
