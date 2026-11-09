@@ -190,16 +190,15 @@ def _bundled_girepository() -> None:
         set_for_self("GI_TYPELIB_PATH", ":".join(missing + ([current] if current else [])))
 
 
-def open_in_browser(base: str, tickets, opener=None) -> str:
+def open_in_browser(base: str, tickets, opener=None) -> tuple[str, bool]:
     """The window, in the web browser: started with a one-time address (server.Tickets), never the
     window's own, whose token anyone could read on the browser's command line (as on every other
-    process's). Returns the address it was given."""
+    process's). Returns the address it was given, and whether a browser could be started."""
     if opener is None:
         import webbrowser
         opener = webbrowser.open
     address = f"{base}/open/{tickets.new()}"
-    opener(address)
-    return address
+    return address, opener(address) is not False
 
 
 def window_problem() -> str | None:
@@ -293,12 +292,14 @@ def main(argv: list[str] | None = None) -> None:
 
     try:
         if use_browser:
+            told = f"{NAME} is running. Open this address (keep it to yourself: it opens the app):\n{url}"
             if args.no_open or sys.stdout.isatty():
-                print(f"{NAME} is running. Open this address (keep it to yourself: it opens the app):\n{url}", flush=True)
+                print(told, flush=True)
             else:
                 print(f"{NAME} is running, in your web browser.", flush=True)     # stdout may be the session's log
             if not args.no_open:
-                open_in_browser(base, tickets)
+                if not open_in_browser(base, tickets)[1] and not sys.stdout.isatty():
+                    print(f"No web browser could be started. {told}", flush=True)      # the only way in, then
 
                 def open_again() -> str:
                     open_in_browser(base, tickets)

@@ -129,8 +129,9 @@ async def test_a_browser_is_started_with_a_one_time_address_only_this_user_can_u
     owners = {"who": os.getuid()}
     page = create_app(TOKEN, manager.Manager(), tickets=tickets, owner=lambda client, server: owners["who"])
     opened = []
-    address = app_mod.open_in_browser("http://127.0.0.1:8790", tickets, opened.append)
+    address, started = app_mod.open_in_browser("http://127.0.0.1:8790", tickets, opened.append)
     assert opened == [address] and TOKEN not in address and address.startswith("http://127.0.0.1:8790/open/")
+    assert started and not app_mod.open_in_browser("http://127.0.0.1:8790", tickets, lambda a: False)[1]
     path = address.removeprefix("http://127.0.0.1:8790")
     owners["who"] = os.getuid() + 1                                # another user's program, which read it
     status, said = await call(page, "GET", path, token=None)
@@ -140,7 +141,7 @@ async def test_a_browser_is_started_with_a_one_time_address_only_this_user_can_u
         r = await c.get(path)
     assert r.status_code == 303 and r.headers["location"] == f"/#t={TOKEN}"   # not spent by the other's try
     assert (await call(page, "GET", path, token=None))[0] == 403    # once only
-    late = app_mod.open_in_browser("http://127.0.0.1:8790", tickets, opened.append).removeprefix("http://127.0.0.1:8790")
+    late = app_mod.open_in_browser("http://127.0.0.1:8790", tickets, opened.append)[0].removeprefix("http://127.0.0.1:8790")
     now[0] += 61
     assert (await call(page, "GET", late, token=None))[0] == 403    # a minute at most
     assert (await call(page, "GET", "/open/made-up", token=None))[0] == 403
