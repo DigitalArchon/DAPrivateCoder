@@ -42,7 +42,7 @@ from .llm.dcap import since_boot
 from .llm.anthropic_bridge import VISION_PROMPT, ImageDescriber, estimate_tokens, has_images, message, sse, to_openai
 from .llm.client import RANK, LLMClient, is_claude, is_private_mode, is_tee, private_id, tier_of
 from .llm.private_mode import Attestation, Enclave, PrivateModeClient, list_private_models, offers_private_mode, relay_url
-from .netpolicy import check_url, is_secure
+from .netpolicy import check_url
 from .usagelog import UsageLog
 
 MODEL_PATHS = frozenset({("POST", "/v1/messages"), ("POST", "/v1/messages/count_tokens"), ("GET", "/v1/models")})
@@ -304,6 +304,17 @@ def attest_tee(base_url: str, key: str, model: str) -> dict:
         client.close()
 
 
+async def refuse_insecure(response: httpx.Response) -> None:
+    """The proxy's own client's response hook: a redirect is never followed, and one off https, or from
+    the internet into this computer or its network, is refused as the verifier's client refuses it
+    (llm/secure_http.py), as an HTTP error, which is what the callers here take."""
+    from .llm.secure_http import ProviderError, refuse_insecure_redirect
+    try:
+        refuse_insecure_redirect(response)
+    except ProviderError as e:
+        raise httpx.HTTPError(str(e)) from None
+
+
 def _worth_retrying(e: BaseException) -> bool:
     """An attestation that couldn't be fetched (the network, NanoGPT's 5xx) may well be fetched next
     time; one that was fetched and didn't hold, or a key NanoGPT refused, won't."""
@@ -447,11 +458,6 @@ class Proxy:
 
     def _client(self) -> httpx.AsyncClient:
         if self._http is None:
-            async def refuse_insecure(response: httpx.Response) -> None:
-                loc = response.headers.get("location")
-                if response.is_redirect and loc and not is_secure(str(response.url.join(loc))):
-                    raise httpx.HTTPError(f"redirect to insecure {loc[:100]!r} refused")
-
             self._http = httpx.AsyncClient(timeout=httpx.Timeout(600, connect=30), follow_redirects=False,
                                            event_hooks={"response": [refuse_insecure]})
         return self._http

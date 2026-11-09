@@ -335,6 +335,20 @@ async def test_a_standard_session_never_follows_a_redirect_and_passes_errors_bac
     assert r.status_code == 402 and r.json()["error"]["message"] == "no credit"
 
 
+@pytest.mark.parametrize("location, refused", [
+    ("http://nano-gpt.com/api/v1/models", "insecure connection"), ("https://192.168.1.1/admin", "local network"),
+    ("/api/v1/models", None)])
+async def test_the_proxys_own_client_refuses_a_redirect_off_https_or_into_the_local_network(location, refused):
+    """As the verifier's client does (llm/secure_http.py); a relative one isn't taken for either."""
+    request = httpx.Request("GET", "https://nano-gpt.com/api/v1/models")
+    response = httpx.Response(302, headers={"location": location}, request=request)
+    if refused is None:
+        await proxy_mod.refuse_insecure(response)
+        return
+    with pytest.raises(httpx.HTTPError, match=refused):
+        await proxy_mod.refuse_insecure(response)
+
+
 async def test_a_standard_session_sends_other_models_in_the_clear_with_the_route_chosen_for_them(tmp_path):
     from dataclasses import replace
     log = UsageLog(tmp_path / "requests.log", "s1")

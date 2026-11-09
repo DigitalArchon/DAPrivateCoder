@@ -914,3 +914,55 @@ def test_redpills_gateway_is_attested_only_in_part_and_its_expired_keys_are_refu
     expired = {**REDPILL, "attestation": {"workload_keyset": {"not_after": 1_700_000_000}}}
     with pytest.raises(TeeRefused, match="attested keys expired"):
         _real_client(real, monkeypatch, extra=expired).attest()
+
+
+# --- the verifier's client: where a redirect may point (SealedLore's, Nov 2026) ----------------
+
+
+def redirecting(location: str, base: str = "https://nano-gpt.com/api/v1", follow: bool = False):
+    """make_client's client on a server that redirects its first request to `location`, and what it
+    was asked."""
+    from daprivatecoder.llm.secure_http import make_client
+
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        if len(seen) == 1:
+            return httpx.Response(302, headers={"location": location})
+        return httpx.Response(200, json={"ok": True})
+
+    return make_client(base, transport=httpx.MockTransport(handler), follow_redirects=follow), seen
+
+
+def test_a_relative_redirect_is_not_taken_for_an_insecure_one():
+    """httpx runs response hooks before it resolves `Location`: read raw, a relative one
+    ("/v1/x") had no scheme, and every one was refused as insecure."""
+    client, seen = redirecting("/v1/tee/attestation", follow=True)
+    assert client.get("https://nano-gpt.com/api/v1/tee/attestation").json() == {"ok": True}
+    assert seen == ["https://nano-gpt.com/api/v1/tee/attestation", "https://nano-gpt.com/v1/tee/attestation"]
+    client, _ = redirecting("/v1/tee/attestation")                   # not followed, but not refused either
+    assert client.get("https://nano-gpt.com/api/v1/tee/attestation").status_code == 302
+
+
+@pytest.mark.parametrize("location", ["http://nano-gpt.com/api/v1/x", "http://evil.example/x"])
+def test_a_redirect_off_https_is_refused(location):
+    client, seen = redirecting(location, follow=True)
+    with pytest.raises(ProviderError, match="insecure connection"):
+        client.get("https://nano-gpt.com/api/v1/tee/attestation")
+    assert len(seen) == 1, "the redirect was not followed"
+
+
+@pytest.mark.parametrize("location", ["https://192.168.1.1/admin", "http://192.168.1.1/admin",
+                                      "http://localhost:8080/x", "https://[fd00::1]/x"])
+def test_a_server_on_the_internet_cannot_redirect_into_the_local_network(location):
+    client, seen = redirecting(location, follow=True)
+    with pytest.raises(ProviderError, match="local network"):
+        client.get("https://nano-gpt.com/api/v1/tee/attestation")
+    assert len(seen) == 1, "the redirect was not followed"
+
+
+def test_a_local_server_may_redirect_on_the_local_network():
+    client, seen = redirecting("http://192.168.1.20:7860/v1/x", base="http://192.168.1.10:7860/v1", follow=True)
+    assert client.get("http://192.168.1.10:7860/v1/tee/attestation").json() == {"ok": True}
+    assert seen[-1] == "http://192.168.1.20:7860/v1/x"
