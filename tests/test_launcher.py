@@ -331,3 +331,20 @@ def test_claude_code_is_told_where_to_compact():
     from dataclasses import replace
     assert claude_env(PRIVATE, 1, "t")["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] == "200000"
     assert claude_env(replace(PRIVATE, context=1_000_000), 1, "t")["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] == "1000000"
+
+
+def test_each_search_is_asked_about_whatever_was_allowed_before():
+    """Claude Code asks before an MCP tool runs until the user says "don't ask again", which an allow rule
+    keeps; an ask rule outranks it, so each search shows its query and waits."""
+    from daprivatecoder import search
+    from daprivatecoder.launcher import SEARCH_TOOL, mcp_config
+    env = claude_env(PRIVATE_SEARCH, 1, "t")
+    given = {"permissions": {"allow": [SEARCH_TOOL], "ask": ["Bash(git push:*)"]}}
+    s = json.loads(claude_args(PRIVATE_SEARCH, env, ["--settings", json.dumps(given)])[1])
+    assert s["permissions"]["ask"] == ["Bash(git push:*)", SEARCH_TOOL] and s["permissions"]["allow"] == [SEARCH_TOOL]
+    assert SEARCH_TOOL == f"mcp__{search.SERVER}__{search.TOOL}"
+    assert list(mcp_config(PRIVATE_SEARCH, None, {})["mcpServers"]) == [search.SERVER]
+    assert "ask" not in json.loads(claude_args(PRIVATE, env, [])[1])["permissions"]       # no search, nothing to ask
+    # claude -p: no one to ask, so a search runs only if --allowedTools allows it (the README's way)
+    for printing in (["-p", "fix it"], ["--print", "fix it"]):
+        assert "ask" not in json.loads(claude_args(PRIVATE_SEARCH, env, printing)[1])["permissions"]

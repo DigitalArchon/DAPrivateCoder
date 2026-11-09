@@ -171,8 +171,13 @@ def _settings_value(value: str) -> dict:
     return data
 
 
-def session_settings(profile: Profile, env: dict[str, str], given: dict | None = None) -> dict:
-    """Claude Code's --settings for the session: `given` (any the caller passed), with ours over it."""
+# the search server's tool, as Claude Code's permission rules name it (mcp_config's server, search.py's tool)
+SEARCH_TOOL = "mcp__daprivatecoder__web_search"
+
+
+def session_settings(profile: Profile, env: dict[str, str], given: dict | None = None, asks: bool = True) -> dict:
+    """Claude Code's --settings for the session: `given` (any the caller passed), with ours over it.
+    `asks`: Claude Code can ask the user (not `claude -p`)."""
     out = dict(given or {})
     out["env"] = {**(out.get("env") or {}), **env}
     out["model"] = profile.model
@@ -186,6 +191,12 @@ def session_settings(profile: Profile, env: dict[str, str], given: dict | None =
     # Anthropic's own web search runs on its servers, not through NanoGPT
     deny = list(permissions.get("deny") or [])
     permissions["deny"] = deny + [d for d in ("WebSearch",) if d not in deny]
+    if profile.web_search != "off" and asks:
+        # each search is asked about, showing its query: a search leaves in the clear. An ask rule outranks
+        # an allow rule, so "don't ask again" in an earlier session (kept in its settings) doesn't skip it.
+        # With no one to ask (claude -p), a search runs only when --allowedTools allows it, as before
+        ask = list(permissions.get("ask") or [])
+        permissions["ask"] = ask + [a for a in (SEARCH_TOOL,) if a not in ask]
     out["permissions"] = permissions
     return out
 
@@ -259,7 +270,8 @@ def claude_args(profile: Profile, env: dict[str, str], args: list[str], mcp: dic
         out.append(arg)
         i += 1
     servers = ["--mcp-config", json.dumps(mcp)] if mcp else []
-    return servers + ["--settings", json.dumps(session_settings(profile, env, given))] + out
+    asks = not any(arg in ("-p", "--print") for arg in out)
+    return servers + ["--settings", json.dumps(session_settings(profile, env, given, asks))] + out
 
 
 def managed_conflicts(env: dict[str, str], path: Path = MANAGED_SETTINGS) -> list[str]:
