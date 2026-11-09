@@ -2,8 +2,10 @@
 ~/.local/state/daprivatecoder/requests.log. Never what was said: no prompt, reply, file or image.
 
 Kinds of line: "session" (a proxy started: its profile and models), "attested" (the enclave's
-attestation: hardware, router release, key fingerprint), "request" (model, sealed or not, status,
-tokens, cost, seconds) and "vision" (an image described for a model that can't see)."""
+attestation: hardware, router release, key fingerprint), "attested_tee" (a TEE model's), "request"
+(model, sealed or not, status, tokens, cost, seconds; a TEE one a "ref" and its reply "checking"),
+"tee_reply" (what that TEE reply's check found, once made, naming the request by its ref), and
+"vision" (an image described for a model that can't see)."""
 
 from __future__ import annotations
 

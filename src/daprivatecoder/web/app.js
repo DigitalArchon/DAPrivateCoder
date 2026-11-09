@@ -502,6 +502,22 @@ function modelsSection(st) {
 
 // ------------------------------------------------------------------ what runs on it now
 
+// a TEE reply's check (proxy.py), against the record its attested enclave signed: [chip, label, what it means]
+const REPLY = {
+  verified: ["tee", "TEE, reply verified", "The attested enclave's key signed a record of this reply, and it is the reply that came, byte for byte."],
+  signed: ["tee", "TEE, reply signed", "The attested enclave's key signed this reply's record, but NanoGPT rebuilds this model's replies, so the text couldn't be compared with it."],
+  failed: ["bad", "TEE ⚠ reply check failed", "The reply doesn't match the record the attested enclave signed. Its enclave is checked again before anything more is sent to it."],
+  unchecked: ["warn", "TEE ⚠ reply not verified", "No record of this reply could be read (its provider keeps none, or the check couldn't be made), so nothing shows it came from the attested enclave."],
+  checking: ["tee", "TEE, checking reply", "The reply is being checked against the record its attested enclave signed."],
+};
+
+// how a request left this computer, as a chip [class, label] and what it means (a TEE reply's check, where there is one)
+function sentChip(r) {
+  if (r.sent === "tee" && REPLY[r.reply]) return [REPLY[r.reply][0], REPLY[r.reply][1], REPLY[r.reply][2] + (r.reply_detail ? ` (${r.reply_detail})` : "")];
+  const [chip, how] = SENT[r.sent] || SENT[""];
+  return [chip, how, ""];
+}
+
 // where a request went, in words, after its chip
 function whereItWent(last) {
   if (last.sent === "sealed") return "end-to-end encrypted, to the verified enclave";
@@ -516,13 +532,13 @@ function sessionsSection(st) {
   const rows = list.map((s) => {
     const kind = SESSIONS.includes(s.kind) ? s.kind : "standard";
     const last = s.last;
-    const [chip, how] = last ? (SENT[last.sent] || SENT[""]) : ["", ""];
+    const [chip, how, means] = last ? sentChip(last) : ["", "", ""];
     return h("div", { class: "session" },
       h("div", { class: "row" }, chipOf(kind),
         h("span", { class: "path", title: s.folder }, h("bdi", { dir: "ltr" }, s.folder || "?")),
         h("span", { class: "small muted" }, s.editor ? `in ${s.editor}` : "in a terminal")),
       last ? h("div", { class: "small" }, `Last request ${last.t.slice(11, 16)}: `, h("b", { class: "mono" }, last.model || "?"),
-        last.asked_for ? ` (a background task; Claude Code asked for ${last.asked_for})` : "", " ", h("span", { class: `chip ${chip}` }, how), " ",
+        last.asked_for ? ` (a background task; Claude Code asked for ${last.asked_for})` : "", " ", h("span", { class: `chip ${chip}`, title: means || null }, how), " ",
         whereItWent(last), last.error ? h("div", { class: "small bad-text" }, last.error) : null)
         : h("div", { class: "small muted" }, "No requests yet."),
       s.stops ? h("div", { class: "warnbox" }, h("b", {}, "Will stop at its next request: "), s.stops) : null);
@@ -676,7 +692,7 @@ const SENT = { sealed: ["private", "sealed"], tee: ["tee", "TEE"], clear: ["warn
 function usageSection(st) {
   const u = st.usage;
   const rows = u.last.flatMap((r) => {
-    const [chip, how] = SENT[r.sent] || SENT[""];
+    const [chip, how, means] = sentChip(r);
     const where = r.provider && r.provider !== "nanogpt" ? ` · ${r.provider === "openrouter" ? "OpenRouter" : "your provider"}` : "";
     const what = r.kind === "search"
       ? `web search${r.what ? `, ${r.what}` : ""}${r.results !== null && r.results !== undefined ? ` · ${r.results} results` : ""}`
@@ -684,7 +700,7 @@ function usageSection(st) {
     const row = h("tr", { class: r.error ? "bad has-note" : "" },
       h("td", {}, r.t.slice(5, 16)),
       h("td", { title: r.asked_for ? `Claude Code asked for ${r.asked_for}` : "" }, what),
-      h("td", {}, h("span", { class: `chip ${chip}` }, how)),
+      h("td", {}, h("span", { class: `chip ${chip}`, title: means || null }, how)),
       h("td", { class: "num" }, tokens(r.input)),
       h("td", { class: "num" }, tokens(r.cached)),
       h("td", { class: "num" }, tokens(r.output)),
@@ -701,7 +717,9 @@ function usageSection(st) {
       h("thead", {}, h("tr", {}, ["When", "Model", "Sent", "In", "Cached", "Out", "Cost"].map((c) => h("th", {}, c)))),
       h("tbody", {}, rows))) : h("p", { class: "lead" }, "Nothing yet. Each request's cost will show here, never its content."),
     rows.length ? h("div", { class: "small muted spaced" }, "Sent: sealed = end-to-end encrypted · TEE = to an enclave, through "
-      + "NanoGPT, which can read it · clear = unencrypted, readable by the provider · not sent = stopped on this computer.") : null);
+      + "NanoGPT, which can read it · clear = unencrypted, readable by the provider · not sent = stopped on this computer. "
+      + "Each TEE reply is checked against the record its enclave signed: verified (the same, byte for byte), signed "
+      + "(its text couldn't be compared), ⚠ not verified (no record could be read), or ⚠ check failed.") : null);
 }
 
 // ------------------------------------------------------------------ this app

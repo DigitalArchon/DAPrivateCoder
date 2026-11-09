@@ -50,6 +50,21 @@ def _sent(record: dict) -> str:
     return "sealed" if record["sealed"] else "clear"
 
 
+def _reply_checks(records: list[dict]) -> dict[tuple, dict]:
+    """What each TEE reply's check found (proxy.py's "tee_reply" lines), by the session and the request
+    it names."""
+    return {(r.get("session"), r.get("of")): r for r in records if r.get("kind") == "tee_reply" and r.get("of")}
+
+
+def _reply_of(record: dict, checks: dict[tuple, dict]) -> dict:
+    """A TEE request's reply as its check found it ("verified", "signed", "failed", "unchecked", or
+    "checking" until then), and why when it couldn't be checked; {} for any other request."""
+    if not record.get("ref"):
+        return {}
+    found = checks.get((record.get("session"), record["ref"])) or {}
+    return {"reply": found.get("reply") or record.get("reply") or "checking", "reply_detail": found.get("detail", "")}
+
+
 def _key_state(provider: str = "nanogpt", base_url: str = "") -> dict:
     out = {"provider": provider, "stored": False, "ending": "", "error": ""}
     try:
@@ -151,6 +166,7 @@ class Manager:
 
     def usage(self) -> dict:
         records = usagelog.read(config.state_dir() / "requests.log")
+        checks = _reply_checks(records)
         today, month = time.strftime("%Y-%m-%d"), time.strftime("%Y-%m")
         rows, spent_today, spent_month, asked_today = [], 0.0, 0.0, 0
         for r in records:
@@ -176,7 +192,8 @@ class Manager:
                          "cached": u.get("cache_read", 0) if u else None, "output": u.get("output", 0) if u else None,
                          "results": r.get("results"),
                          "cost": cost if isinstance(cost, (int, float)) else None, "estimated": bool(u.get("cost_estimated")),
-                         "seconds": r.get("seconds"), "error": r.get("error") or r.get("reason") or ""})
+                         "seconds": r.get("seconds"), "error": r.get("error") or r.get("reason") or "",
+                         **_reply_of(r, checks)})
         return {"today": round(spent_today, 4), "month": round(spent_month, 4), "requests_today": asked_today,
                 "last": rows[-SHOWN:][::-1], "log": str(config.state_dir() / "requests.log")}
 
@@ -299,6 +316,7 @@ class Manager:
         profile; the last request it made and how it went; and why it would stop at its next one."""
         from . import launcher
         records = usagelog.read(config.state_dir() / "requests.log")
+        checks = _reply_checks(records)
         last: dict[str, dict] = {}
         for r in records:
             if r.get("kind") == "request" and r.get("session"):
@@ -316,7 +334,8 @@ class Manager:
                         "started": info.get("started"),
                         "last": {"t": r.get("t", "")[:19].replace("T", " "), "model": r.get("model", ""),
                                  "asked_for": r.get("asked_for", ""), "sent": _sent(r), "status": r.get("status"),
-                                 "error": str(r.get("error") or "")[:300], "provider": r.get("provider", "")} if r else None,
+                                 "error": str(r.get("error") or "")[:300], "provider": r.get("provider", ""),
+                                 **_reply_of(r, checks)} if r else None,
                         "stops": gate.Gate(info.get("profile", ""), editors, info.get("folder", "")).why()})
         return sorted(out, key=lambda s: s.get("started") or 0, reverse=True)
 

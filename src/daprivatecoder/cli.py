@@ -294,8 +294,11 @@ def _check(args) -> int:
 
 def _log(args) -> int:
     from . import usagelog
+    from .manager import _reply_checks, _reply_of
     path = state_dir() / "requests.log"
-    records = [r for r in usagelog.read(path) if r.get("kind") in ("request", "vision", "search")]
+    everything = usagelog.read(path)
+    checks = _reply_checks(everything)                 # what each TEE reply's check found
+    records = [r for r in everything if r.get("kind") in ("request", "vision", "search")]
     if not records:
         print(f"Nothing logged yet ({path}).")
         return 0
@@ -322,7 +325,9 @@ def _log(args) -> int:
         from .manager import _sent
         how = {"sealed": "sealed", "tee": "TEE   ", "clear": "clear "}.get(_sent(r), "unsent")
         what = r.get("model", "") + (" (vision)" if r.get("kind") == "vision" else "")
-        extra = f" {r['error']}" if r.get("error") else ""
+        reply = _reply_of(r, checks).get("reply")
+        extra = (f" {r['error']}" if r.get("error") else "") + (
+            f" reply {'⚠ ' if reply in ('failed', 'unchecked') else ''}{reply}" if reply else "")
         print(f"{r.get('t', '')[:19]} {r.get('session', '')} {how} {r.get('status', ''):>3} {what:<30} {tokens} "
               f"{price:>9} {r.get('seconds', '')}s{extra}")
     print(f"{len(shown)} requests, ${total:.4f} (~: estimated from NanoGPT's listed prices)")

@@ -3,6 +3,7 @@ drives (server.py over manager.py), as the page calls it."""
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -322,6 +323,37 @@ async def test_usage_says_how_each_request_left_and_blanks_what_wasnt_counted(wi
     assert cli._log(argparse.Namespace(n=10)) == 0
     lines = capsys.readouterr().out.splitlines()
     assert [line.split()[2] for line in lines[:6]] == ["sealed", "clear", "unsent", "sealed", "unsent", "clear"]
+
+
+async def test_usage_says_what_each_tee_replys_check_found(window):
+    """Each TEE request's row says how its reply's check came out (proxy.py's tee_reply lines, which name
+    it by session and ref), and that it is being checked until then; no other row has one."""
+    from daprivatecoder import usagelog
+    s1 = usagelog.UsageLog(config.state_dir() / "requests.log", "s1")
+    s2 = usagelog.UsageLog(config.state_dir() / "requests.log", "s2")
+    s1.write("request", model="TEE/glm-5.3", tier="tee", status=200, ref="aa11", reply="checking")
+    s2.write("request", model="TEE/glm-5.3", tier="tee", status=200, ref="aa11", reply="checking")   # another session's
+    s1.write("request", model="TEE/kimi-k3", tier="tee", status=200, ref="bb22", reply="checking")
+    s1.write("request", model="z-ai/glm-5.3", tier="standard", status=200)
+    s1.write("tee_reply", of="aa11", model="TEE/glm-5.3", reply="failed")
+    s1.write("tee_reply", of="bb22", model="TEE/kimi-k3", reply="unchecked", detail="the provider has no signature for this reply")
+    app, *_ = window
+    rows = (await call(app, "GET", "/api/state"))[1]["usage"]["last"][::-1]
+    assert [(r["sent"], r.get("reply")) for r in rows] == [("tee", "failed"), ("tee", "checking"), ("tee", "unchecked"),
+                                                           ("clear", None)]
+    assert rows[2]["reply_detail"] == "the provider has no signature for this reply"
+    script = (Path(manager.__file__).parent / "web" / "app.js").read_text()
+    for outcome in ("verified", "signed", "failed", "unchecked", "checking"):
+        assert re.search(rf"^  {outcome}: \[", script, re.M), outcome
+    import argparse
+    import contextlib
+    import io
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        assert cli._log(argparse.Namespace(n=10)) == 0
+    lines = out.getvalue().splitlines()
+    assert lines[0].endswith("reply ⚠ failed") and lines[1].endswith("reply checking")
+    assert lines[2].endswith("reply ⚠ unchecked") and "reply" not in lines[3]
 
 
 async def test_an_editor_on_another_programs_wrapper_is_left_as_it_is(window, capsys):

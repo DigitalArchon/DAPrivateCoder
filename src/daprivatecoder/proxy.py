@@ -11,8 +11,11 @@ never leaves this process. After DA Vibe Manager's gateway (its model endpoint).
   its own defaults now and then) goes sealed to the profile's quick model, never in the clear.
 - A TEE/ model's request (a TEE profile's, or one picked on NanoGPT) is translated too, and sent
   through NanoGPT once its enclave has attested (llm/tee.py): never before, and again every 15
-  minutes. NanoGPT's gateway reads it: it isn't sealed. A TEE session never sends to a model below
-  TEE: its own model stands in.
+  minutes. NanoGPT's gateway reads it: it isn't sealed. Each reply is read as it came, every byte
+  hashed, and once it has gone on to Claude Code (never held up or changed), checked against the
+  record the attested key signed for it (check_reply): the request log says what that found, and a
+  reply that fails has its model attested again before its next request. A TEE session never sends
+  to a model below TEE: its own model stands in.
 - In a standard profile, any other model's request is translated and sent to its provider (NanoGPT,
   OpenRouter, another OpenAI-compatible one) in the clear, with the host the user chose for it
   (llm/routes.py); a Claude model's goes to the provider's Anthropic endpoint as Claude Code wrote
@@ -284,7 +287,8 @@ def _error_text(raw: bytes) -> str:
 
 PrivateClientFactory = Callable[[str, str, Enclave], object]   # (base_url, key, enclave) -> PrivateModeClient
 PlainClientFactory = Callable[[str, "str | None"], object]     # (base_url, key) -> LLMClient
-TeeCheck = Callable[[str, str, str], dict]                     # (NanoGPT's base_url, key, model) -> attestation
+# (NanoGPT's base_url, key, model) -> the attestation (AttestedTee, or what it found: no reply is checked then)
+TeeCheck = Callable[[str, str, str], "AttestedTee | dict"]
 # a TEE model's enclave is attested again after this, before its next request (as DA Vibe Manager does), on a
 # clock that runs on while the computer sleeps (dcap.since_boot: time.monotonic stops during a suspend)
 TEE_REATTEST_SECONDS = 900
@@ -302,6 +306,34 @@ def attest_tee(base_url: str, key: str, model: str) -> dict:
         return client.attest().to_dict()
     finally:
         client.close()
+
+
+class AttestedTee:
+    """A TEE model's enclave as it attested: what it found, and the client that attested it, kept for
+    its replies' checks against it (as DA Vibe Manager keeps it)."""
+
+    def __init__(self, client, found: dict):
+        self.client = client
+        self.found = found
+
+    def check(self, reply) -> str:
+        """A reply read with exact=True (its TurnResult), against the record the attested key signed
+        (llm/tee.py check_reply; blocking): "verified", "signed" or "failed". Raises when it can't be
+        checked ("unchecked")."""
+        return self.client.check_reply(getattr(reply, "id", None), receipt_id=getattr(reply, "receipt_id", None),
+                                       body_hash=getattr(reply, "body_hash", None),
+                                       route=getattr(reply, "tee_route", None))
+
+
+def attest_tee_for_replies(base_url: str, key: str, model: str) -> AttestedTee:
+    """A TEE model's enclave, attested now as attest_tee does it, its client kept to check the replies."""
+    from .llm import tee
+    client = tee.TeeClient(base_url, key, model)
+    try:
+        return AttestedTee(client, client.attest().to_dict())
+    except BaseException:
+        client.close()
+        raise
 
 
 async def refuse_insecure(response: httpx.Response) -> None:
@@ -334,7 +366,7 @@ class Proxy:
                  capabilities_loader: Callable[[], Awaitable[dict]] | None = None,
                  private_lister: Callable[[], Awaitable[list[str]]] | None = None,
                  provider_url: str = "", provider_key: Callable[[], str | None] | None = None,
-                 plain_client: PlainClientFactory | None = None, tee_check: TeeCheck = attest_tee,
+                 plain_client: PlainClientFactory | None = None, tee_check: TeeCheck = attest_tee_for_replies,
                  provider_capabilities_loader: Callable[[], Awaitable[dict | None]] | None = None,
                  gate: Callable[[], str] | None = None):
         """`base_url` and `key` are NanoGPT's (private and TEE models); a standard profile's provider
@@ -356,7 +388,10 @@ class Proxy:
         self._plain_client = plain_client or LLMClient
         self._plain: dict[tuple[str, str], object] = {}
         self._tee_check = tee_check
-        self._tee: dict[str, tuple[float, dict]] = {}
+        # model -> when it attested, what it found, and the check of its replies against that (None: none)
+        self._tee: dict[str, tuple[float, dict, Callable[[object], str] | None]] = {}
+        self._doubted: set[str] = set()                     # TEE models a reply of failed its check: attested again
+        self._checks: set[asyncio.Task] = set()              # replies being checked, after they went on
         self._tee_lock = asyncio.Lock()
         self._caps_loaders: dict[str, Callable[[], Awaitable[dict | None]]] = {
             "nanogpt": capabilities_loader or (lambda: capabilities.fetch_nanogpt(self.base_url, self._client()))}
@@ -469,6 +504,8 @@ class Proxy:
         return self._http
 
     async def aclose(self) -> None:
+        for task in list(self._checks):
+            task.cancel()
         if self._http is not None:
             await self._http.aclose()
         for client in self._plain.values():
@@ -518,22 +555,59 @@ class Proxy:
 
     async def _attest_tee(self, model: str) -> dict:
         """Nothing goes to a TEE model whose enclave hasn't attested (llm/tee.py); an attestation older
-        than TEE_REATTEST_SECONDS is made again first. Raises Refused when it doesn't hold."""
+        than TEE_REATTEST_SECONDS, or one a reply failed its check against, is made again first (DA
+        Assistant's rule for a reply that fails, a50e414). Raises Refused when it doesn't hold."""
         async with self._tee_lock:
             hit = self._tee.get(model)
-            if hit and since_boot() - hit[0] < TEE_REATTEST_SECONDS:
+            doubted = model in self._doubted
+            if hit and not doubted and since_boot() - hit[0] < TEE_REATTEST_SECONDS:
                 return hit[1]
             key = self._read_key() or ""
+            why = {"after": "a reply that failed its check"} if doubted else {}
             try:
-                att = await asyncio.to_thread(self._tee_check, self.base_url, key, model)
+                attested = await asyncio.to_thread(self._tee_check, self.base_url, key, model)
             except Exception as e:  # noqa: BLE001 - said as it is, and nothing sent
-                self._record("attested_tee", model=model, error=str(e)[:300])
+                self._record("attested_tee", model=model, error=str(e)[:300], **why)
                 raise Refused(502, f"{model}'s enclave didn't attest, so nothing was sent to it: {e}", "api_error",
                               retry=_worth_retrying(e)) from e
-            self._tee[model] = (since_boot(), att)
-            self._record("attested_tee", model=model, **{k: att.get(k) for k in (
+            att = getattr(attested, "found", attested)
+            self._tee[model] = (since_boot(), att, getattr(attested, "check", None))
+            self._doubted.discard(model)
+            self._record("attested_tee", model=model, **why, **{k: att.get(k) for k in (
                 "level", "summary", "shortfalls", "tcb_status", "gpus", "instances", "signing_address")})
             return att
+
+    def _reply_check(self, model: str) -> Callable[[object], str] | None:
+        """How a reply of TEE `model` is checked, against the attestation in force now (_attest_tee made
+        it just before the request); None when there is none to make."""
+        hit = self._tee.get(model)
+        return hit[2] if hit else None
+
+    def _check_later(self, model: str, check, ended: dict, rec: dict) -> None:
+        """A TEE model's reply, which has gone on to Claude Code as it came, checked against the record
+        its attested key signed, aside: the request log says what that found, as a line naming the
+        request (rec["ref"]). Only a reply its stream carried to the end is checked; one stopped or cut
+        short has no record to match. One that fails is said there, and on the proxy's error output,
+        and its model attested again before its next request; one that couldn't be checked
+        ("unchecked": a provider that signs no replies, a record not found) is no reason to."""
+        reply = ended.get("reply")
+        if check is None or reply is None:
+            return
+
+        async def run():
+            try:
+                outcome, detail = await asyncio.to_thread(check, reply), ""
+            except Exception as e:  # noqa: BLE001 - a check that couldn't be made is "unchecked", never a failure
+                outcome, detail = "unchecked", str(e)[:300]
+            if outcome == "failed":
+                self._doubted.add(model)
+                import sys
+                print(f"daprivatecoder: {model}'s reply didn't match the record its attested enclave signed: its "
+                      "enclave is attested again before anything more is sent to it.", file=sys.stderr, flush=True)
+            self._record("tee_reply", of=rec.get("ref"), model=model, reply=outcome, **({"detail": detail} if detail else {}))
+        task = asyncio.get_running_loop().create_task(run())
+        self._checks.add(task)
+        task.add_done_callback(self._checks.discard)
 
     async def _priced(self, model: str, usage: dict, tier: str) -> dict:
         """The usage with what it cost: the provider's own bill when it gives one, else the listed prices'."""
@@ -577,18 +651,23 @@ class Proxy:
             return ""
         return None
 
-    def _stream(self, client, model: str, messages, tools, params: dict, rec: dict, where: str = ""):
+    def _stream(self, client, model: str, messages, tools, params: dict, rec: dict, where: str = "",
+                exact: bool = False, ended: dict | None = None):
         """The model's events. Refused before it answers, it is asked again (twice at most): without the
         reasoning handed back, if `where` (its provider) won't take that field, as from then on; with an
-        effort it takes, if it named those it takes (rec["effort"] says which went)."""
+        effort it takes, if it named those it takes (rec["effort"] says which went). With `exact` (a TEE
+        model's reply, to be checked), its stream's every byte is hashed as it passes (LLMClient.stream);
+        the whole reply, once the stream has ended, goes in `ended`["reply"]."""
         async def events():
             msgs, prm = messages, params
             for attempt in range(3):
                 sent = prm.get("reasoning_effort")
                 started = False
                 try:
-                    async for event in client.stream(model, msgs, tools, prm):
+                    async for event in client.stream(model, msgs, tools, prm, **({"exact": True} if exact else {})):
                         started = True
+                        if event[0] == "done" and ended is not None:
+                            ended["reply"] = event[1]
                         yield event
                     return
                 except Exception as e:
@@ -758,6 +837,8 @@ class Proxy:
             return JSONResponse({"input_tokens": estimate_tokens(data)})
         if tier == "tee":
             await self._attest_tee(model)                  # raises Refused: nothing goes to it unattested
+        # a TEE model's reply is checked against the record its attested key signs, once it has gone on
+        check = self._reply_check(model) if tier == "tee" else None
         client = self._chat_client(model, tier)            # raises Refused: no key, not NanoGPT
         started = time.monotonic()
         # raises Refused (asked again) when it isn't known whether the model sees: never guessed
@@ -781,6 +862,11 @@ class Proxy:
                "sealed": tier == "private", "tier": tier, "provider": self._provider_of(tier), "sees": native,
                "effort": effort, **({"effort_asked": wanted} if wanted != effort else {}), "bytes_out": size,
                **({"route": routes.describe(self.provider, route)} if route else {})}
+        if check is not None:
+            # its reply's check comes later, as a line of its own naming this one (the window marks the request)
+            rec.update(ref=secrets.token_hex(6), reply="checking")
+        ended: dict = {}                                    # the provider's whole reply, once its stream has ended
+
         async def done(stats: dict, status: int, **extra) -> None:
             usage = stats.get("usage")
             self._record("request", **rec, status=status, seconds=round(time.monotonic() - started, 2), **extra,
@@ -792,7 +878,8 @@ class Proxy:
             if where in self._no_reasoning_back and handed_back(messages):
                 messages = without_reasoning(messages)
                 rec["reasoning_back"] = False
-            events = await answered(self._stream(client, model, messages, tools, params, rec, where))
+            events = await answered(self._stream(client, model, messages, tools, params, rec, where,
+                                                 exact=check is not None, ended=ended))
         except Exception as e:  # noqa: BLE001
             refusal = upstream_refusal(model, e, self._provider_of(tier))
             await done({}, refusal.status, error=str(e)[:300])
@@ -807,6 +894,7 @@ class Proxy:
                 await done(stats, refusal.status, error=str(e)[:300])
                 raise refusal from e
             await done(stats, 200)
+            self._check_later(model, check, ended, rec)
             return JSONResponse(reply)
 
         async def body():
@@ -819,6 +907,7 @@ class Proxy:
             finally:
                 await done(stats, 502 if stats.get("error") else 200, bytes_in=n,
                            **({"error": stats["error"][:300]} if stats.get("error") else {}))
+                self._check_later(model, check, ended, rec)
         return StreamingResponse(body(), media_type="text/event-stream")
 
     async def _forward(self, request, path: str, data: dict, model: str, asked: str, body: bytes):
