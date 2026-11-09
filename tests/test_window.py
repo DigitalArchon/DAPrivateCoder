@@ -360,12 +360,14 @@ async def test_usage_says_what_each_tee_replys_check_found(window):
     s2.write("request", model="TEE/glm-5.3", tier="tee", status=200, ref="aa11", reply="checking")   # another session's
     s1.write("request", model="TEE/kimi-k3", tier="tee", status=200, ref="bb22", reply="checking")
     s1.write("request", model="z-ai/glm-5.3", tier="standard", status=200)
+    s1.write("vision", model="TEE/kimi-k3", tier="tee", status=200, ref="cc33", reply="checking")   # an image's description
+    s1.write("tee_reply", of="cc33", model="TEE/kimi-k3", reply="verified")
     s1.write("tee_reply", of="aa11", model="TEE/glm-5.3", reply="failed")
     s1.write("tee_reply", of="bb22", model="TEE/kimi-k3", reply="unchecked", detail="the provider has no signature for this reply")
     app, *_ = window
     rows = (await call(app, "GET", "/api/state"))[1]["usage"]["last"][::-1]
     assert [(r["sent"], r.get("reply")) for r in rows] == [("tee", "failed"), ("tee", "checking"), ("tee", "unchecked"),
-                                                           ("clear", None)]
+                                                           ("clear", None), ("tee", "verified")]
     assert rows[2]["reply_detail"] == "the provider has no signature for this reply"
     script = (Path(manager.__file__).parent / "web" / "app.js").read_text()
     for outcome in ("verified", "signed", "failed", "unchecked", "checking"):
@@ -379,6 +381,7 @@ async def test_usage_says_what_each_tee_replys_check_found(window):
     lines = out.getvalue().splitlines()
     assert lines[0].endswith("reply ⚠ failed") and lines[1].endswith("reply checking")
     assert lines[2].endswith("reply ⚠ unchecked") and "reply" not in lines[3]
+    assert "(vision)" in lines[4] and lines[4].endswith("reply verified")
 
 
 async def test_an_editor_on_another_programs_wrapper_is_left_as_it_is(window, capsys):

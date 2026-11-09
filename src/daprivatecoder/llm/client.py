@@ -158,9 +158,24 @@ class LLMClient:
                     yield event
         acc.result.body_hash = "sha256:" + digest.hexdigest()
 
-    async def complete(self, model: str, messages: list[dict], params: dict | None = None) -> str:
+    async def complete(self, model: str, messages: list[dict], params: dict | None = None, *,
+                       exact: bool = False) -> str:
+        """The reply's text. With `exact` (a TEE model's, checked against its signed record afterwards), it
+        is read as a stream, every byte of it hashed as the proxy's are (stream, exact): the stream's bytes
+        are what NanoGPT's record was seen to hash (SealedLore, Nov 2026), a whole reply's never were; the
+        reply's id, receipt and hash are then on `last_reply` (as DA Vibe Manager's has it)."""
         if is_private_mode(model):
             raise RuntimeError(f"{model} is a Private Mode model and is only ever sent sealed; nothing was sent")
+        self.last_reply = None
+        if exact:
+            text = ""
+            async for kind, value in self.stream(model, messages, params=params, exact=True):
+                if kind == "text":
+                    text += value
+                elif kind == "done":
+                    self.last_reply = value
+                    self.last_usage = value.usage       # what it cost (the request log)
+            return text
         resp = await self._client.chat.completions.create(model=model, messages=messages, **_split_params(params))
         self.last_usage = resp.usage.model_dump() if resp.usage else None
         return resp.choices[0].message.content or ""

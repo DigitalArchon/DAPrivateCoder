@@ -14,8 +14,9 @@ never leaves this process. After DA Vibe Manager's gateway (its model endpoint).
   minutes. NanoGPT's gateway reads it: it isn't sealed. Each reply is read as it came, every byte
   hashed, and once it has gone on to Claude Code (never held up or changed), checked against the
   record the attested key signed for it (check_reply): the request log says what that found, and a
-  reply that fails has its model attested again before its next request. A TEE session never sends
-  to a model below TEE: its own model stands in.
+  reply that fails has its model attested again before its next request. A TEE vision helper's
+  description of an image is a reply like any other, read and checked the same way (_describe). A
+  TEE session never sends to a model below TEE: its own model stands in.
 - In a standard profile, any other model's request is translated and sent to its provider (NanoGPT,
   OpenRouter, another OpenAI-compatible one) in the clear, with the host the user chose for it
   (llm/routes.py); a Claude model's goes to the provider's Anthropic endpoint as Claude Code wrote
@@ -696,7 +697,11 @@ class Proxy:
         return self._describers[tier]
 
     async def _describe(self, data_url: str, context: str) -> str:
-        """The vision helper: a model that can see describes an image for one that can't."""
+        """The vision helper: a model that can see describes an image for one that can't. A TEE model's
+        description is a reply like any other: read as it came, every byte hashed, and once it is in
+        hand, checked against the record its attested enclave signed, as the chat's replies are
+        (_check_later): the request log says what that found, and one that fails has the model
+        attested again before its next request."""
         model = self.profile.vision_model
         tier = self.tier(model)
         messages = [{"role": "system", "content": VISION_PROMPT},
@@ -706,23 +711,38 @@ class Proxy:
         started = time.monotonic()
         if tier == "tee":
             await self._attest_tee(model)
+        # checked against the record its attested key signs, as the attestation just made has it
+        check = self._reply_check(model) if tier == "tee" else None
         client = self._chat_client(model, tier)
         effort = await self._effort(model, tier, VISION_EFFORT)
+        rec = {"model": model, "tier": tier}
+        # a TEE model's reply is read as a stream, every byte hashed (LLMClient.complete, exact): the record
+        # names the hash of a stream's bytes, and NanoGPT's records of replies not streamed can't be compared
+        exact = {"exact": True} if check is not None else {}
+        if check is not None:
+            rec.update(ref=secrets.token_hex(6), reply="checking")    # its check comes later, as the chat's
+        ended: dict = {}
+
+        async def asked(params: dict) -> str:
+            text = await client.complete(model, messages, params=params, **exact)
+            if check is not None:
+                ended["reply"] = getattr(client, "last_reply", None)     # read at once: the client is shared
+            return text
         try:
             try:
-                text = await client.complete(model, messages, params=with_effort({}, effort))
+                text = await asked(with_effort({}, effort))
             except Exception as e:
                 instead = self._learned(model, e, effort)
                 if instead is None or instead == effort:
                     raise
-                text = await client.complete(model, messages, params=with_effort({}, instead))
+                text = await asked(with_effort({}, instead))
         except Exception as e:
             self._record("vision", model=model, tier=tier, status=502, error=str(e)[:300])
             raise
         usage = getattr(client, "last_usage", None)
-        self._record("vision", model=model, tier=tier, sealed=tier == "private", status=200,
-                     seconds=round(time.monotonic() - started, 2),
+        self._record("vision", **rec, sealed=tier == "private", status=200, seconds=round(time.monotonic() - started, 2),
                      **({"usage": await self._priced(model, openai_usage(usage), tier)} if usage else {}))
+        self._check_later(model, check, ended, rec)
         return text.strip()
 
     async def _private_ids(self) -> list[str]:

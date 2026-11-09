@@ -1244,6 +1244,28 @@ def test_the_stream_keeps_its_receipt_id_and_the_hash_of_every_byte():
         assert done.body_hash == streamed(STREAM + tail)
 
 
+def test_a_whole_reply_asked_for_exactly_is_read_as_a_stream_and_kept_for_its_check():
+    """complete(exact=True), as the vision helper asks a TEE model: read as a stream, every byte hashed,
+    the reply's id, receipt and hash on last_reply (DA Vibe Manager's shape). Without it, as before."""
+    from daprivatecoder.llm.client import LLMClient
+
+    asked = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        asked.append(json.loads(request.content))
+        if asked[-1].get("stream"):
+            return httpx.Response(200, content=STREAM, headers={"content-type": "text/event-stream", "X-Receipt-Id": "rcpt-5"})
+        return httpx.Response(200, json={"id": "x", "object": "chat.completion", "created": 0, "model": "m", "choices": [
+            {"index": 0, "message": {"role": "assistant", "content": "whole"}, "finish_reason": "stop"}]})
+    client = LLMClient("https://nano-gpt.com/api/v1", "k", httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    text = asyncio.run(client.complete("TEE/kimi-k3", [{"role": "user", "content": "hi"}], exact=True))
+    reply = client.last_reply
+    assert text == "ok" and asked[0]["stream"] is True
+    assert (reply.id, reply.receipt_id, reply.body_hash) == ("req_9", "rcpt-5", streamed())
+    assert asyncio.run(client.complete("z-ai/glm-5.3", [{"role": "user", "content": "hi"}])) == "whole"
+    assert client.last_reply is None and "stream" not in asked[1]
+
+
 def test_an_error_partway_through_an_exact_stream_is_the_sdks_error():
     from openai import APIError
 
@@ -1263,9 +1285,15 @@ def test_an_error_partway_through_an_exact_stream_is_the_sdks_error():
 # --- every TEE reply through the proxy, checked once it has gone on to Claude Code -------------------
 
 
-def _tee_proxy(tmp_path, seen: list, stream: bytes = STREAM, receipt: str | None = "rcpt-1", **server):
-    """A TEE session's proxy whose model's enclave attests on receipt_server, and whose model streams
-    `stream` as it is through the real client, naming its receipt."""
+TEE_CAPS = [{"id": "TEE/glm-5.3-flash", "capabilities": {"vision": False, "tool_calling": True}},
+            {"id": "TEE/kimi-k3", "capabilities": {"vision": True, "tool_calling": True}}]
+
+
+def _tee_proxy(tmp_path, seen: list, stream: bytes = STREAM, receipt: str | None = "rcpt-1", vision: str = "",
+               sent: list | None = None, **server):
+    """A TEE session's proxy whose models' enclaves attest on receipt_server, and whose models stream
+    `stream` as it is through the real client, naming its receipt (`sent`: the bodies they were sent).
+    With `vision`, that TEE model describes images for its own model, which can't see (TEE_CAPS)."""
     from daprivatecoder.config import Profile
     from daprivatecoder.llm.client import LLMClient
     from daprivatecoder.proxy import AttestedTee, Proxy
@@ -1277,32 +1305,40 @@ def _tee_proxy(tmp_path, seen: list, stream: bytes = STREAM, receipt: str | None
         return AttestedTee(client, client.attest().to_dict())
 
     def chat(request: httpx.Request) -> httpx.Response:
+        if sent is not None:
+            sent.append(json.loads(request.content))
         return httpx.Response(200, content=stream, headers={
             "content-type": "text/event-stream", **({"X-Receipt-Id": receipt} if receipt else {})})
 
     async def caps():
-        return {}
+        from daprivatecoder.llm import capabilities
+        return capabilities.parse(TEE_CAPS) if vision else {}
     http = httpx.AsyncClient(transport=httpx.MockTransport(chat))
-    profile = Profile("tee", "tee", "TEE/glm-5.3-flash", "TEE/glm-5.3-flash", "TEE/glm-5.3-flash", "", "low")
+    profile = Profile("tee", "tee", "TEE/glm-5.3-flash", "TEE/glm-5.3-flash", "TEE/glm-5.3-flash", vision, "low")
     return Proxy(profile, "https://nano-gpt.com/api/v1", "t" * 40, key=lambda: "sk-nano",
                  log=UsageLog(tmp_path / "requests.log", "s1"), tee_check=attest,
                  plain_client=lambda url, key: LLMClient(url, key, http), capabilities_loader=caps,
                  http=httpx.AsyncClient(transport=httpx.MockTransport(lambda r: pytest.fail(f"nothing else: {r.url}"))))
 
 
-async def _ask(p, tmp_path, times: int = 1, stream: bool = True, checked: bool = True) -> tuple[list[str], list[dict]]:
-    """Ask the proxy `times`, each time waiting for the reply's check (`checked`) to be logged."""
+async def _ask(p, tmp_path, times: int = 1, stream: bool = True, checked: bool = True,
+               images: bool = False) -> tuple[list[str], list[dict]]:
+    """Ask the proxy `times`, each time waiting for the replies' checks (`checked`) to be logged: the
+    request's, and with `images` (a new one each time) its description's too."""
+    from daprivatecoder.llm import anthropic_bridge
     from daprivatecoder.usagelog import read
 
     said = []
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=p.app()), base_url="http://127.0.0.1") as c:
-        for _ in range(times):
+        for n in range(times):
+            content = [{"type": "text", "text": "hi"}] + (
+                [anthropic_bridge.b64_image(b"\x89PNG\r\n\x1a\n picture " + bytes([n]))] if images else [])
             r = await c.post("/v1/messages", headers={"authorization": "Bearer " + "t" * 40}, json={
                 "model": "TEE/glm-5.3-flash", "max_tokens": 100, "stream": stream,
-                "messages": [{"role": "user", "content": "hi"}]})
+                "messages": [{"role": "user", "content": content}]})
             said.append(r.text)
             for _ in range(500 if checked else 0):
-                if sum(1 for e in read(tmp_path / "requests.log") if e["kind"] == "tee_reply") == len(said):
+                if sum(1 for e in read(tmp_path / "requests.log") if e["kind"] == "tee_reply") == len(said) * (1 + images):
                     break
                 await asyncio.sleep(0.01)
     return said, read(tmp_path / "requests.log")
@@ -1317,6 +1353,40 @@ async def test_a_tee_reply_is_checked_to_its_exact_bytes_once_it_has_gone_on(tmp
     assert request["reply"] == "checking" and check["of"] == request["ref"] and check["reply"] == "verified"
     lookups = [str(r.url) for r in seen if "/tee/signature/" in str(r.url)]
     assert lookups and "rcpt-1" in lookups[-1]                     # by the receipt its stream named
+
+
+async def test_a_tee_vision_helpers_description_is_checked_as_any_reply_is(tmp_path):
+    """The vision helper's reply is the description the model is given: a TEE one's is read as a stream,
+    every byte hashed, and checked against its record as the chat's is, on a line naming the image's
+    own row in the request log."""
+    seen, sent = [], []
+    said, log = await _ask(_tee_proxy(tmp_path, seen, vision="TEE/kimi-k3", sent=sent), tmp_path, images=True)
+    vision = next(e for e in log if e["kind"] == "vision")
+    request = next(e for e in log if e["kind"] == "request")
+    checks = {e["of"]: e for e in log if e["kind"] == "tee_reply"}
+    assert vision["model"] == "TEE/kimi-k3" and vision["tier"] == "tee" and vision["reply"] == "checking"
+    assert checks[vision["ref"]]["reply"] == "verified" and checks[vision["ref"]]["model"] == "TEE/kimi-k3"
+    assert checks[request["ref"]]["reply"] == "verified" and vision["ref"] != request["ref"]
+    asked = [body["model"] for body in sent]
+    assert asked == ["TEE/kimi-k3", "TEE/glm-5.3-flash"] and all(body["stream"] for body in sent)
+    # the description went on to the model as it came
+    assert sent[1]["messages"][-1]["content"].endswith("described for you by a vision model (TEE/kimi-k3):]\nok")
+
+
+async def test_a_tee_description_that_fails_its_check_has_its_model_attested_again(tmp_path, monkeypatch):
+    from daprivatecoder.llm import tee as tee_mod
+
+    monkeypatch.setattr(tee_mod, "RECEIPT_RETRY_SECONDS", 0)
+    seen: list = []
+    p = _tee_proxy(tmp_path, seen, vision="TEE/kimi-k3", body_hash="sha256:" + "0" * 64)   # it signed other bytes
+    said, log = await _ask(p, tmp_path, times=2, images=True)
+    descriptions = {e["ref"] for e in log if e["kind"] == "vision"}
+    assert [e["reply"] for e in log if e["kind"] == "tee_reply" and e["of"] in descriptions] == ["failed", "failed"]
+    attested = [r.url.params["model"] for r in seen if "/tee/attestation" in str(r.url)]
+    # each model attested before its first request, and again before its second: both replies failed
+    assert attested.count("TEE/kimi-k3") == 2 and attested.count("TEE/glm-5.3-flash") == 2
+    assert [e.get("after") for e in log if e["kind"] == "attested_tee" and e["model"] == "TEE/kimi-k3"] == [
+        None, "a reply that failed its check"]
 
 
 async def test_a_tee_reply_not_streamed_is_checked_too(tmp_path):
