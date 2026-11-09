@@ -37,8 +37,9 @@ and standard models of NanoGPT, OpenRouter or another OpenAI-compatible provider
   `/bug` and `/share`, release notes, claude.ai's connectors, WebFetch's check of each site with
   Anthropic, and Anthropic's web search (DA Private Coder has its own, below).
 - **Not covered:** web searches (see [Web search](#web-search)), and what Claude Code's tools do on
-  your computer. WebFetch fetches pages itself (the site sees your address), Bash runs what it runs,
-  and MCP servers you've added talk to whoever they talk to.
+  your computer. WebFetch fetches pages itself (the site sees your address; an address that names
+  this computer or you, or holds a secret, is refused before it's fetched, as a search is), Bash runs
+  what it runs, and MCP servers you've added talk to whoever they talk to.
 
 All of this is a private session's. A TEE session's prompts are read by NanoGPT's gateway, and a
 standard session's go in the clear to its provider and the model's host: see
@@ -228,12 +229,20 @@ search provider read every query.
 | Best results | Perplexity to learn things, Kagi to find sites | Up to their own policies: not zero data retention. Better results. |
 | No web search | — | — |
 
-Whatever the choice, Claude Code asks you before each search and shows you the query; a query that
-names this computer or you (your login, real name, host name, home folder, an e-mail, MAC or
-private IP address) or holds a secret (an API key, a token, a private key, a long random string) is
-refused before it goes; and a session makes at most 40 searches. With Best results, a provider that
-fails on NanoGPT's side is replaced by Valyu, and if your NanoGPT account requires zero data
-retention, by Linkup; the result tells the model which ran.
+Whatever the choice, Claude Code asks you before each search and shows you the query (an earlier
+"don't ask again" doesn't skip it); a query that names this computer or you (your login, real name,
+host name, home folder, an e-mail, MAC or private IP address) or holds a secret (an API key, a token,
+a private key, a password in an address, a long random string) is refused before it goes, read as the
+search provider reads it, without characters no one can see; and a session makes at most 40
+searches. With Best results, a provider that fails on NanoGPT's side is replaced by Valyu, and if
+your NanoGPT account requires zero data retention, by Linkup; the result tells the model which ran.
+Results are untrusted: text in them that looks like instructions to the model is named in the result
+(which you see too), and hidden text is taken out before the model reads them.
+
+The address of every page WebFetch reads is checked the same way before Claude Code fetches it, by
+a hook DA Private Coder gives the session: one that carries this computer's names, an e-mail, MAC or
+private IP address or a secret in its path, query or subdomains is refused, and Claude Code is told
+why.
 
 ## Commands
 
