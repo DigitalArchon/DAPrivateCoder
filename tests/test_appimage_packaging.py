@@ -180,3 +180,40 @@ def test_console_scripts_that_name_the_build_python_are_left_out(tmp_path):
     subprocess.run(["bash", "-c", f"set -euo pipefail\n{loop}"], check=True,
                    env={"PATH": os.environ.get("PATH", ""), "W": str(tmp_path)})
     assert sorted(os.listdir(bin_dir)) == ["pydoc3.12", "python3", "python3.12"]
+
+
+# ---------------------------------------------------------------------- the host's CA store
+
+HOST_BUNDLES = ["/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt", "/etc/ssl/ca-bundle.pem",
+                "/etc/pki/tls/cert.pem", "/etc/ssl/cert.pem"]
+
+
+def apprun_bundles() -> list[str]:
+    return [p for p in re.findall(r"(/etc/[^\s;]+)", (PACKAGING / "AppRun").read_text()) if p.endswith((".crt", ".pem"))]
+
+
+def test_apprun_looks_for_the_hosts_ca_store_wherever_distributions_keep_it(tmp_path):
+    """Debian and its kin, Fedora and RHEL, openSUSE (/etc/ssl/ca-bundle.pem) and the rest, in DA
+    Assistant's order: with three, openSUSE's host went to the bundled certifi, past its own trust."""
+    import os
+    import subprocess
+
+    assert apprun_bundles() == HOST_BUNDLES
+    # AppRun as it is, the host's places under tmp_path, and a Python that says what it was given
+    here = tmp_path / "AppDir"
+    (here / "usr/python/bin").mkdir(parents=True)
+    python = here / "usr/python/bin/python3"
+    python.write_text('#!/bin/sh\necho "$SSL_CERT_FILE|$REQUESTS_CA_BUNDLE|$DAPRIVATECODER_APPRUN_SET"\n')
+    python.chmod(0o755)
+    apprun = here / "AppRun"
+    apprun.write_text((PACKAGING / "AppRun").read_text().replace("/etc/", f"{tmp_path}/etc/"))
+    apprun.chmod(0o755)
+    env = {"PATH": os.environ.get("PATH", "")}
+    suse = tmp_path / "etc/ssl/ca-bundle.pem"
+    suse.parent.mkdir(parents=True)
+    suse.write_text("certificates")
+    said = subprocess.run([str(apprun)], env=env, capture_output=True, text=True, check=True).stdout.strip()
+    assert said == f"{suse}|{suse}|SSL_CERT_FILE REQUESTS_CA_BUNDLE"
+    chosen = subprocess.run([str(apprun)], env={**env, "SSL_CERT_FILE": "/my/bundle.pem"}, capture_output=True,
+                            text=True, check=True).stdout.strip()
+    assert chosen == "/my/bundle.pem|/my/bundle.pem| REQUESTS_CA_BUNDLE"     # the user's own is left alone

@@ -6,11 +6,13 @@
 HERE="$(dirname "$(readlink -f "$0")")"
 # TLS trust: the host's own CA store first, so its distrust decisions (emSign ECC Root CA - G3,
 # the eMudhra root, Oct 2026) stand for httpx (SSL_CERT_FILE) and for requests, which tinfoil's
-# attestation uses (REQUESTS_CA_BUNDLE); the bundled certifi is the fallback. What is set here is
+# attestation uses (REQUESTS_CA_BUNDLE); the bundled certifi is the fallback. Where Debian and its kin,
+# Fedora and RHEL, openSUSE and the rest keep it, as DA Assistant's AppRun looks. What is set here is
 # named in DAPRIVATECODER_APPRUN_SET, so Claude Code and the terminals the app opens don't get it.
 set_here=""
 if [ -z "${SSL_CERT_FILE:-}" ]; then
-    for bundle in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt /etc/ssl/cert.pem; do
+    for bundle in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt /etc/ssl/ca-bundle.pem \
+                  /etc/pki/tls/cert.pem /etc/ssl/cert.pem; do
         if [ -r "$bundle" ]; then
             export SSL_CERT_FILE="$bundle"
             set_here="SSL_CERT_FILE"
