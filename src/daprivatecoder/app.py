@@ -190,15 +190,14 @@ def _bundled_girepository() -> None:
         set_for_self("GI_TYPELIB_PATH", ":".join(missing + ([current] if current else [])))
 
 
-def open_in_browser(base: str, tickets, opener=None) -> tuple[str, bool]:
-    """The window, in the web browser: started with a one-time address (server.Tickets), never the
-    window's own, whose token anyone could read on the browser's command line (as on every other
-    process's). Returns the address it was given, and whether a browser could be started."""
-    if opener is None:
+def browser_opener(port: int, launches):
+    """What opens the default browser on the app: on a one-time code (server.Launches), never the token,
+    since what a browser is opened with is on its command line, which every user of this computer can read.
+    As DA Vibe Manager's does (41f957d); it says whether a browser could be started."""
+    def open_in_browser() -> bool:
         import webbrowser
-        opener = webbrowser.open
-    address = f"{base}/open/{tickets.new()}"
-    return address, opener(address) is not False
+        return webbrowser.open(f"http://127.0.0.1:{port}/#c={launches.new()}") is not False
+    return open_in_browser
 
 
 def window_problem() -> str | None:
@@ -225,7 +224,7 @@ def main(argv: list[str] | None = None) -> None:
 
     from . import commands
     from .manager import Manager
-    from .server import Tickets, create_app
+    from .server import Launches, create_app
 
     ap = argparse.ArgumentParser(prog="daprivatecoder", description=f"{NAME}: Claude Code on NanoGPT's private models")
     mode = ap.add_mutually_exclusive_group()
@@ -275,8 +274,8 @@ def main(argv: list[str] | None = None) -> None:
             from gi.repository import GLib
             GLib.idle_add(lambda: (desktop.window.destroy(), False)[1])
 
-    tickets = Tickets()
-    app = create_app(token, manager, desktop, on_quit=lambda: quit_all(), tickets=tickets)
+    launches = Launches()
+    app = create_app(token, manager, desktop, on_quit=lambda: quit_all(), launches=launches)
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", http="h11",
                                            ws="none", loop="asyncio", lifespan="off"))
     thread = threading.Thread(target=server.run, daemon=True)
@@ -289,6 +288,7 @@ def main(argv: list[str] | None = None) -> None:
     # the token in the fragment, which a browser never sends anywhere (nor keeps in a server's logs); the
     # page moves it out of the address bar (web/app.js)
     url = f"{base}/#t={token}"
+    open_in_browser = browser_opener(port, launches)
 
     try:
         if use_browser:
@@ -298,11 +298,11 @@ def main(argv: list[str] | None = None) -> None:
             else:
                 print(f"{NAME} is running, in your web browser.", flush=True)     # stdout may be the session's log
             if not args.no_open:
-                if not open_in_browser(base, tickets)[1] and not sys.stdout.isatty():
+                if not open_in_browser() and not sys.stdout.isatty():
                     print(f"No web browser could be started. {told}", flush=True)      # the only way in, then
 
                 def open_again() -> str:
-                    open_in_browser(base, tickets)
+                    open_in_browser()                # a page of its own, on a code of its own
                     return "browser"
                 shown["show"] = open_again
             while thread.is_alive():          # until Quit in the page, or Ctrl+C

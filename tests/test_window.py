@@ -117,54 +117,77 @@ async def test_only_the_window_gets_in(window):
     assert (await call(app, "GET", "/static/app.js"))[0] == 200
 
 
-async def test_a_browser_is_started_with_a_one_time_address_only_this_user_can_use(window, monkeypatch):
-    """Whatever a browser is started with is on its command line, which every user of the computer can
-    read: it gets an address that opens the window once, for a minute, for this user's own programs, and
-    sends it on to the window with the token in the fragment (which the browser sends nowhere)."""
-    from daprivatecoder import app as app_mod
-    from daprivatecoder.server import Tickets
+def test_the_browser_is_opened_on_a_one_time_code_never_the_token(monkeypatch):
+    """A browser's command line shows every user of this computer what it was opened with: it was the token
+    (?t=…), which gave them the window for as long as it ran. (DA Vibe Manager's test, 41f957d.)"""
+    import webbrowser
 
-    now = [100.0]
-    tickets = Tickets(clock=lambda: now[0])
-    owners = {"who": os.getuid()}
-    page = create_app(TOKEN, manager.Manager(), tickets=tickets, owner=lambda client, server: owners["who"])
-    opened = []
-    address, started = app_mod.open_in_browser("http://127.0.0.1:8790", tickets, opened.append)
-    assert opened == [address] and TOKEN not in address and address.startswith("http://127.0.0.1:8790/open/")
-    assert started and not app_mod.open_in_browser("http://127.0.0.1:8790", tickets, lambda a: False)[1]
-    path = address.removeprefix("http://127.0.0.1:8790")
-    owners["who"] = os.getuid() + 1                                # another user's program, which read it
-    status, said = await call(page, "GET", path, token=None)
-    assert status == 403 and TOKEN not in said
-    owners["who"] = os.getuid()
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=page), base_url="http://127.0.0.1") as c:
-        r = await c.get(path)
-    assert r.status_code == 303 and r.headers["location"] == f"/#t={TOKEN}"   # not spent by the other's try
-    assert (await call(page, "GET", path, token=None))[0] == 403    # once only
-    late = app_mod.open_in_browser("http://127.0.0.1:8790", tickets, opened.append)[0].removeprefix("http://127.0.0.1:8790")
-    now[0] += 61
-    assert (await call(page, "GET", late, token=None))[0] == 403    # a minute at most
-    assert (await call(page, "GET", "/open/made-up", token=None))[0] == 403
+    from daprivatecoder.app import browser_opener
+    from daprivatecoder.server import Launches
+
+    opened, launches = [], Launches()
+    monkeypatch.setattr(webbrowser, "open", lambda url: opened.append(url) or True)
+    assert browser_opener(8123, launches)()
+    assert browser_opener(8123, launches)()                    # a second launch: a code of its own
+    assert all(u.startswith("http://127.0.0.1:8123/#c=") and "t=" not in u for u in opened)
+    first, second = (u.split("#c=")[1] for u in opened)
+    assert first != second and launches.take(second) and launches.take(first)
+    assert not launches.take(first)                             # once
+    monkeypatch.setattr(webbrowser, "open", lambda url: False)   # no browser to start: said (app.main prints the address)
+    assert not browser_opener(8123, launches)()
 
 
-def test_the_owner_of_a_connection_is_read_from_the_kernels_table(tmp_path):
+def test_a_launch_code_is_good_once_briefly_and_only_to_this_user(monkeypatch):
+    from daprivatecoder import server as server_mod
+
+    launches = server_mod.Launches()
+    code = launches.new()
+    assert not launches.take("guessed") and not launches.take(code + "x")
+    monkeypatch.setattr(server_mod, "peer_uid", lambda peer, server: os.getuid() + 1)
+    assert not launches.take(code, ("127.0.0.1", 40000), ("127.0.0.1", 8123))     # another user's process
+    monkeypatch.setattr(server_mod, "peer_uid", lambda peer, server: os.getuid())
+    assert launches.take(code, ("127.0.0.1", 40001), ("127.0.0.1", 8123))         # still this user's to use
+    late = launches.new()
+    monkeypatch.setattr(server_mod.time, "monotonic", lambda real=server_mod.time.monotonic: real() + server_mod.LAUNCH_SECONDS + 1)
+    assert not launches.take(late)
+
+
+def test_the_peer_of_a_loopback_connection_is_known_by_its_user():
     import socket
 
-    from daprivatecoder.server import _socket_owner
-    with socket.socket() as listening:
-        listening.bind(("127.0.0.1", 0))
-        listening.listen(1)
-        with socket.create_connection(listening.getsockname()) as client:
-            accepted, peer = listening.accept()
-            with accepted:
-                assert peer == client.getsockname()
-                assert _socket_owner(peer, listening.getsockname()) == os.getuid()
-    # 127.0.0.1:54884 -> 127.0.0.1:42509, as /proc/net/tcp lists it, owned by user 1234
-    table = tmp_path / "tcp"
-    table.write_text("  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
-                     "   0: 0100007F:D664 0100007F:A60D 01 00000000:00000000 00:00000000 00000000  1234        0 1 1\n")
-    assert _socket_owner(("127.0.0.1", 54884), ("127.0.0.1", 42509), (str(table),)) == 1234
-    assert _socket_owner(("127.0.0.1", 54885), ("127.0.0.1", 42509), (str(table),)) is None
+    from daprivatecoder.server import peer_uid
+
+    server = socket.socket()
+    server.bind(("127.0.0.1", 0))
+    server.listen(1)
+    client = socket.create_connection(server.getsockname())
+    try:
+        assert peer_uid(client.getsockname(), server.getsockname()) == os.getuid()
+        assert peer_uid(("127.0.0.1", 1), server.getsockname()) is None
+    finally:
+        client.close()
+        server.close()
+
+
+async def test_the_page_exchanges_its_code_for_the_token_and_nothing_else_does():
+    from daprivatecoder.server import Launches
+
+    launches = Launches()
+    page = create_app(TOKEN, manager.Manager(), launches=launches)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=page), base_url="http://127.0.0.1") as c:
+        code = launches.new()
+        r = await c.post("/api/launch", json={"code": code})
+        assert r.status_code == 200 and r.json() == {"token": TOKEN}
+        r = await c.post("/api/launch", json={"code": code})
+        assert r.status_code == 403 and "used already" in r.json()["error"] and TOKEN not in r.text
+        assert (await c.post("/api/launch", json={"code": "nope"})).status_code == 403
+        assert (await c.post("/api/launch", content=b"x" * 2000)).status_code == 413     # nothing big read
+        assert (await c.post("/api/launch", content=b"{")).status_code == 403
+        assert (await c.get("/api/launch")).status_code == 405
+    # without the codes to give (the app window's server), none is taken
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=create_app(TOKEN, manager.Manager())),
+                                 base_url="http://127.0.0.1") as c:
+        assert (await c.post("/api/launch", json={"code": Launches().new()})).status_code == 403
 
 
 def test_nothing_dropped_on_the_window_loads_in_its_place():
@@ -177,10 +200,11 @@ def test_nothing_dropped_on_the_window_loads_in_its_place():
     assert '!types.includes("Files")' in script
 
 
-def test_the_page_takes_the_token_out_of_the_address_bar():
+def test_the_page_takes_the_token_out_of_the_address_bar_and_exchanges_a_code_for_it():
     script = (Path(manager.__file__).parent / "web" / "app.js").read_text()
     assert 'sessionStorage.setItem("dpc-token"' in script and 'history.replaceState(null, "", "/")' in script
-    assert "location.hash" in script
+    assert "location.hash" in script and 'const LAUNCH = /(?:^#|&)c=([\\w-]+)/.exec(location.hash)' in script
+    assert 'fetch("/api/launch", { method: "POST"' in script and "launchToken(LAUNCH).then" in script
 
 
 async def test_setting_it_up_from_the_window(window, ring, tmp_path):

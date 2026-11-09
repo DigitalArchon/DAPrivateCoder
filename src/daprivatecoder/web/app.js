@@ -13,9 +13,12 @@ const DESKTOP = (() => {
   } catch { return fromUrl; }
 })();
 
-// the launch's token, from the address's fragment (app.py), kept for this tab only, and taken out of the
-// address bar (and the history) at once, as DA Vibe Manager's and DA Toolkit's windows do
-const TOKEN = (() => {
+// The window's token: in the app window's address (#t=, given it in-process: no command line shows it) and
+// in the one --no-open prints; in a browser, exchanged once for the one-time code its address carries (#c=:
+// what a browser is opened with is on its command line, for every user of this computer to read; app.py
+// browser_opener). Kept for this tab, and the address cleared of both, as DA Vibe Manager's window does.
+const LAUNCH = /(?:^#|&)c=([\w-]+)/.exec(location.hash)?.[1] || null;
+let TOKEN = (() => {
   const fromUrl = new URLSearchParams(location.hash.slice(1)).get("t") || new URLSearchParams(location.search).get("t");
   try {
     if (fromUrl) sessionStorage.setItem("dpc-token", fromUrl);
@@ -24,6 +27,15 @@ const TOKEN = (() => {
     return t;
   } catch { return fromUrl || ""; }
 })();
+
+async function launchToken(code) {
+  const res = await fetch("/api/launch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code }) });
+  let data = {};
+  try { data = await res.json(); } catch { /* empty */ }
+  if (!res.ok || !data.token) throw new Error(data.error || data.detail || `${res.status} ${res.statusText}`);
+  try { sessionStorage.setItem("dpc-token", data.token); } catch { /* kept for this page only */ }
+  return data.token;
+}
 const $ = (sel) => document.querySelector(sel);
 // kept across renders, as the folder typed is: the Models tab shown (a profile), each profile's models and
 // the hosts listed for a model, the key whose Replace field is open, a route being chosen (and, per model,
@@ -799,5 +811,14 @@ function editing() {
 }
 
 // usage and the editor's settings can change outside the window: looked at again now and then
-const looking = setInterval(() => { if (!document.hidden && !editing()) guarded(refresh); }, 20000);
-guarded(async () => { await refresh(); await loadModels(); });
+let looking = null;
+function begin() {
+  looking = setInterval(() => { if (!document.hidden && !editing()) guarded(refresh); }, 20000);
+  guarded(async () => { await refresh(); await loadModels(); });
+}
+// in a browser opened on a one-time code: the token first, for it (launchToken)
+if (!LAUNCH) begin();
+else launchToken(LAUNCH).then((t) => { TOKEN = t; begin(); }, (e) => {
+  document.body.replaceChildren(h("div", { class: "section" }, h("h3", {}, "This link can't open DA Private Coder."),
+    h("p", { class: "lead" }, e.message)));
+});

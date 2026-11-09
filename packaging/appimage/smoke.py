@@ -21,29 +21,29 @@ ENV = {**os.environ, "HOME": "/tmp/smoke/home", "XDG_CONFIG_HOME": "/tmp/smoke/c
 os.makedirs(ENV["HOME"], exist_ok=True)
 
 
-class _Unfollowed(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return None                                  # the redirect itself is what's wanted
-
-
 def start(*args: str) -> tuple[subprocess.Popen, str, str]:
     """Run the app, return (process, base URL, token): from the address it prints (--no-open), or as a
-    browser gets it, from the one-time address it is started with ($BROWSER=echo prints it), which sends
-    it on to the window with the token in the fragment."""
+    browser's page gets it, for the one-time code it is opened on ($BROWSER=echo prints the address),
+    exchanged once (POST /api/launch)."""
     proc = subprocess.Popen([f"{APPDIR}/AppRun", "--port", "8790", *args], env=ENV, text=True,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    base = "http://127.0.0.1:8790"
     for line in proc.stdout:
         print(f"  | {line.rstrip()}")
         if line.startswith("http://") and "#t=" in line:
-            return proc, "http://127.0.0.1:8790", line.strip().split("#t=", 1)[1]
-        if line.startswith("http://") and "/open/" in line:
+            return proc, base, line.strip().split("#t=", 1)[1]
+        if line.startswith("http://") and "#c=" in line:
+            code = line.strip().split("#c=", 1)[1]
+            asked = urllib.request.Request(base + "/api/launch", method="POST", headers={"Content-Type": "application/json"},
+                                           data=json.dumps({"code": code}).encode())
+            token = json.load(urllib.request.urlopen(asked, timeout=30)).get("token", "")
             try:
-                urllib.request.build_opener(_Unfollowed).open(line.strip(), timeout=30)
-            except urllib.error.HTTPError as sent:
-                check(sent.code == 303 and sent.headers["Location"].startswith("/#t="),
-                      f"{NAME}: the browser's one-time address opens the window")
-                return proc, "http://127.0.0.1:8790", sent.headers["Location"].split("#t=", 1)[1]
-            raise SystemExit("the browser's one-time address didn't send it on to the window")
+                urllib.request.urlopen(asked, timeout=30)
+                again = 200
+            except urllib.error.HTTPError as refused:
+                again = refused.code
+            check(bool(token) and again == 403, f"{NAME}: the browser's one-time code opens the window, once")
+            return proc, base, token
     raise SystemExit("the app exited before printing its URL")
 
 
