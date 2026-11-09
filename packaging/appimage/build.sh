@@ -45,12 +45,15 @@ if [ "$mode" = lock ]; then
     # ca-certificates), never pip's vendored certifi. The build itself needs none of this: every
     # package it installs is checked against the lock's hashes.
     export PIP_CERT=/etc/ssl/certs/ca-certificates.crt
-    "$V/pip" install -q "pip==26.2.2" "pip-tools==7.6.1"
+    # pip-tools and everything it runs on, checked against their hashes as the build's own tools are:
+    # what writes the locks is pinned like what the locks pin (lock-requirements.in)
+    "$V/pip" install -q --require-hashes --no-deps -r "$P/lock-requirements.lock"
     cd "$P"
     "$V/pip-compile" -q --generate-hashes --allow-unsafe --no-strip-extras --output-file /out/requirements.lock \
         "$W/src/pyproject.toml"
     "$V/pip-compile" -q --generate-hashes --allow-unsafe --output-file /out/build-requirements.lock build-requirements.in
     "$V/pip-compile" -q --generate-hashes --allow-unsafe --output-file /out/sdists.lock sdists.in
+    "$V/pip-compile" -q --generate-hashes --allow-unsafe --output-file /out/lock-requirements.lock lock-requirements.in
     sed -i "s#$W/src/#./#g; s#/out/#packaging/appimage/#g" /out/*.lock
     exit 0
 fi

@@ -62,6 +62,7 @@ relay and Tinfoil's public records), with the bundled Tinfoil SDK and that distr
 | Runtime Python packages (wheels, with hashes) | `appimage/requirements.lock` |
 | PyGObject, pycairo (source archives, with hashes) | `appimage/sdists.lock` |
 | meson, meson-python, ninja, setuptools (with hashes) | `appimage/build-requirements.lock` |
+| pip and pip-tools, which write the locks above, and what they run on (with hashes) | `appimage/lock-requirements.lock`, from `lock-requirements.in` |
 
 Changing any of these changes the AppImage, which is the point: an update is a reviewed commit.
 Runtime packages are installed only as prebuilt wheels; the few without one (`SDIST_ONLY` in

@@ -92,3 +92,35 @@ def test_the_source_archives_fetch_refuses_plain_http_and_a_redirect_to_it():
     assert onward.full_url == "https://mirror.example/x.tar.gz"
     with pytest.raises(SystemExit, match="is not https"):
         found["urlopen"]("http://pypi.org/pypi/pycairo/1.0/json")
+
+
+# ---------------------------------------------------------------------- what the build installs
+
+def test_nothing_is_installed_but_from_a_lock_with_hashes_or_built_here():
+    """The lock run installed "pip==26.2.2" "pip-tools==7.6.1": versions, not files, and what they pull
+    in as it came on the day; what writes the locks is locked now too. (DA Assistant's test, dc34ab7.)"""
+    build = (PACKAGING / "build.sh").read_text()
+    installs = 0
+    for line in _commands(build):
+        command = line.split(" #", 1)[0].strip()
+        if command.startswith("#") or not re.search(r'pip"? install ', command):
+            continue
+        installs += 1
+        if re.search(r' -r "[^"]+\.lock"', command):
+            assert "--require-hashes" in command, command
+        else:
+            assert re.search(r'pip"? install( -[-\w]+)* "\$W/wheels"/\S+\.whl$', command), command
+    assert installs >= 5
+    assert '--require-hashes --no-deps -r "$P/lock-requirements.lock"' in build
+    assert "--output-file /out/lock-requirements.lock lock-requirements.in" in build
+
+
+def test_every_locked_package_carries_a_hash():
+    for name in ("requirements", "build-requirements", "sdists", "lock-requirements"):
+        entries = re.findall(r"^([\w.-]+)==([^\s]+)((?:\s*\\\s*--hash=sha256:\w+)*)",
+                             (PACKAGING / f"{name}.lock").read_text(), re.M)
+        assert entries, name
+        for package, version, hashes in entries:
+            assert "--hash=sha256:" in hashes, f"{name}.lock: {package}=={version}"
+    tools = dict(re.findall(r"^([\w.-]+)==(\S+)", (PACKAGING / "lock-requirements.lock").read_text(), re.M))
+    assert (tools["pip"], tools["pip-tools"]) == ("26.2.2", "7.6.1")
