@@ -24,6 +24,31 @@ def test_the_key_is_kept_in_the_keyring(ring, monkeypatch, capsys):
     assert cli.main(["key", "set"]) == 1 and "nothing was stored" in capsys.readouterr().err
 
 
+# what a key picks up where it was copied from: a line break, a zero-width space, a letter that isn't
+# ASCII, a tab. h11 refuses such a header in words that quote it, key and all
+BAD_KEYS = ("sk-abc123\nsk-more", "sk-abc\u200b123", "sk-abcé123", "sk-abc\t123")
+
+
+@pytest.mark.parametrize("key", BAD_KEYS)
+def test_a_key_no_header_can_carry_is_refused_and_never_said(ring, monkeypatch, capsys, key):
+    if "\n" not in key:                                  # the command reads one line
+        monkeypatch.setattr("sys.stdin", Stdin(key + "\n"))
+        assert cli.main(["key", "set"]) == 1
+        said = capsys.readouterr().err
+        assert "nothing was stored" in said and "abc" not in said and ring.store == {}
+    with pytest.raises(creds.KeyUnusable, match="no API key has"):
+        creds.set_key(key)
+    assert ring.store == {}
+    # one stored before, or by another program: refused whenever it's read, saying so, and nothing of it
+    ring.store[("daprivatecoder", "nanogpt")] = key
+    creds.forget()
+    with pytest.raises(creds.KeyUnusable) as refused:
+        creds.get_key()
+    assert "NanoGPT" in str(refused.value) and "abc" not in str(refused.value)
+    assert isinstance(refused.value, creds.KeyringUnavailable)       # said wherever a key can't be had
+    assert cli.main(["key", "status"]) == 1 and "abc" not in capsys.readouterr().err
+
+
 def test_the_key_can_come_from_vibe_manager(ring, capsys):
     assert cli.main(["key", "set", "--from-vibe-manager"]) == 1 and "no NanoGPT key" in capsys.readouterr().err
     ring.store[("davibemanager", "provider:NanoGPT")] = "sk-from-dvm"

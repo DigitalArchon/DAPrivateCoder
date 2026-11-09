@@ -141,6 +141,19 @@ async def test_setting_it_up_from_the_window(window, ring, tmp_path):
     assert quit_called == [1]
 
 
+async def test_a_key_no_header_can_carry_is_refused_and_never_said(window, ring):
+    """A key pasted with a line break or a zero-width space would be refused by the HTTP library in words
+    quoting it whole: it isn't stored, and one stored before says what's wrong, not what it is."""
+    app, *_ = window
+    for key in ("sk-abc123\nsk-more", "sk-abc\u200b123", "sk-abcé123"):
+        status, st = await call(app, "POST", "/api/key", {"key": key})
+        assert status == 400 and "isn't an API key" in st["error"] and "abc" not in st["error"]
+    assert ring.store == {}
+    ring.store[("daprivatecoder", "nanogpt")] = "sk-abc\u200b123"
+    st = (await call(app, "GET", "/api/state"))[1]
+    assert not st["key"]["stored"] and "no API key has" in st["key"]["error"] and "abc" not in st["key"]["error"]
+
+
 async def test_the_private_profile_is_changed_from_the_window_and_never_made_unprivate(window):
     app, *_ = window
     st = (await call(app, "POST", "/api/profile", {"profile": "private", "fields": {"model": "private/kimi-k3",

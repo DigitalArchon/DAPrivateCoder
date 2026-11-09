@@ -251,6 +251,17 @@ async def test_without_a_key_claude_code_is_told_how_to_store_one():
     assert r.headers["x-should-retry"] == "false" and not fake.calls
 
 
+@pytest.mark.parametrize("profile, model", [(PRIVATE, "private/glm-5-3"), (NANO, "z-ai/glm-5.3")])
+async def test_a_key_no_header_can_carry_is_never_sent(profile, model):
+    """Sent, the HTTP library would refuse its header in words quoting it, key and all, and Claude Code
+    would show them: refused here, saying what's wrong and nothing of the key."""
+    plain = FakePlain()
+    p, fake = make(profile, key="sk-abc\n123", plain=plain)
+    r = await call(p, "POST", "/v1/messages", message(model))
+    assert r.status_code == 403 and "no API key has" in r.json()["error"]["message"] and "abc" not in r.text
+    assert fake.calls == [] and plain.calls == [] and plain.made == []
+
+
 async def test_a_private_model_needs_nanogpt():
     p, fake = make(base="https://llm.example.com/v1")
     r = await call(p, "POST", "/v1/messages", message("private/glm-5-3"))

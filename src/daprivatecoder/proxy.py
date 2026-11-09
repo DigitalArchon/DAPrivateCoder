@@ -42,7 +42,7 @@ from .llm.dcap import since_boot
 from .llm.anthropic_bridge import VISION_PROMPT, ImageDescriber, estimate_tokens, has_images, message, sse, to_openai
 from .llm.client import RANK, LLMClient, is_claude, is_private_mode, is_tee, private_id, tier_of
 from .llm.private_mode import Attestation, Enclave, PrivateModeClient, list_private_models, offers_private_mode, relay_url
-from .netpolicy import check_url
+from .netpolicy import check_url, key_problem
 from .usagelog import UsageLog
 
 MODEL_PATHS = frozenset({("POST", "/v1/messages"), ("POST", "/v1/messages/count_tokens"), ("GET", "/v1/models")})
@@ -427,10 +427,16 @@ class Proxy:
     def _read_key(self, provider: str = "nanogpt") -> str | None:
         try:
             key = self._key() if provider == "nanogpt" else self._provider_key()
+        except creds.KeyUnusable as e:
+            raise Refused(403, str(e)) from None
         except creds.KeyringUnavailable as e:
             if provider == "custom":
                 return None                                  # a server of your own may need none: it says if it does
             raise Refused(403, str(e)) from None
+        # a key no header can carry is never sent: the HTTP library's error would quote it to Claude Code
+        problem = key_problem(key, NAMES[provider])
+        if problem:
+            raise Refused(403, problem)
         if key or provider == "custom":                      # a server of your own may need none
             return key
         if provider == "nanogpt":

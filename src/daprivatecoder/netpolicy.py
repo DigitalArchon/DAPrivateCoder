@@ -6,11 +6,14 @@ localhost, loopback (127.0.0.0/8, ::1), the private ranges (10/8, 172.16/12, 192
 fc00::/7), link-local, and `.local` names. An onion service is authenticated and encrypted end to
 end by Tor itself, so http to a `.onion` name counts as secure. A URL outside all that which isn't
 https is refused with an explanation, never used and never rewritten.
+
+And an API key goes only where a header can carry it (key_problem).
 """
 
 from __future__ import annotations
 
 import ipaddress
+import re
 from urllib.parse import urlparse
 
 _PRIVATE_NETS = tuple(ipaddress.ip_network(n) for n in (
@@ -18,6 +21,10 @@ _PRIVATE_NETS = tuple(ipaddress.ip_network(n) for n in (
     "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7",  # private
     "169.254.0.0/16", "fe80::/10",                                # link-local
 ))
+
+
+# What no API key has in it: a backslash, white space, a control character (DA Assistant's netguard)
+_UNSAFE = re.compile(r"[\\\s\x00-\x1f\x7f]")
 
 
 class InsecureURL(ValueError):
@@ -82,3 +89,16 @@ def check_url(url: str, what: str = "This address") -> str:
             "Tor onion service. Use its https:// address instead."
         )
     return url
+
+
+def key_problem(key: str | None, name: str = "the provider") -> str | None:
+    """Why `key` can't be sent as an API key, or None. A key is plain ASCII with no spaces in it; one
+    pasted with a line break, or a zero-width space from a web page, would be refused by the HTTP
+    library in words that quote the header it was to go in, key and all ("Illegal header value
+    b'Bearer …'"), which Claude Code shows and the log keeps. Said without anything of the key. (DA
+    Assistant's netguard.key_problem, Nov 2026.)"""
+    if key and (not key.isascii() or _UNSAFE.search(key) or " " in key):
+        return (f"The API key for {name} has a space, a line break or another character no API key has in it, "
+                "picked up where it was copied from, perhaps. Enter it again in DA Private Coder's window (or with "
+                "daprivatecoder key set in a terminal).")
+    return None

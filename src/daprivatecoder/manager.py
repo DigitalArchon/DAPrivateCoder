@@ -206,11 +206,16 @@ class Manager:
         return provider, cfg.provider_url(cfg.profile("standard"))
 
     def set_key(self, key: str, provider: str = "nanogpt") -> None:
+        from .netpolicy import key_problem
         key = (key or "").strip()
-        if not key or any(c.isspace() for c in key):
+        if not key:
             where = {"nanogpt": " (nano-gpt.com/api)", "openrouter": " (openrouter.ai/settings/keys)"}.get(provider, "")
             raise UserError(f"That isn't an API key: paste the key {config.PROVIDERS.get(provider, 'the provider')} "
                             f"shows you{where}.")
+        if key_problem(key):                       # said without anything of the key: it may be most of it
+            raise UserError("That isn't an API key: it has a space, a line break or another character no API key "
+                            "has, picked up where it was copied from, perhaps. Nothing was stored: copy it again and "
+                            "paste it here.")
         creds.set_key(key, *self._provider_of(provider))
 
     def import_key(self) -> None:

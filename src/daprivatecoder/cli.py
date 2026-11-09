@@ -103,9 +103,13 @@ def _key(args) -> int:
         key = getpass.getpass(f"API key for {name} (it isn't shown as you type): ")
     else:
         key = sys.stdin.readline()
+    from .netpolicy import key_problem
     key = key.strip()
-    if not key or any(c.isspace() for c in key):
+    if not key:
         raise CliError("That isn't an API key: nothing was stored.")
+    if key_problem(key):
+        raise CliError("That isn't an API key (it has a space, a line break or another character no API key has, "
+                       "picked up where it was copied from, perhaps): nothing was stored.")
     creds.set_key(key, provider, base_url)
     print(f"The key for {name} is stored in your keyring.")
     return 0

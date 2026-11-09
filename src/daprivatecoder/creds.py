@@ -6,7 +6,10 @@ then is not a key that isn't there: reading raises KeyringUnavailable, and a key
 reads as None. The keyring library picks its backend once per process; if it settled on none (no
 Secret Service yet), it is asked to look again before each use. What has been read is kept in
 memory for the rest of the run: every model request needs the key, and a keyring that locked
-itself again (KWallet's timeout) would otherwise stop the session on its password prompt."""
+itself again (KWallet's timeout) would otherwise stop the session on its password prompt.
+
+A key no HTTP header can carry (a line break, a zero-width space from a web page) is refused when it
+is stored and whenever it is read, saying so and nothing of the key (netpolicy.key_problem)."""
 
 from __future__ import annotations
 
@@ -22,6 +25,23 @@ VIBE_MANAGER = ("davibemanager", "provider:NanoGPT")
 
 class KeyringUnavailable(Exception):
     """The keyring couldn't be read or written: not running yet, locked, or none at all."""
+
+
+class KeyUnusable(KeyringUnavailable):
+    """The key stored, or to be stored, has a character no HTTP header can carry. A KeyringUnavailable,
+    so whatever says why there is no key to send (the proxy, the web search, the window, the commands)
+    says this too, rather than sending it to be quoted back in an error."""
+
+
+# whose key, in what is said of it
+NAMES = {"nanogpt": "NanoGPT", "openrouter": "OpenRouter", "custom": "your provider"}
+
+
+def _usable(key: str | None, provider: str) -> None:
+    from .netpolicy import key_problem
+    problem = key_problem(key, NAMES.get(provider, provider))
+    if problem:
+        raise KeyUnusable(problem)
 
 
 def _backend():
@@ -69,11 +89,15 @@ def account(provider: str = "nanogpt", base_url: str = "") -> str:
 
 
 def get_key(provider: str = "nanogpt", base_url: str = "") -> str | None:
-    """The provider's key (NanoGPT's when not said), or None if none is stored."""
-    return _get(SERVICE, account(provider, base_url))
+    """The provider's key (NanoGPT's when not said), or None if none is stored. Raises KeyUnusable for
+    one no header can carry (stored before this was checked, or by another program)."""
+    key = _get(SERVICE, account(provider, base_url))
+    _usable(key, provider)
+    return key
 
 
 def set_key(value: str, provider: str = "nanogpt", base_url: str = "") -> None:
+    _usable(value, provider)
     user = account(provider, base_url)
     try:
         _backend().set_password(SERVICE, user, value)
