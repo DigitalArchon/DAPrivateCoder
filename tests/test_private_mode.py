@@ -427,6 +427,16 @@ async def test_whatever_of_the_relays_an_error_quotes_is_one_line_with_nothing_h
         assert one_visible_line(message) and SHOWN in message, message
 
 
+def test_the_client_takes_no_key_a_header_cant_carry():
+    """As DA Vibe Manager's copy has it: whoever builds the client, a key with a line break or a
+    zero-width space in it is refused before anything is sent, saying so and nothing of the key."""
+    from daprivatecoder.netpolicy import UnusableKey
+    for key in ("sk-abc\n123", "sk-abc\u200b123"):
+        with pytest.raises(UnusableKey, match="no API key has") as refused:
+            PrivateModeClient(BASE, key, Enclave(RELAY))
+        assert "abc" not in str(refused.value)
+
+
 async def test_each_new_attestation_is_reported_once():
     seen = []
     enclave = Enclave(RELAY, verifier=lambda relay, secret: verified(), on_attested=seen.append)

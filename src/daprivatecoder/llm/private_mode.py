@@ -24,16 +24,15 @@ belongs in the others:
    no one else (NanoGPT included) can probe our prompt cache.
 3. **Seal** the body with EHBP (HPKE X25519 + AES-GCM) to the attested key and decrypt the reply.
    The transport refuses a 2xx reply that isn't sealed; we also refuse one NanoGPT doesn't mark
-   as Private Mode, and a stream that ends without its final chunk. Nothing is ever sent
-   unsealed and nothing falls back to the plain endpoint (`LLMClient` refuses `private/*`).
-   What the relay writes in an error is never sealed: whatever of it an error quotes (a refused
-   request or preflight, an attestation bundle, the title of a key mismatch) goes through
-   `relay_said`, on one line, short, and without what can't be seen (DA Toolkit's, Nov 2026).
+   as Private Mode, and a stream that ends without its final chunk. What the relay says in an
+   error is never sealed, so it is said to be the relay's, short and on one line, without what a
+   reader can't see (`relay_said`): a refusal, a preflight's, an attestation error quoting the
+   bundle, the title of a key mismatch. Nothing is ever sent unsealed and nothing falls back to
+   the plain endpoint (`LLMClient` refuses `private/*`).
 
-The attestation is redone once it is five minutes old, and once more if the enclave says the
-key has changed. Its age is read off a clock that runs on while the machine sleeps
-(dcap.since_boot): time.monotonic stops, so a laptop woken after hours took an attestation made
-before it slept for minutes old.
+The attestation is redone once it is five minutes old, on a clock that runs on while the computer
+sleeps (dcap.since_boot: one made before a suspend isn't taken for fresh after it), and once more
+if the enclave says the key has changed.
 
 **Retired models.** The enclave is Tinfoil's router whatever the model, so a `private/` model
 NanoGPT no longer offers (private/glm-5-3-flash, Oct 2026) attests fine, and its first message
@@ -60,7 +59,8 @@ from urllib.parse import urlparse
 import httpx
 from openai.types.chat import ChatCompletionChunk
 
-from ..netpolicy import check_url
+from ..netpolicy import check_key, check_url, is_local_host
+from . import sdk_guard
 from .capabilities import norm_id
 from .client import StreamAccumulator, is_private_mode
 from .dcap import since_boot
@@ -190,12 +190,9 @@ def tinfoil_verify(relay: str, cache_secret: str) -> Verified:
     from tinfoil import SecureClient
     from tinfoil.github import fetch_latest_release
 
-    from ..netpolicy import is_local_host
-    from . import sdk_guard
-
-    # The SDK fetches with bare requests, which follows a redirect anywhere, plain http included: its
-    # every fetch follows one only to https, and never from the internet into this computer or its
-    # network (llm/sdk_guard.py)
+    # The SDK fetches with bare requests, which follows a redirect anywhere, plain http included:
+    # its every fetch goes through a session that refuses one off https, or from the internet into
+    # this computer or its network (llm/sdk_guard.py), before anything is fetched.
     sdk_guard.guard(is_local_host)
 
     # The cache secret is passed explicitly, or the SDK would create one under ~/.tinfoil;
@@ -269,7 +266,7 @@ class Enclave:
                 except PrivateModeError:
                     raise
                 except Exception as e:  # noqa: BLE001 - the SDK's own errors
-                    # they can quote the attestation bundle, which came through the relay
+                    # they can quote the bundle, which came through the relay
                     raise PrivateModeError(f"the private model's enclave couldn't be attested: "
                                            f"{relay_said(str(e), 500)}; nothing was sent") from e
                 self._at = self._clock()
@@ -344,6 +341,7 @@ class PrivateModeClient:
         check_url(base_url, "The provider's base URL")
         if not api_key:
             raise PrivateModeError("An API key is required for Private Mode.")
+        check_key(api_key, urlparse(base_url).hostname or "the provider")
         self.enclave = enclave
         self._api_key = api_key
         self._transport_factory = transport_factory
@@ -410,7 +408,8 @@ class PrivateModeClient:
 
     async def stream(self, model: str, messages: list[dict], tools: list[dict] | None = None,
                      params: dict | None = None) -> AsyncIterator[tuple[str, object]]:
-        """Yield ("text"|"reasoning", str) deltas, then ("done", TurnResult)."""
+        """Yield ("open", None) once the enclave's sealed reply has begun, ("text"|"reasoning", str)
+        deltas, then ("done", TurnResult)."""
         if not is_private_mode(model):
             raise PrivateModeError(f"{model} isn't a Private Mode model; nothing was sent")
         await self.check_offered(model)
@@ -422,7 +421,7 @@ class PrivateModeClient:
             from ehbp import EHBPError, KeyConfigMismatchError
             try:
                 async for event in self._one_request(model, messages, tools, verified, params):
-                    started = True
+                    started = started or event[0] != "open"     # nothing of the reply yet: it may be asked again
                     yield event
                 return
             except KeyConfigMismatchError as e:

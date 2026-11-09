@@ -145,6 +145,10 @@ def scrubbed(text: str) -> str:
     return _ADDRESS_IN_TEXT.sub(lambda m: shown(m.group(0)), str(text))
 
 
+class UnusableKey(ValueError):
+    """An API key no HTTP header can carry (key_problem): nothing is sent with it."""
+
+
 def key_problem(key: str | None, name: str = "the provider") -> str | None:
     """Why `key` can't be sent as an API key, or None. A key is plain ASCII with no spaces in it; one
     pasted with a line break, or a zero-width space from a web page, would be refused by the HTTP
@@ -156,3 +160,12 @@ def key_problem(key: str | None, name: str = "the provider") -> str | None:
                 "picked up where it was copied from, perhaps. Enter it again in DA Private Coder's window (or with "
                 "daprivatecoder key set in a terminal).")
     return None
+
+
+def check_key(key, name: str = "the provider"):
+    """`key`, unless no HTTP header can carry it: then UnusableKey, saying why and nothing of the key. (As
+    DA Vibe Manager's netpolicy has it: its clients and DA Private Coder's check the key they are given.)"""
+    problem = key_problem(key, name)
+    if problem:
+        raise UnusableKey(problem)
+    return key
