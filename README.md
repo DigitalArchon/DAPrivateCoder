@@ -285,10 +285,10 @@ not on Claude Code's command line, which every user of the computer can see. The
 Manager, after DAToolkit and SealedLore.
 
 The window is a small local web page (served on 127.0.0.1 with a token for each launch) shown with
-your system's GTK and WebKitGTK, as DA Vibe Manager's is. In a web browser, it's opened with a
-one-time address only your own programs can use, which takes the browser on to the window: the token
-itself is on no command line, which every user of the computer can read. A link or file dropped on
-the window doesn't load in its place.
+your system's GTK and WebKitGTK, as DA Vibe Manager's is. In a web browser, it's opened on a one-time
+code, which the page exchanges for the token once, within two minutes, and only for a program of
+yours: the token itself is on no command line, which every user of the computer can read. A link or
+file dropped on the window doesn't load in its place.
 
 ## Running from source
 
