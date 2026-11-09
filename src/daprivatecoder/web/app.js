@@ -4,9 +4,26 @@
 // enclaves' attestations, and what it cost. Every change goes through the local server (server.py),
 // which writes the same files the commands do.
 
-const TOKEN = new URLSearchParams(location.search).get("t") || "";
-// in the app window (app.py adds desktop=1), not a web browser
-const DESKTOP = new URLSearchParams(location.search).get("desktop") === "1";
+// in the app window (app.py adds desktop=1), not a web browser; kept for a reload, as the token is
+const DESKTOP = (() => {
+  const fromUrl = new URLSearchParams(location.search).get("desktop") === "1";
+  try {
+    if (fromUrl) sessionStorage.setItem("dpc-desktop", "1");
+    return fromUrl || sessionStorage.getItem("dpc-desktop") === "1";
+  } catch { return fromUrl; }
+})();
+
+// the launch's token, from the address's fragment (app.py), kept for this tab only, and taken out of the
+// address bar (and the history) at once, as DA Vibe Manager's and DA Toolkit's windows do
+const TOKEN = (() => {
+  const fromUrl = new URLSearchParams(location.hash.slice(1)).get("t") || new URLSearchParams(location.search).get("t");
+  try {
+    if (fromUrl) sessionStorage.setItem("dpc-token", fromUrl);
+    const t = fromUrl || sessionStorage.getItem("dpc-token") || "";
+    history.replaceState(null, "", "/");
+    return t;
+  } catch { return fromUrl || ""; }
+})();
 const $ = (sel) => document.querySelector(sel);
 // kept across renders, as the folder typed is: the Models tab shown (a profile), each profile's models and
 // the hosts listed for a model, the key whose Replace field is open, a route being chosen (and, per model,

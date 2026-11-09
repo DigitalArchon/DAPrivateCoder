@@ -116,6 +116,61 @@ async def test_only_the_window_gets_in(window):
     assert (await call(app, "GET", "/static/app.js"))[0] == 200
 
 
+async def test_a_browser_is_started_with_a_one_time_address_only_this_user_can_use(window, monkeypatch):
+    """Whatever a browser is started with is on its command line, which every user of the computer can
+    read: it gets an address that opens the window once, for a minute, for this user's own programs, and
+    sends it on to the window with the token in the fragment (which the browser sends nowhere)."""
+    from daprivatecoder import app as app_mod
+    from daprivatecoder.server import Tickets
+
+    now = [100.0]
+    tickets = Tickets(clock=lambda: now[0])
+    owners = {"who": os.getuid()}
+    page = create_app(TOKEN, manager.Manager(), tickets=tickets, owner=lambda client, server: owners["who"])
+    opened = []
+    address = app_mod.open_in_browser("http://127.0.0.1:8790", tickets, opened.append)
+    assert opened == [address] and TOKEN not in address and address.startswith("http://127.0.0.1:8790/open/")
+    path = address.removeprefix("http://127.0.0.1:8790")
+    owners["who"] = os.getuid() + 1                                # another user's program, which read it
+    status, said = await call(page, "GET", path, token=None)
+    assert status == 403 and TOKEN not in said
+    owners["who"] = os.getuid()
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=page), base_url="http://127.0.0.1") as c:
+        r = await c.get(path)
+    assert r.status_code == 303 and r.headers["location"] == f"/#t={TOKEN}"   # not spent by the other's try
+    assert (await call(page, "GET", path, token=None))[0] == 403    # once only
+    late = app_mod.open_in_browser("http://127.0.0.1:8790", tickets, opened.append).removeprefix("http://127.0.0.1:8790")
+    now[0] += 61
+    assert (await call(page, "GET", late, token=None))[0] == 403    # a minute at most
+    assert (await call(page, "GET", "/open/made-up", token=None))[0] == 403
+
+
+def test_the_owner_of_a_connection_is_read_from_the_kernels_table(tmp_path):
+    import socket
+
+    from daprivatecoder.server import _socket_owner
+    with socket.socket() as listening:
+        listening.bind(("127.0.0.1", 0))
+        listening.listen(1)
+        with socket.create_connection(listening.getsockname()) as client:
+            accepted, peer = listening.accept()
+            with accepted:
+                assert peer == client.getsockname()
+                assert _socket_owner(peer, listening.getsockname()) == os.getuid()
+    # 127.0.0.1:54884 -> 127.0.0.1:42509, as /proc/net/tcp lists it, owned by user 1234
+    table = tmp_path / "tcp"
+    table.write_text("  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
+                     "   0: 0100007F:D664 0100007F:A60D 01 00000000:00000000 00:00000000 00000000  1234        0 1 1\n")
+    assert _socket_owner(("127.0.0.1", 54884), ("127.0.0.1", 42509), (str(table),)) == 1234
+    assert _socket_owner(("127.0.0.1", 54885), ("127.0.0.1", 42509), (str(table),)) is None
+
+
+def test_the_page_takes_the_token_out_of_the_address_bar():
+    script = (Path(manager.__file__).parent / "web" / "app.js").read_text()
+    assert 'sessionStorage.setItem("dpc-token"' in script and 'history.replaceState(null, "", "/")' in script
+    assert "location.hash" in script
+
+
 async def test_setting_it_up_from_the_window(window, ring, tmp_path):
     app, started, settings, quit_called = window
     status, st = await call(app, "GET", "/api/state")

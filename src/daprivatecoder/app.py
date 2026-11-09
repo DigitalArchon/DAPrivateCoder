@@ -190,6 +190,18 @@ def _bundled_girepository() -> None:
         set_for_self("GI_TYPELIB_PATH", ":".join(missing + ([current] if current else [])))
 
 
+def open_in_browser(base: str, tickets, opener=None) -> str:
+    """The window, in the web browser: started with a one-time address (server.Tickets), never the
+    window's own, whose token anyone could read on the browser's command line (as on every other
+    process's). Returns the address it was given."""
+    if opener is None:
+        import webbrowser
+        opener = webbrowser.open
+    address = f"{base}/open/{tickets.new()}"
+    opener(address)
+    return address
+
+
 def window_problem() -> str | None:
     """Why the app window can't open here (no WebKitGTK, no display), or None if it can."""
     if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
@@ -214,7 +226,7 @@ def main(argv: list[str] | None = None) -> None:
 
     from . import commands
     from .manager import Manager
-    from .server import create_app
+    from .server import Tickets, create_app
 
     ap = argparse.ArgumentParser(prog="daprivatecoder", description=f"{NAME}: Claude Code on NanoGPT's private models")
     mode = ap.add_mutually_exclusive_group()
@@ -264,7 +276,8 @@ def main(argv: list[str] | None = None) -> None:
             from gi.repository import GLib
             GLib.idle_add(lambda: (desktop.window.destroy(), False)[1])
 
-    app = create_app(token, manager, desktop, on_quit=lambda: quit_all())
+    tickets = Tickets()
+    app = create_app(token, manager, desktop, on_quit=lambda: quit_all(), tickets=tickets)
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", http="h11",
                                            ws="none", loop="asyncio", lifespan="off"))
     thread = threading.Thread(target=server.run, daemon=True)
@@ -273,17 +286,22 @@ def main(argv: list[str] | None = None) -> None:
         if not thread.is_alive():
             raise SystemExit("The window's server failed to start.")
         time.sleep(0.05)
-    url = f"http://127.0.0.1:{port}/?t={token}"
+    base = f"http://127.0.0.1:{port}"
+    # the token in the fragment, which a browser never sends anywhere (nor keeps in a server's logs); the
+    # page moves it out of the address bar (web/app.js)
+    url = f"{base}/#t={token}"
 
     try:
         if use_browser:
-            print(f"{NAME} is running. Open this address (keep it to yourself: it opens the app):\n{url}", flush=True)
+            if args.no_open or sys.stdout.isatty():
+                print(f"{NAME} is running. Open this address (keep it to yourself: it opens the app):\n{url}", flush=True)
+            else:
+                print(f"{NAME} is running, in your web browser.", flush=True)     # stdout may be the session's log
             if not args.no_open:
-                import webbrowser
-                webbrowser.open(url)
+                open_in_browser(base, tickets)
 
                 def open_again() -> str:
-                    webbrowser.open(url)
+                    open_in_browser(base, tickets)
                     return "browser"
                 shown["show"] = open_again
             while thread.is_alive():          # until Quit in the page, or Ctrl+C
@@ -294,7 +312,7 @@ def main(argv: list[str] | None = None) -> None:
 
             theme = manager.prefs()["theme"]
             width, height = window_size()
-            window = webview.create_window(NAME, url + "&desktop=1", width=width, height=height, min_size=MIN_SIZE,
+            window = webview.create_window(NAME, f"{base}/?desktop=1#t={token}", width=width, height=height, min_size=MIN_SIZE,
                                            text_select=True, background_color=BACKGROUND.get(theme, "#111418"))
             desktop.window = window
 
