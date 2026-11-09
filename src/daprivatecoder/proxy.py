@@ -42,7 +42,7 @@ from .llm.dcap import since_boot
 from .llm.anthropic_bridge import VISION_PROMPT, ImageDescriber, estimate_tokens, has_images, message, sse, to_openai
 from .llm.client import RANK, LLMClient, is_claude, is_private_mode, is_tee, private_id, tier_of
 from .llm.private_mode import Attestation, Enclave, PrivateModeClient, list_private_models, offers_private_mode, relay_url
-from .netpolicy import addresses_shown, check_url, key_problem, shown
+from .netpolicy import check_url, key_problem, scrubbed, shown
 from .usagelog import UsageLog
 
 MODEL_PATHS = frozenset({("POST", "/v1/messages"), ("POST", "/v1/messages/count_tokens"), ("GET", "/v1/models")})
@@ -724,7 +724,7 @@ class Proxy:
     def _error(e: Refused):
         from starlette.responses import JSONResponse
         # an address in it never with its password (an error from the network can quote one)
-        return JSONResponse({"type": "error", "error": {"type": e.kind, "message": addresses_shown(str(e))}},
+        return JSONResponse({"type": "error", "error": {"type": e.kind, "message": scrubbed(str(e))}},
                             status_code=e.status,
                             headers={} if e.retry else {"x-should-retry": "false"})
 

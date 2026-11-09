@@ -36,8 +36,8 @@ class CliError(Exception):
 
 
 def _fail(prog: str, e: Exception) -> int:
-    from .netpolicy import addresses_shown
-    print(f"{prog}: {addresses_shown(str(e))}", file=sys.stderr)      # no address with its password in it
+    from .netpolicy import scrubbed
+    print(f"{prog}: {scrubbed(str(e))}", file=sys.stderr)      # no address with its password in it
     return 1
 
 

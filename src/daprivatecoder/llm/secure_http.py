@@ -7,8 +7,8 @@ Ported from SealedLore (providers/http.py), where the verifier comes from:
   and certificate settings.
 - **A redirect never downgrades.** The response hook refuses a redirect whose target isn't
   https (or http to a local address, netpolicy.py), whether or not the client follows redirects,
-  and one from a server on the internet into this computer or its local network. A relative
-  `Location` is resolved first, as the client would resolve it (SealedLore's, Nov 2026).
+  and one from a server on the internet into this computer or the local network. A relative one
+  is judged where it leads (SealedLore's providers/http.py, Nov 2026).
 """
 
 from __future__ import annotations
@@ -37,22 +37,22 @@ def is_loopback(url: str) -> bool:
 def is_local(url: str) -> bool:
     """A server on this computer or the local network (netpolicy.is_local_host)."""
     try:
-        return is_local_host(urlparse(url).hostname)
+        return is_local_host(urlparse(url).hostname or "")
     except ValueError:
         return False
 
 
 def refuse_insecure_redirect(response: httpx.Response) -> None:
     """A response hook: a redirect to anywhere the app wouldn't send to directly, or from a server
-    out on the internet into this computer or the local network."""
+    out on the internet into this computer or the local network (a router's admin page)."""
     if not response.is_redirect:
         return
     location = response.headers.get("location")
     if location is None:
         return
-    # httpx runs the hooks before it builds the next request, so `Location` is read here as written,
-    # and a relative one ("/v1/x") is resolved the way the client will resolve it: read raw, it had
-    # no scheme, and every relative redirect was refused as insecure.
+    # httpx runs the hooks before it builds the next request, so `Location` is read here as
+    # written: a relative one ("/c/2") was refused for having no scheme, and one to a local
+    # address passed for https. It is resolved the way the client will resolve it.
     try:
         target = str(response.request.url.join(location))
     except httpx.InvalidURL:

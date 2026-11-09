@@ -23,9 +23,9 @@ class UsageLog:
         self._lock = threading.Lock()
 
     def write(self, kind: str, **fields) -> None:
-        from .netpolicy import addresses_shown
+        from .netpolicy import scrubbed
         # an address in an error never with its password (httpx's errors name the URL they were for)
-        fields = {k: addresses_shown(v) if isinstance(v, str) else v for k, v in fields.items()}
+        fields = {k: scrubbed(v) if isinstance(v, str) else v for k, v in fields.items()}
         record = {"t": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "session": self.session, "kind": kind, **fields}
         line = json.dumps(record, ensure_ascii=False, default=str) + "\n"
         with self._lock:

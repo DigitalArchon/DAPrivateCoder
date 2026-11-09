@@ -12,7 +12,7 @@ import pytest
 from keyring.backend import KeyringBackend
 
 from daprivatecoder import config, creds
-from daprivatecoder.netpolicy import InsecureURL, addresses_shown, check_url, shown, without_password
+from daprivatecoder.netpolicy import InsecureURL, check_url, scrubbed, shown, without_password
 
 ENDPOINT = "https://bob:hunter2@llm.example/v1"
 PLAIN = "https://llm.example/v1"
@@ -71,7 +71,7 @@ def test_an_address_is_shown_without_its_password():
                         ("https://alice:s3cret@llm.example:99999/v1", "https://…@llm.example:99999/v1"),
                         ("https://alice:s3/cret@llm.example/v1", "https://…@llm.example/v1")):
         assert shown(typed) == said, typed
-    assert addresses_shown("Client error '401' for url 'https://bob:hunter2@llm.example/v1/models'") == \
+    assert scrubbed("Client error '401' for url 'https://bob:hunter2@llm.example/v1/models'") == \
         "Client error '401' for url 'https://…@llm.example/v1/models'"
 
 

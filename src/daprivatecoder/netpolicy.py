@@ -139,7 +139,7 @@ def without_password(url: str | None) -> str:
     return parsed._replace(netloc=parsed.netloc.rsplit("@", 1)[1]).geturl()
 
 
-def addresses_shown(text: str) -> str:
+def scrubbed(text: str) -> str:
     """`text` with every address in it as shown() has it: for an error that quotes the address a
     request went to, as httpx's do ("… for url 'https://alice:secret@host/v1/models'")."""
     return _ADDRESS_IN_TEXT.sub(lambda m: shown(m.group(0)), str(text))
