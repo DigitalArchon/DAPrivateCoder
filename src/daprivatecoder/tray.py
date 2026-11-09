@@ -8,13 +8,17 @@ extension) would otherwise hide the window to an icon nobody can see. With none,
 and closing the window quits the app, as before.
 
 A second launch (from the menu, say, while the window is in the tray) finds the first through an
-abstract Unix socket named for this user and asks it to show its window, then exits.
+abstract Unix socket named for this user and asks it to show its window, then exits. An abstract name
+has no permissions, so another user could take it first: each end checks who the other is (the
+kernel's SO_PEERCRED), and a name another user holds is taken for none, rather than for this app
+already running (every launch would otherwise have asked the squatter, and quit).
 """
 
 from __future__ import annotations
 
 import os
 import socket
+import struct
 import threading
 from pathlib import Path
 from typing import Callable
@@ -27,10 +31,20 @@ def _socket_name() -> bytes:
     return f"\0daprivatecoder-{os.getuid()}".encode()
 
 
+def _peer_uid(sock: socket.socket) -> int | None:
+    """The user id of the process at the other end of a connected Unix socket (None if it can't be told)."""
+    try:
+        _pid, uid, _gid = struct.unpack("3i", sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED,
+                                                              struct.calcsize("3i")))
+    except (OSError, AttributeError, struct.error):
+        return None
+    return uid
+
+
 def claim_single_instance(on_show: Callable[[], str]) -> tuple[bool, str]:
-    """(True, "") if this is the only copy: it then listens for later launches, and answers each with
-    what on_show() did. (False, what the running copy did) if another copy is running, which has been
-    asked to show its window."""
+    """(True, "") if this is the only copy: it then listens for later launches (this user's), and answers
+    each with what on_show() did. (False, what the running copy did) if another copy is running, which
+    has been asked to show its window. A name another user holds is no copy of ours: (True, "") too."""
     srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
         srv.bind(_socket_name())
@@ -40,6 +54,8 @@ def claim_single_instance(on_show: Callable[[], str]) -> tuple[bool, str]:
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as c:
                 c.settimeout(2)
                 c.connect(_socket_name())
+                if _peer_uid(c) != os.getuid():
+                    return True, ""     # another user's: this runs as the only copy (just not found by later ones)
                 c.sendall(b"show\n")
                 try:
                     said = c.recv(256).decode("utf-8", "replace").strip()
@@ -57,6 +73,8 @@ def claim_single_instance(on_show: Callable[[], str]) -> tuple[bool, str]:
             except OSError:
                 return
             with conn:
+                if _peer_uid(conn) != os.getuid():
+                    continue            # another user's program: it is told nothing, and nothing is shown
                 conn.settimeout(2)
                 try:
                     if conn.recv(64).startswith(b"show"):
