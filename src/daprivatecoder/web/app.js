@@ -117,25 +117,31 @@ function providerName(st, profile) {
 
 // what a session of `kind` is, in a sentence; and for one that isn't private, what it gives away
 function leadOf(st, kind) {
-  if (kind === "private") return "Each request is sealed on this computer to an enclave whose attestation is checked first; NanoGPT only relays it.";
-  if (kind === "tee") return "NanoGPT's TEE models. Each runs in an enclave this app attests before it sends it anything (Intel TDX, NVIDIA GPUs), and again every 15 minutes.";
-  return `Any model of ${providerName(st, "standard")}, as you choose it below (Models).`;
+  if (kind === "private") return "Requests are encrypted on this computer so that only a verified enclave can read them. "
+    + "NanoGPT passes them on but can't read them.";
+  if (kind === "tee") return "NanoGPT's TEE models, which run in secure enclaves (Intel TDX with NVIDIA GPUs). "
+    + "DA Private Coder verifies each enclave before sending it anything, and again every 15 minutes.";
+  return `Any model from ${providerName(st, "standard")}. Choose them under Models, below.`;
 }
 
 function warningOf(st, kind) {
   if (kind === "tee") return h("div", { class: "warnbox" }, h("b", {}, "Not end-to-end encrypted. "),
-    "NanoGPT's gateway reads every prompt, the files Claude Code sends and every reply, in the clear: the enclave protects them only from the host that runs the model. For that too, choose Private.");
+    "NanoGPT can read every prompt, file and reply. The enclave only hides them from the company running the model. "
+    + "To hide them from NanoGPT too, choose Private.");
   if (kind === "standard") return h("div", { class: "warnbox" }, h("b", {}, "Not private. "),
-    `Every prompt, the files Claude Code reads and every reply go in the clear to ${providerName(st, "standard")} and the host that runs the model, and what they keep is up to them.`);
+    `${providerName(st, "standard")} and the company running the model can read every prompt, file and reply, `
+    + "and keep them under their own policies.");
   return null;
 }
 
 // why a session of `kind` can't start yet, or "" when it can
 function notReady(st, kind) {
   if (st.ready[kind]) return "";
-  if (!st.claude.path) return "Claude Code isn't found here (Setup).";
-  if (kind === "standard" && st.provider_key) return `Store your ${providerName(st, "standard")} API key first (Models, Standard).`;
-  return "Store your NanoGPT API key first (Setup).";
+  if (!st.claude.path) return "Can't start yet: Claude Code wasn't found. See Setup.";
+  if (kind === "standard" && st.provider_key) {
+    return `Can't start yet: add your ${providerName(st, "standard")} API key under Models (the Standard tab).`;
+  }
+  return "Can't start yet: add your NanoGPT API key in Setup.";
 }
 
 // three buttons, one pressed: the kinds of session
@@ -150,10 +156,10 @@ function seg(current, pick) {
 function renderTop(st) {
   const bar = $("#status");
   let text = "Ready", cls = "ok";
-  if (st.config_error) { text = "The settings file has a mistake"; cls = "bad"; }
+  if (st.config_error) { text = "The settings file has an error"; cls = "bad"; }
   else if (!st.claude.path) { text = "Needs Claude Code"; cls = "wait"; }
   else if (!SESSIONS.some((k) => st.ready[k])) { text = "Needs an API key"; cls = "wait"; }
-  else text = `Ready: Start opens ${KINDS[st.start].label} sessions`;
+  else text = `Ready · new sessions are ${KINDS[st.start].label}`;
   bar.className = `status ${cls}`;
   $("#status-text").textContent = text;
   const notes = [st.ui_notice, st.config_error].filter(Boolean);
@@ -168,21 +174,23 @@ function startSection(st) {
   const why = notReady(st, kind);
   const opening = Object.keys(S.busy).some((k) => k.startsWith("open"));
   const open = (f) => once("open", () => act("POST", "/api/open", { folder: f, profile: kind },
-    `Claude Code is starting in a terminal window, on ${KINDS[kind].models}.`));
+    `Starting Claude Code in a terminal, on ${KINDS[kind].models}.`));
   // the folder in the editor, its Claude Code on this kind of session; other folders stay as they are
   const openIn = (e, f) => once(`open:${e.name}`, () => act("POST", "/api/open-editor", { name: e.name, folder: f, profile: kind },
-    `${e.name} opens it: Claude Code there runs on ${KINDS[kind].models} (in a new conversation, if one was open). Other folders are as they were.`));
+    `Opening in ${e.name}. Claude Code in this folder now uses ${KINDS[kind].models}. `
+    + "If a conversation was already open there, start a new one."));
   const editorsHere = (st.editors || []).filter((e) => e.opens && e.state !== "other");
-  const folder = h("input", { type: "text", class: "mono folder", placeholder: "The project's folder", value: S.folder,
+  const folder = h("input", { type: "text", class: "mono folder", value: S.folder,
+    placeholder: st.can_choose_folder ? "Project folder: type its path, or Choose…" : "Project folder: type its path",
     oninput: (e) => { S.folder = e.target.value; },
     onkeydown: (e) => { if (e.key === "Enter" && !why) open(S.folder); } });
   const recent = (st.recent || []).map((f) => h("div", { class: "item" },
     // cut at the start when it's too long (direction: rtl), the path itself kept left to right:
     // otherwise its first "/" is drawn at its end; a click puts it in the folder field
-    h("span", { class: "path link", title: `${f} (click: open it in the editor or a terminal above)`,
+    h("span", { class: "path link", title: `${f}\nClick to choose it, then open it with a button above.`,
       onclick: () => { S.folder = f; render(); } }, h("bdi", { dir: "ltr" }, f)),
-    h("button", { class: "small", disabled: Boolean(why) || opening, onclick: () => open(f) }, "Open"),
-    h("button", { class: "small ghost", title: "Forget this folder", onclick: () => act("POST", "/api/forget", { folder: f }) }, "×")));
+    h("button", { class: "small", disabled: Boolean(why) || opening, onclick: () => open(f) }, "Open in terminal"),
+    h("button", { class: "small ghost", title: "Remove from this list", onclick: () => act("POST", "/api/forget", { folder: f }) }, "×")));
   const installed = st.commands["claude-private"].state === "current";
   const command = kind === "private" ? "claude-private" : `daprivatecoder claude --profile ${kind}`;
   return h("div", { class: `section start ${kind}` },
@@ -194,15 +202,17 @@ function startSection(st) {
       st.can_choose_folder ? h("button", { onclick: () => guarded(async () => {
         const { folder: picked } = await api("POST", "/api/choose-folder", { start: S.folder });
         if (picked) { S.folder = picked; render(); }
-      }) }, "Choose…") : null,
-      h("button", { class: kind, disabled: Boolean(why) || opening, onclick: () => open(S.folder) }, "Open in a terminal")),
-    editorsHere.length ? h("div", { class: "row" }, ...editorsHere.map((e) => h("button", { class: kind,
-      disabled: Boolean(why) || opening, title: `Opens the folder in ${e.name}, its Claude Code on ${KINDS[kind].models}: other folders stay as they are`,
-      onclick: () => openIn(e, S.folder) }, `Open in ${e.name}`))) : null,
+      }) }, "Choose…") : null),
+    h("div", { class: "row" },
+      h("button", { class: kind, disabled: Boolean(why) || opening, onclick: () => open(S.folder) }, "Open in a terminal"),
+      ...editorsHere.map((e) => h("button", { class: kind, disabled: Boolean(why) || opening,
+        title: `Opens the folder in ${e.name}, with Claude Code there on ${KINDS[kind].models}. `
+          + `This turns DA Private Coder on in ${e.name}; other folders aren't affected.`,
+        onclick: () => openIn(e, S.folder) }, `Open in ${e.name}`))),
     why ? h("div", { class: "small muted" }, why) : null,
     recent.length ? h("div", { class: "recent" }, h("div", { class: "small muted" }, "Recent folders"), recent) : null,
-    installed && st.commands_on_path ? h("div", { class: "small muted" }, "In a terminal, ", h("code", {}, command),
-      " does the same in the folder you're in; ", h("code", {}, "claude"), " still runs as usual.") : null);
+    installed && st.commands_on_path ? h("div", { class: "small muted spaced" }, "In a terminal, ", h("code", {}, command),
+      ` starts a ${KINDS[kind].label} session in the current folder. Plain `, h("code", {}, "claude"), " is unaffected.") : null);
 }
 
 // ------------------------------------------------------------------ setup
@@ -246,15 +256,21 @@ function keyControls(slot, state, provider, label, said) {
   return { stored: true, controls: [replace, remove], extra: replacing };
 }
 
+// what Setup still needs before any session can start: it's shown first until then
+function needsSetup(st) {
+  return Boolean(st.config_error) || !st.claude.path || !st.key.stored;
+}
+
 function setupSection(st) {
   const k = st.key;
   const nano = keyControls("nanogpt", k, "nanogpt", "NanoGPT", "The key is stored in your keyring.");
   const keyRow = check(nano.stored, "NanoGPT API key",
     nano.stored ? `Stored in your keyring (ending ${k.ending}).`
-      : k.error || "For private and TEE sessions, a standard one on NanoGPT, and web search: paid per use from your NanoGPT balance. Get a key at nano-gpt.com/api.",
+      : k.error || "Needed for Private and TEE sessions, web search, and Standard sessions on NanoGPT. "
+        + "Usage is paid from your NanoGPT balance. Get a key at nano-gpt.com/api.",
     ...nano.controls,
     !nano.stored && k.vibe_manager ? h("button", { class: "small", onclick: () => act("POST", "/api/key", { from: "vibe-manager" },
-      "DA Vibe Manager's key is stored for DA Private Coder too.") }, "Use DA Vibe Manager's") : null);
+      "DA Vibe Manager's key is now stored for DA Private Coder too.") }, "Use DA Vibe Manager's key") : null);
   if (nano.extra) keyRow.querySelector(".body").append(nano.extra);
 
   const claude = check(Boolean(st.claude.path), "Claude Code",
@@ -266,40 +282,28 @@ function setupSection(st) {
   // only for typing them in a terminal: this window runs the app itself, and the editor's switch puts
   // what it runs in place when it's turned on
   const commandsRow = check(allIn || "optional", "Terminal commands",
-    allIn ? (st.commands_on_path ? "claude-private and daprivatecoder are in ~/.local/bin: type them in any terminal."
-      : "In ~/.local/bin, which isn't on your PATH: add it to run claude-private and daprivatecoder by name.")
-      : taken.length ? `${taken.join(", ")} is someone else's program, so it's left as it is.`
-        : "Optional: puts claude-private and daprivatecoder in ~/.local/bin, to type in any terminal. Opening Claude Code "
-          + "from this window doesn't need them, and the editor's switch puts what it runs in place itself.",
+    allIn ? (st.commands_on_path ? "Installed in ~/.local/bin. Type claude-private in any terminal for a Private session."
+      : "Installed in ~/.local/bin, but that folder isn't on your PATH. Add it to your PATH to type "
+        + "claude-private and daprivatecoder in a terminal.")
+      : taken.length ? `${taken.join(", ")} already exists and belongs to another program, so it was left alone.`
+        : "Optional. Adds the claude-private and daprivatecoder commands to ~/.local/bin, so you can start sessions "
+          + "from any terminal. Nothing in this window needs them.",
     allIn ? null : h("button", { class: "small", onclick: () => act("POST", "/api/commands", {}, "Installed.") }, "Install"));
 
-  // each editor's switch: off (as usual everywhere), on (each folder as chosen: Folders in your editor), or
-  // another program's (left alone)
-  const editors = st.editors.length ? st.editors.map((e) => {
-    const on = e.state === "on";
-    return check(on || "optional", `Claude Code in ${e.name}`,
-      e.state === "other" ? `Runs through another program (${e.value}), so this is left as it is.`
-        : !on ? "Runs as usual in every folder, on Anthropic's models. Switched on, the folders you choose (below, or Open in "
-          + `${e.name} above) run on DA Private Coder, and the rest as usual.`
-          : e.mode === PER_FOLDER ? "On: each folder runs as chosen in Folders in your editor, below. Other windows run as usual."
-            : `On: every session on DA Private Coder's ${e.mode} profile (set by hand to claude-private).`,
-      e.state === "off" ? h("button", { class: "small", onclick: () => act("POST", "/api/editor", { name: e.name, on: true },
-        `${e.name}'s Claude Code now runs as each folder says, in a new conversation.`) }, "Switch on") : null,
-      on ? h("button", { class: "small", onclick: () => act("POST", "/api/editor", { name: e.name, on: false },
-        `${e.name}'s Claude Code runs as usual everywhere. Conversations open on DA Private Coder stop at their next request.`) },
-        "Back to normal") : null);
-  }) : [check("optional", "Claude Code in your editor", "No VSCodium or VS Code here: use claude-private in a terminal.")];
+  // with no editor, nothing else says so: the editor's own section isn't shown
+  const noEditor = st.editors.length ? null
+    : check("optional", "Claude Code in your editor", "VSCodium and VS Code weren't found. Use a terminal instead.");
 
-  return h("div", { class: "section" }, h("h3", {}, "Setup"), keyRow, claude, commandsRow, ...editors);
+  return h("div", { class: "section" }, h("h3", {}, "Setup"), keyRow, claude, commandsRow, noEditor);
 }
 
 // ------------------------------------------------------------------ each profile's models, and the hosts that run them
 
 const ROLES = [
-  ["model", "Default", "What Claude Code starts with, and /model sonnet"],
+  ["model", "Default", "What sessions start with, and what /model sonnet picks"],
   ["opus_model", "Opus", "What /model opus picks"],
-  ["fast_model", "Quick", "/model haiku, and Claude Code's quick background tasks"],
-  ["vision_model", "Images", "Describes screenshots for a model that can't see them (one that can sees them itself)"],
+  ["fast_model", "Quick", "What /model haiku picks, and what runs Claude Code's background tasks"],
+  ["vision_model", "Images", "Describes images for a model that can't see them (a model that can sees them itself)"],
 ];
 const ROUTES = {
   nanogpt: ["auto", "speed", "latency", "throughput", "price", "host"],
@@ -350,7 +354,7 @@ function routeRow(st, tab, p, model) {
       const hosts = listed.hosts.filter((x) => x.available && (!fp8 || x.fp8));
       // the host saved, even when it isn't listed now (gone, or below FP8): what the requests still go to
       if (route && route.host && !hosts.some((x) => x.id === route.host)) {
-        hosts.unshift({ id: route.host, name: `${route.host_name || route.host} (not listed now)` });
+        hosts.unshift({ id: route.host, name: `${route.host_name || route.host} (no longer listed)` });
       }
       const speed = (x) => x.tokens_per_second ? ` · ${Math.round(x.tokens_per_second)} tok/s` : "";
       const cost = (x) => x.input !== null && x.input !== undefined ? ` · $${price(x.input)} / $${price(x.output)}` : "";
@@ -360,9 +364,9 @@ function routeRow(st, tab, p, model) {
       } }, [h("option", { value: "", selected: !(route && route.host) }, hosts.length ? "Choose the host…" : "No host listed")]
         .concat(hosts.map((x) => h("option", { value: x.id, selected: route && route.host === x.id },
           `${x.name}${x.precision ? ` · ${x.precision.toUpperCase()}` : ""}${cost(x)}${speed(x)}${x.keeps_nothing ? " · keeps nothing" : ""}`)))));
-    } else parts.push(h("span", { class: "small muted" }, listed && listed.error ? listed.error : "Reading its hosts…"));
+    } else parts.push(h("span", { class: "small muted" }, listed && listed.error ? listed.error : "Loading hosts…"));
   }
-  if (route || choosing) parts.push(h("label", { class: "small muted tick", title: "Leave out hosts that run it at less than FP8 (or don't say)" },
+  if (route || choosing) parts.push(h("label", { class: "small muted tick", title: "Leave out hosts that run it below FP8 precision, or don't say" },
     h("input", { type: "checkbox", checked: fp8,
       onchange: (e) => { if (route) save({ ...route, fp8: e.target.checked }); else { S.routeFp8[model] = e.target.checked; render(); } } }),
     "FP8 or better"));
@@ -375,14 +379,14 @@ function contextRows(tab, p, save) {
   const smallest = (S.models[tab] || []).filter((m) => [p.model, p.opus_model, p.fast_model].includes(m.id) && m.context)
     .reduce((least, m) => Math.min(least, m.context), Infinity);
   return [h("div", { class: "model-row" }, h("label", {}, "Context"),
-    h("select", { onchange: (e) => save({ context: Number(e.target.value) }, "Saved: the next session compacts there.") },
+    h("select", { onchange: (e) => save({ context: Number(e.target.value) }, "Saved. New sessions use it.") },
       CONTEXTS.map(([v, l]) => h("option", { value: String(v), selected: p.context === v }, l)))),
   h("div", { class: "model-row" }, h("span", {}), h("div", { class: "small muted" },
-    "Where Claude Code compacts the conversation (summarises it, and goes on). Every request sends the whole conversation, "
-    + "so a bigger one costs more each time, even from the cache: at 1M, about $1.60 a Kimi K3 request. 200K is what "
-    + "Claude Code assumes for these models.",
-    smallest < p.context ? h("div", { class: "warnbox" }, `A model of these holds only ${Math.round(smallest / 1000)}K: `
-      + "its requests would fail before Claude Code compacts.") : null))];
+    "When a conversation reaches this size, Claude Code summarises it and carries on. Every request resends the whole "
+    + "conversation, so a larger size costs more per request, even with caching: at 1M, about $1.60 per Kimi K3 request. "
+    + "200K is Claude Code's default for these models.",
+    smallest < p.context ? h("div", { class: "warnbox" }, `One of these models holds only ${Math.round(smallest / 1000)}K, `
+      + "so its requests would fail before Claude Code summarises.") : null))];
 }
 
 // a standard profile's provider: NanoGPT, OpenRouter, or an OpenAI-compatible endpoint of your own, and its key
@@ -391,18 +395,18 @@ function providerRows(st, tab, p, save) {
   const pick = h("select", { onchange: (e) => {
     const v = e.target.value;
     if (v === "custom" && !p.base_url) { S.customUrl = true; render(); }
-    else { S.customUrl = false; save({ provider: v }, `Saved: standard sessions use ${PROVIDERS[v]}.`); }
+    else { S.customUrl = false; save({ provider: v }, `Saved. Standard sessions now use ${PROVIDERS[v]}.`); }
   } }, Object.entries(PROVIDERS).map(([v, l]) => h("option", { value: v, selected: v === (custom ? "custom" : p.provider) }, l)));
   const rows = [h("div", { class: "model-row" }, h("label", {}, "Provider"), pick)];
   if (custom) {
     const url = h("input", { type: "text", class: "mono", value: S.drafts.url ?? (p.base_url || ""), placeholder: "https://api.example.com/v1",
       oninput: (e) => { S.drafts.url = e.target.value; }, onkeydown: (e) => { if (e.key === "Enter") go(); } });
-    const go = () => save({ provider: "custom", base_url: url.value.trim() }, "Saved: standard sessions use it.")
+    const go = () => save({ provider: "custom", base_url: url.value.trim() }, "Saved. Standard sessions now use it.")
       .then((done) => { if (done) { S.customUrl = false; delete S.drafts.url; } });
     rows.push(h("div", { class: "model-row" }, h("label", {}, "Address"), h("div", { class: "row" }, url,
       h("button", { class: "small primary", onclick: go }, "Save"))),
       h("div", { class: "model-row" }, h("span", {}), h("div", { class: "small muted" },
-        "Its OpenAI-compatible endpoint: https, or http only on this computer or your network.")));
+        "The provider's OpenAI-compatible API address. It must be https, except on this computer or your local network.")));
   }
   const pk = st.provider_key;
   if (pk && !S.customUrl) {
@@ -411,7 +415,7 @@ function providerRows(st, tab, p, save) {
     rows.push(h("div", { class: "model-row" }, h("label", {}, "API key"), h("div", { class: "col" },
       h("div", { class: "row" }, keys.stored ? h("span", { class: "small muted" }, `Stored (ending ${pk.ending})`) : null,
         ...keys.controls),
-      keys.extra, !keys.stored && p.provider === "custom" ? h("div", { class: "small muted" }, "If it needs one.") : null)));
+      keys.extra, !keys.stored && p.provider === "custom" ? h("div", { class: "small muted" }, "Only if the provider needs one.") : null)));
   }
   return rows;
 }
@@ -420,7 +424,7 @@ function modelsSection(st) {
   const tab = S.tab || st.start;
   const p = st.config && st.config.profiles[tab];
   if (!p) return null;
-  const save = (fields, said = "Saved: the next session uses it.") => act("POST", "/api/profile", { profile: tab, fields }, said)
+  const save = (fields, said = "Saved. New sessions use it.") => act("POST", "/api/profile", { profile: tab, fields }, said)
     .then((done) => { if (done && ("provider" in fields || "base_url" in fields)) { S.hosts = {}; loadModels(tab, true); } return done; });
   const list = S.models[tab] || [];
   const routed = new Set();
@@ -428,9 +432,9 @@ function modelsSection(st) {
     const current = p[key] || "";
     const usable = list.filter((m) => key === "vision_model" ? m.vision : m.tools !== false);
     const options = [];
-    if (key === "vision_model") options.push(h("option", { value: "", selected: !current }, "None: a model that can't see is told so"));
+    if (key === "vision_model") options.push(h("option", { value: "", selected: !current }, "None (a model that can't see is told so)"));
     if (current && !list.some((m) => m.id === current)) {
-      options.push(h("option", { value: current, selected: true }, S.models[tab] ? `${current} (not listed now)` : current));
+      options.push(h("option", { value: current, selected: true }, S.models[tab] ? `${current} (no longer listed)` : current));
     }
     for (const m of usable) options.push(h("option", { value: m.id, selected: m.id === current }, modelLabel(m, tab)));
     const out = [h("div", { class: "model-row", title: hint }, h("label", {}, label),
@@ -442,16 +446,22 @@ function modelsSection(st) {
     }
     return out;
   });
-  const lead = tab === "private" ? "NanoGPT's Private Mode models, per million tokens: input / cached input / output, with its 5% markup."
-    : tab === "tee" ? "NanoGPT's TEE models, per million tokens: input / cached input / output."
-      : `${providerName(st, tab)}'s models that take tool calls${p.provider === "custom" ? "" : ", per million tokens: input / cached input / output"}.`
-        + (p.provider === "nanogpt" ? " On NanoGPT's own choice of host, a subscription covers the ones it includes; a host you choose is paid per use." : "");
-  const reading = tab === "standard" ? `Reading ${providerName(st, tab)}'s list of models…` : `Reading NanoGPT's list of ${KINDS[tab].label === "TEE" ? "TEE" : "private"} models…`;
-  return h("div", { class: "section" }, h("h3", {}, "Models", chipOf(tab)),
+  const prices = "Prices per million tokens: input / cached input / output";
+  const lead = tab === "private" ? `${prices}, including NanoGPT's 5% Private Mode markup.`
+    : tab === "tee" ? `${prices}.`
+      : `${providerName(st, tab)}'s models that support tool calls.${p.provider === "custom" ? "" : ` ${prices}.`}`
+        + (p.provider === "nanogpt" ? " When NanoGPT chooses the host, your subscription covers the models it includes; "
+          + "a host you choose is always paid per use." : "");
+  const reading = tab === "standard" ? `Loading ${providerName(st, tab)}'s models…` : `Loading NanoGPT's ${tab === "tee" ? "TEE" : "private"} models…`;
+  return h("div", { class: "section" }, h("h3", {}, "Models and web search", chipOf(tab)),
+    h("p", { class: "lead" }, "Each kind of session has its own settings."),
     seg(tab, (pick) => { S.tab = pick; S.customUrl = false; if (!S.models[pick]) loadModels(pick); render(); }),
     warningOf(st, tab),
     p.kind === "standard" ? providerRows(st, tab, p, save) : null,
     h("p", { class: "lead" }, lead),
+    h("p", { class: "lead small" }, "Default is what sessions start with. Opus and Quick are what ", h("code", {}, "/model opus"),
+      " and ", h("code", {}, "/model haiku"), " pick; Quick also runs Claude Code's background tasks. Images describes images "
+      + "for a model that can't see them."),
     rows,
     // where each session's effort starts: Claude Code's own (the editor's Effort, /effort) changes it
     // in a session, and the model runs at whatever Claude Code says (proxy.py)
@@ -460,21 +470,22 @@ function modelsSection(st) {
         [["low", "Low (fastest)"], ["medium", "Medium"], ["high", "High (slow)"], ["max", "Max (slowest)"]]
           .map(([v, l]) => h("option", { value: v, selected: p.reasoning === v }, l)))),
     h("div", { class: "model-row" }, h("span", {}), h("div", { class: "small muted" },
-      "How hard the models think as each session starts. In a session, Claude Code's own Effort (in the editor, or ",
-      h("code", {}, "/effort"), ") changes it. A model that doesn't take a level runs at the nearest it does: ",
-      tab === "private" ? "the private models have no medium (it runs as high), nor xhigh (as max)." : "as its provider lists them.")),
+      "How much the models think at the start of each session. During a session, Claude Code's own Effort setting (or ",
+      h("code", {}, "/effort"), ") changes it. A model without the chosen level uses the nearest one it has: ",
+      tab === "private" ? "private models have no medium (it runs as high) or xhigh (it runs as max)." : "as its provider lists them.")),
     contextRows(tab, p, save),
-    S.modelsError[tab] ? h("div", { class: "warnbox" }, `The list of models couldn't be read: ${S.modelsError[tab]}`) : null,
-    S.models[tab] ? null : h("div", { class: "small muted row" }, h("span", { class: "spinner" }), reading));
+    S.modelsError[tab] ? h("div", { class: "warnbox" }, `The list of models couldn't be loaded: ${S.modelsError[tab]}`) : null,
+    S.models[tab] ? null : h("div", { class: "small muted row" }, h("span", { class: "spinner" }), reading),
+    searchPart(st, tab, p));
 }
 
 // ------------------------------------------------------------------ what runs on it now
 
 // where a request went, in words, after its chip
 function whereItWent(last) {
-  if (last.sent === "sealed") return "sealed to the attested enclave";
-  if (last.sent === "tee") return "to an attested enclave, through NanoGPT (not end-to-end encrypted)";
-  if (last.sent === "clear") return `in the clear, to ${last.provider === "openrouter" ? "OpenRouter" : last.provider === "custom" ? "your provider" : "NanoGPT"}`;
+  if (last.sent === "sealed") return "end-to-end encrypted, to the verified enclave";
+  if (last.sent === "tee") return "to a verified enclave, through NanoGPT (which can read it)";
+  if (last.sent === "clear") return `unencrypted, to ${last.provider === "openrouter" ? "OpenRouter" : last.provider === "custom" ? "your provider" : "NanoGPT"}`;
   return "not sent";
 }
 
@@ -490,65 +501,115 @@ function sessionsSection(st) {
         h("span", { class: "path", title: s.folder }, h("bdi", { dir: "ltr" }, s.folder || "?")),
         h("span", { class: "small muted" }, s.editor ? `in ${s.editor}` : "in a terminal")),
       last ? h("div", { class: "small" }, `Last request ${last.t.slice(11, 16)}: `, h("b", { class: "mono" }, last.model || "?"),
-        last.asked_for ? ` (Claude Code's quick work, for ${last.asked_for})` : "", " ", h("span", { class: `chip ${chip}` }, how), " ",
+        last.asked_for ? ` (a background task; Claude Code asked for ${last.asked_for})` : "", " ", h("span", { class: `chip ${chip}` }, how), " ",
         whereItWent(last), last.error ? h("div", { class: "small bad-text" }, last.error) : null)
-        : h("div", { class: "small muted" }, "No request yet."),
-      s.stops ? h("div", { class: "warnbox" }, h("b", {}, "Stops at its next request. "), s.stops) : null);
+        : h("div", { class: "small muted" }, "No requests yet."),
+      s.stops ? h("div", { class: "warnbox" }, h("b", {}, "Will stop at its next request: "), s.stops) : null);
   });
   return h("div", { class: "section" }, h("h3", {}, "Running now"),
     h("p", { class: "lead" }, list.length
-      ? "The Claude Code sessions on DA Private Coder now, and where each one's last request went: the model named is the one that ran. Claude Code not listed here runs as usual, on Anthropic's models."
-      : "No Claude Code runs on DA Private Coder now: any that's open runs as usual, on Anthropic's models."),
+      ? "Claude Code sessions using DA Private Coder, and where each one's last request went. The model shown is the one "
+        + "that actually answered. Claude Code not listed here is normal Claude Code, on Anthropic's servers."
+      : "No Claude Code sessions are using DA Private Coder. Any Claude Code you have open is normal Claude Code, "
+        + "on Anthropic's servers."),
     rows);
 }
 
-// which folders' Claude Code runs on DA Private Coder in the editor, and every other folder's
-function foldersSection(st) {
+// "Normal Claude Code": the editor's own, untouched, on Anthropic's servers ("" in editor-folders.json)
+const NORMAL = "Normal Claude Code (Anthropic)";
+const kindName = (k) => k ? KINDS[k].label : "normal Claude Code";
+
+// Claude Code in VSCodium and VS Code: each editor's switch, which folders use DA Private Coder there, and
+// what every other folder uses
+function editorSection(st) {
   if (!st.editors.length) return null;
   const f = st.folders;
-  const options = (current) => [["", "Claude as usual"], ...SESSIONS.map((k) => [k, `${KINDS[k].label} models`])]
-    .map(([v, l]) => h("option", { value: v, selected: v === current }, l));
+  const names = [...new Set(st.editors.map((e) => e.name.replace(/ \(Flatpak\)$/, "")))];
   const set = (body, said) => act("POST", "/api/folder", body, said);
+
+  // each editor's switch: off (normal everywhere), on (the folders below), or another program's (left alone)
+  const switches = st.editors.map((e) => {
+    const on = e.state === "on";
+    return check(on || "optional", e.name,
+      e.state === "other" ? `Off. ${e.name} starts Claude Code through another program (${e.value}), so DA Private Coder leaves it alone.`
+        : !on ? `Off. Claude Code in ${e.name} is normal everywhere.`
+          : e.mode === PER_FOLDER ? `On. Claude Code in ${e.name} follows the folder list below.`
+            : `On, set by hand: every Claude Code session in ${e.name} is ${kindName(e.mode)}.`,
+      e.state === "off" ? h("button", { class: "small", onclick: () => act("POST", "/api/editor", { name: e.name, on: true },
+        `${e.name} now follows the folder list. It applies to new conversations.`) }, "Turn on") : null,
+      on ? h("button", { class: "small", onclick: () => act("POST", "/api/editor", { name: e.name, on: false },
+        `Claude Code in ${e.name} is normal everywhere again. Conversations that were using DA Private Coder stop at their next request.`) },
+        "Turn off") : null);
+  });
+
+  // a folder's choice: a kind of session, or off the list (it then does as every other folder does)
   const rows = f.list.map((x) => h("div", { class: "item" },
     h("span", { class: "path", title: x.folder }, h("bdi", { dir: "ltr" }, x.folder)),
     SESSIONS.includes(x.profile) ? chipOf(x.profile) : null,
     h("select", { class: "inline", onchange: (e) => set({ folder: x.folder, profile: e.target.value },
-      e.target.value ? "Saved: a new conversation there runs so." : "Saved: Claude Code there runs as usual (in a new conversation).") },
-      options(x.profile))));
+      `Saved. New conversations in this folder use ${KINDS[e.target.value].models}.`) },
+      SESSIONS.map((k) => h("option", { value: k, selected: k === x.profile }, KINDS[k].label))),
+    h("button", { class: "small ghost", title: `Remove from the list. This folder then uses ${f.other ? KINDS[f.other].label : "normal Claude Code"}, like all other folders.`,
+      onclick: () => set({ folder: x.folder, profile: "" },
+        `Removed. New conversations there use ${f.other ? KINDS[f.other].models : "normal Claude Code"}, like all other folders.`) }, "×")));
+
+  // a folder typed or chosen here goes on the list as Private: the safe choice, changed in its row
+  const add = () => set({ folder: S.drafts.editorFolder || "", profile: "private" },
+    "Added as Private. New conversations there use private models.")
+    .then((done) => { if (done) { delete S.drafts.editorFolder; render(); } });
+  const addInput = h("input", { type: "text", class: "mono", value: S.drafts.editorFolder || "",
+    placeholder: st.can_choose_folder ? "Add a folder: type its path, or Choose…" : "Add a folder: type its path",
+    oninput: (e) => { S.drafts.editorFolder = e.target.value; }, onkeydown: (e) => { if (e.key === "Enter") add(); } });
+  const addRow = h("div", { class: "row" }, addInput,
+    st.can_choose_folder ? h("button", { class: "small", onclick: () => guarded(async () => {
+      const { folder: picked } = await api("POST", "/api/choose-folder", { start: S.drafts.editorFolder || "" });
+      if (picked) { S.drafts.editorFolder = picked; render(); }
+    }) }, "Choose…") : null,
+    h("button", { class: "small", onclick: add }, "Add"));
+
+  const other = h("div", { class: "model-row" }, h("label", {}, "All other folders"),
+    h("select", { onchange: (e) => set({ other: e.target.value },
+      `Saved. New conversations in all other folders use ${e.target.value ? KINDS[e.target.value].models : "normal Claude Code"}.`) },
+      [["", NORMAL], ...SESSIONS.map((k) => [k, KINDS[k].label])].map(([v, l]) => h("option", { value: v, selected: v === f.other }, l))));
+
   const on = st.editors.some((e) => e.state === "on" && e.mode === PER_FOLDER);
-  const other = h("div", { class: "model-row" }, h("label", {}, "Any other"),
-    h("select", { onchange: (e) => set({ other: e.target.value }, "Saved: every other folder runs so, in a new conversation.") },
-      options(f.other)));
-  return h("div", { class: "section" }, h("h3", {}, "Folders in your editor"),
-    h("p", { class: "lead" }, "Claude Code in a folder chosen here (or a folder inside it) runs on DA Private Coder in VSCodium and VS Code; "
-      + "in any other folder, as Any other says: as usual, on Anthropic's models, unless you choose otherwise. Open in VSCodium (Start) adds one. "
-      + "A conversation open in a folder whose choice changes stops at its next request: start a new one."),
+  return h("div", { class: "section" }, h("h3", {}, `Claude Code in ${names.join(" and ")}`),
+    h("p", { class: "lead" }, "Choose which folders' Claude Code uses DA Private Coder. A listed folder includes the folders inside it. "
+      + "Turn DA Private Coder on in each editor for the list to apply there."),
+    switches,
     f.error ? h("div", { class: "warnbox" }, f.error) : null,
-    on ? null : h("div", { class: "small muted" }, "The editor's switch is off, so these don't apply yet (Setup)."),
-    rows.length ? h("div", { class: "recent" }, rows) : h("div", { class: "small muted" }, "No folder chosen yet."),
-    other, SESSIONS.includes(f.other) ? warningOf(st, f.other) : null);
+    h("div", { class: "small muted spaced" }, "Folders"),
+    rows.length ? h("div", { class: "recent" }, rows) : h("div", { class: "small muted" }, "No folders yet."),
+    addRow,
+    h("div", { class: "spaced" }), other,
+    SESSIONS.includes(f.other) ? warningOf(st, f.other) : null,
+    on ? null : h("div", { class: "warnbox" }, `DA Private Coder is off in ${names.length > 1 ? "both editors" : names[0]}, so this list isn't used yet. Turn it on above.`),
+    h("div", { class: "small muted spaced" }, "Changes apply to new conversations. A conversation already open in a folder whose "
+      + "setting changes stops at its next request: open a new Claude Code tab to continue."));
 }
 
 // ------------------------------------------------------------------ web search
 
-function searchSection(st) {
-  const tab = S.tab || st.start;
-  const p = st.config && st.config.profiles[tab];
-  if (!p) return null;
+// a profile's web search, under its models (the same tab)
+function searchPart(st, tab, p) {
   const pick = (value, said) => act("POST", "/api/profile", { profile: tab, fields: { web_search: value } }, said);
   const radio = (value, title, desc) => h("label", { class: "radio" },
     h("input", { type: "radio", name: "search", checked: p.web_search === value,
-      onchange: () => pick(value, "Saved: the next session searches this way.") }),
+      onchange: () => pick(value, "Saved. New sessions search this way.") }),
     h("div", {}, h("div", {}, title), h("div", { class: "small muted" }, desc)));
-  return h("div", { class: "section" }, h("h3", {}, `Web search in ${KINDS[tab].label} sessions`),
-    h("p", { class: "lead" }, "Claude Code's own search runs on Anthropic's servers, so DA Private Coder gives it one through NanoGPT (with its key). Claude Code asks you before each search, and a search naming this computer or holding a secret is refused."),
+  return h("div", { class: "subsection" }, h("h4", {}, `Web search in ${KINDS[tab].label} sessions`),
+    h("p", { class: "lead" }, "Claude Code's built-in search goes through Anthropic, so DA Private Coder replaces it with a search "
+      + "through NanoGPT. Claude Code asks you before each search, and a search that names this computer or contains a secret is "
+      + "blocked. No search is end-to-end encrypted."),
     radio("zero-retention", "Keep nothing: Linkup only",
-      "Linkup keeps nothing it's sent (zero data retention), and no search goes anywhere else, even when Linkup fails. It finds less. NanoGPT and Linkup still read each search: no search is end-to-end encrypted."),
+      "Linkup doesn't store searches (zero data retention), and a search never falls back to another provider. Fewer results. "
+      + "NanoGPT and Linkup can still read each search."),
     radio("best", "Best results: Perplexity and Kagi",
-      "Perplexity to learn things, Kagi to find sites. Not zero data retention: NanoGPT and the provider read each search, and what the provider keeps is up to its own policy."),
-    radio("off", "No web search", "Claude Code works with what it knows, and pages it's given the address of."),
-    p.web_search === "best" && tab === "private" ? h("div", { class: "warnbox" }, h("b", {}, "Your sessions are private; their searches aren't. "),
-      "Perplexity and Kagi aren't zero data retention. Choose Keep nothing to search with Linkup, which keeps nothing.") : null);
+      "Perplexity for answers, Kagi for finding sites. Not zero data retention: NanoGPT and the search provider can read each "
+      + "search, and the provider keeps it under its own policy."),
+    radio("off", "No web search", "Claude Code can still fetch a page if you give it the address."),
+    p.web_search === "best" && tab === "private" ? h("div", { class: "warnbox" }, h("b", {}, "Your sessions are private, but these searches aren't. "),
+      "Perplexity and Kagi may keep your searches. Choose Keep nothing to use Linkup, which doesn't.") : null);
 }
 
 // ------------------------------------------------------------------ the enclaves
@@ -562,26 +623,26 @@ function verifySection(st) {
       const { attestation } = await api("POST", "/api/check", model ? { model } : {});
       const n = ++S.asked;
       take(n, await api("GET", "/api/state"));
-      toast(model ? `${model}: ${attestation.level === "full" ? "verified" : "verified in part"}.` : "The enclave is verified.", "ok", 4000);
+      toast(model ? `${model}: ${attestation.level === "full" ? "verified" : "partly verified"}.` : "The enclave is verified.", "ok", 4000);
     } finally { S.checking = ""; render(); }
   });
   const teeRows = (st.tee_attestations || []).slice(0, 4).map((t) => h("div", { class: "attest" },
-    h("div", {}, t.error ? h("span", { class: "chip bad" }, "didn't hold") : h("span", { class: `chip ${t.level === "full" ? "ok" : "tee"}` },
-      t.level === "full" ? "verified" : "in part"), " ", h("b", {}, t.model), " ", t.error || t.summary),
+    h("div", {}, t.error ? h("span", { class: "chip bad" }, "failed") : h("span", { class: `chip ${t.level === "full" ? "ok" : "tee"}` },
+      t.level === "full" ? "verified" : "partly verified"), " ", h("b", {}, t.model), " ", t.error || t.summary),
     h("div", { class: "small muted" }, `Checked ${t.t ? t.t.slice(0, 16).replace("T", " ") : ""}.`)));
-  return h("div", { class: "section" }, h("h3", {}, "The enclaves"),
+  return h("div", { class: "section" }, h("h3", {}, "Enclave checks"),
     h("div", { class: "small muted" }, "Private models"),
     a ? h("div", { class: "attest" },
       h("div", {}, h("span", { class: "chip ok" }, "verified"), " ", a.summary),
-      h("div", { class: "small muted" }, `Last checked ${a.t ? a.t.slice(0, 16).replace("T", " ") : ""}. Every session checks it again before it sends anything, and every five minutes.`),
-      a.key_sha256 ? h("div", { class: "fingerprint" }, `Its key's fingerprint (sha256): ${a.key_sha256}`) : null)
-      : h("p", { class: "lead" }, "Not checked yet here. Every session checks it before it sends anything; you can check it now too (free)."),
+      h("div", { class: "small muted" }, `Last checked ${a.t ? a.t.slice(0, 16).replace("T", " ") : ""}. Every session also checks it before sending anything, and every five minutes after that.`),
+      a.key_sha256 ? h("div", { class: "fingerprint" }, `Enclave key fingerprint (SHA-256): ${a.key_sha256}`) : null)
+      : h("p", { class: "lead" }, "Not checked yet. Every session checks it before sending anything. You can also check it now (free)."),
     h("div", { class: "row" }, h("button", { disabled: Boolean(S.checking), onclick: () => run("") },
-      S.checking === "private" ? "Checking…" : "Check it now"), S.checking === "private" ? h("span", { class: "spinner" }) : null),
+      S.checking === "private" ? "Checking…" : "Check now"), S.checking === "private" ? h("span", { class: "spinner" }) : null),
     h("div", { class: "small muted spaced" }, "TEE models"),
-    teeRows.length ? teeRows : h("p", { class: "lead" }, "None checked yet here. A TEE session checks each model's enclave before it sends it anything, and every 15 minutes; with your NanoGPT key, you can check one now too."),
+    teeRows.length ? teeRows : h("p", { class: "lead" }, "None checked yet. A TEE session checks each model's enclave before sending it anything, and every 15 minutes after that. You can also check one now (this needs your NanoGPT key)."),
     tee && /^tee\//i.test(tee.model) ? h("div", { class: "row" }, h("button", { disabled: Boolean(S.checking) || !st.key.stored, onclick: () => run(tee.model),
-      title: st.key.stored ? "" : "NanoGPT shows a TEE model's attestation only with your API key" },
+      title: st.key.stored ? "" : "NanoGPT only shows a TEE model's attestation to someone with an API key" },
       S.checking === tee.model ? "Checking…" : `Check ${tee.model}`), S.checking === tee.model ? h("span", { class: "spinner" }) : null) : null);
 }
 
@@ -616,8 +677,10 @@ function usageSection(st) {
       h("div", {}, h("div", { class: "big" }, money(u.today) || "$0.00"), h("div", { class: "small muted" }, `today, ${u.requests_today} requests`)),
       h("div", {}, h("div", { class: "big" }, money(u.month) || "$0.00"), h("div", { class: "small muted" }, "this month"))),
     rows.length ? h("div", { class: "usage-box" }, h("table", { class: "usage" },
-      h("thead", {}, h("tr", {}, ["When", "Model", "", "In", "Cached", "Out", "Cost"].map((c) => h("th", {}, c)))),
-      h("tbody", {}, rows))) : h("p", { class: "lead" }, "Nothing yet. What each request costs shows here; never what was said."));
+      h("thead", {}, h("tr", {}, ["When", "Model", "Sent", "In", "Cached", "Out", "Cost"].map((c) => h("th", {}, c)))),
+      h("tbody", {}, rows))) : h("p", { class: "lead" }, "Nothing yet. Each request's cost will show here, never its content."),
+    rows.length ? h("div", { class: "small muted spaced" }, "Sent: sealed = end-to-end encrypted · TEE = to an enclave, through "
+      + "NanoGPT, which can read it · clear = unencrypted, readable by the provider · not sent = stopped on this computer.") : null);
 }
 
 // ------------------------------------------------------------------ this app
@@ -631,12 +694,12 @@ function appSection(st) {
       st.config ? h("div", {}, "Settings: ", h("span", { class: "mono" }, st.config.path)) : null,
       h("div", {}, "Request log: ", h("span", { class: "mono" }, st.usage.log)),
       h("div", {}, `DA Private Coder ${st.version}`)),
-    h("div", { class: "row" }, h("button", { class: "small ghost", onclick: () => guarded(async () => {
+    h("div", { class: "row spaced" }, h("button", { class: "small", onclick: () => guarded(async () => {
       await api("POST", "/api/quit", {});
       clearInterval(looking);
-      document.body.replaceChildren(h("p", { class: "lead" }, "DA Private Coder has quit, so the sessions on it stop at "
-        + "their next request (open it again to go on). Claude Code as usual isn't affected."));
-    }) }, "Quit")));
+      document.body.replaceChildren(h("p", { class: "lead" }, "DA Private Coder has quit. Sessions that were using it stop "
+        + "at their next request; open DA Private Coder again to continue them. Normal Claude Code isn't affected."));
+    }) }, "Quit"), h("span", { class: "small muted" }, "Stops every session using DA Private Coder at its next request.")));
 }
 
 // ------------------------------------------------------------------ the page
@@ -647,8 +710,10 @@ function render() {
   applyTheme(st.theme);
   renderTop(st);
   const scroll = $("#page").scrollTop;
-  $("#page").replaceChildren(...[startSection(st), sessionsSection(st), setupSection(st), foldersSection(st),
-    modelsSection(st), searchSection(st), verifySection(st), usageSection(st), appSection(st)].flat().filter(Boolean));
+  // Setup comes first while something there is still needed, and near the end once it's done
+  const first = needsSetup(st);
+  $("#page").replaceChildren(...[first && setupSection(st), startSection(st), sessionsSection(st), editorSection(st),
+    modelsSection(st), verifySection(st), usageSection(st), !first && setupSection(st), appSection(st)].flat().filter(Boolean));
   $("#page").scrollTop = scroll;
 }
 

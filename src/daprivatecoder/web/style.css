@@ -212,6 +212,10 @@ select.inline { padding-top: 2px; padding-bottom: 2px; font-size: 13px; }
 label.tick { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 label.tick input { margin: 0; }
 .spaced { margin-top: 10px; }
+/* a part of a section under its own heading (a profile's web search, under its models) */
+.subsection { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); }
+.subsection h4 { font-size: 13.5px; margin: 0 0 6px; }
+.model-row > label { line-height: 1.25; }
 /* Running now: each session on DA Private Coder, and where its last request went */
 .session { display: flex; flex-direction: column; gap: 3px; padding: 6px 0; border-top: 1px solid var(--border); }
 .session:first-of-type { border-top: 0; }

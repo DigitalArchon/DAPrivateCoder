@@ -67,21 +67,30 @@ never swapped for another; Claude Code then keeps the model it had.
 
 ## In your editor
 
-Windows of VSCodium and VS Code can differ: some on DA Private Coder, the rest as usual, on
-Anthropic's models with your own settings. **Open in VSCodium** (Start) chooses the folder, its kind
-of session, switches the editor on and opens it; **Folders in your editor** lists the folders
-chosen, each changeable, and how **any other** folder runs (as usual, unless you choose a kind for
-it). A folder inside one chosen counts as chosen.
+In VSCodium and VS Code you choose per folder: some folders' Claude Code uses DA Private Coder, and
+the rest stay normal Claude Code, on Anthropic's servers with your own settings. The window's
+**Claude Code in VSCodium and VS Code** section has:
 
-The extension takes its process wrapper (`claudeCode.claudeProcessWrapper`) only from your user
-settings, so the switch (**Setup**: **Switch on**, **Back to normal**) is for the whole editor: with
-it on, DA Private Coder's `claude-editor` starts each of the editor's Claude Code sessions, and runs
-it as its folder says. One in a folder that runs as usual is the editor's Claude Code exactly as the
-editor started it (nothing of DA Private Coder's in it, whether DA Private Coder is open or not).
+- a **Turn on** / **Turn off** switch for each editor;
+- the list of **Folders** that use DA Private Coder, each set to Private, TEE or Standard. A listed
+  folder includes the folders inside it. **Add** puts a folder on the list (as Private), and **×**
+  takes it off;
+- **All other folders**: normal Claude Code by default, or one of the three kinds.
 
-A conversation already open stays as it started. If its folder's choice changes, or the switch goes
-off, it stops at its next request and says so: start a new conversation (a new Claude Code tab) to
-run as the folder now says. **Running now** says it of each one first.
+**Open in VSCodium** (or VS Code) in **Start Claude Code** does all of this in one step: it puts the
+folder on the list as the kind chosen there, turns DA Private Coder on in that editor, and opens the
+folder.
+
+The switch is for the whole editor, because the extension reads its process wrapper
+(`claudeCode.claudeProcessWrapper`) only from your user settings. When it's on, DA Private Coder's
+`claude-editor` starts every Claude Code session in that editor and runs it as its folder's setting
+says. A session in a folder set to normal Claude Code is exactly what the editor would have started
+on its own, with nothing of DA Private Coder's in it, whether DA Private Coder is open or not.
+
+A conversation that is already open keeps the setting it started with. If its folder's setting
+changes, or the editor is turned off, it stops at its next request and says why. Open a new
+conversation (a new Claude Code tab) to use the new setting. **Running now** shows which sessions
+will stop.
 
 ## While it's open
 
@@ -147,7 +156,7 @@ GLM-5.3 Flash for quick tasks and images). Before anything is sent to one, its e
 and again every 15 minutes: its Intel TDX quote is verified up to Intel's root, with Intel's
 revocation lists and TCB ratings, and its GPUs' evidence by NVIDIA's attestation service, all bound
 to a nonce of this session's (DA Vibe Manager's verifier). An enclave that doesn't hold gets
-nothing. Some attest only in part, which **The enclaves** in the window says: NanoGPT's TEE GLM
+nothing. Some attest only in part, which **Enclave checks** in the window says: NanoGPT's TEE GLM
 models pass through RedPill's gateway, whose enclave is checked but not the model's own. Either way,
 **NanoGPT's gateway reads every prompt and reply in the clear**: the enclave protects them from the
 host that runs the model, not from NanoGPT. A TEE session never sends to a model in the clear: a
@@ -170,7 +179,7 @@ runs the model:
   on NanoGPT attested; once a private model has been used, nothing more of that session goes in the
   clear.
 
-Both kinds have their own models, effort and web search (**Models** and **Web search** in the window,
+Both kinds have their own models, effort and web search (**Models and web search** in the window,
 with the same Private, TEE, Standard choice), and start from the window, a folder chosen for them in
 the editor, or `daprivatecoder claude --profile tee` (or `standard`) in a terminal.
 
@@ -261,7 +270,7 @@ committed source and compares. See [packaging/README.md](packaging/README.md).
 
 ## Uninstall
 
-In the window: **Back to normal** for your editor, and **Remove** the keys. Then delete the AppImage,
+In the window: **Turn off** each editor, and **Remove** the keys. Then delete the AppImage,
 `~/.local/bin/claude-private`, `~/.local/bin/daprivatecoder`, `~/.local/share/daprivatecoder` (the
 editor's script), and if you like `~/.config/daprivatecoder` (the settings and the editor's folders)
 and `~/.local/state/daprivatecoder`.
