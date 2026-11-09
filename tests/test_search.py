@@ -178,3 +178,18 @@ def test_a_whole_mcp_session_over_stdio(tmp_path):
     assert sorted(replies) == [1, 2, 3], done.stderr
     assert replies[2]["result"]["tools"][0]["name"] == "web_search"
     assert replies[3]["result"]["isError"] and "Not searched" in replies[3]["result"]["content"][0]["text"]
+
+
+@pytest.mark.parametrize("query", ["build fails on jo-​laptop", "can't reach 192.168.1​.20 from docker",
+                                   "key sk-​nano-0123456789abcdefABCDEF rejected", "１９２.１６８.１.２０ unreachable"])
+async def test_what_no_one_can_see_hides_nothing_from_the_check(query):
+    # the search provider reads past what can't be seen (and fullwidth digits as plain ones): so does the check
+    s, nano = server("best", names=["jo-laptop"])
+    text, failed = await s.search({"query": query})
+    assert failed and text.startswith("Not searched") and not nano.asked
+
+
+async def test_the_query_sent_is_the_one_checked():
+    s, nano = server("best")
+    await s.search({"query": "starlette​ streaming⁠ response", "sites": ["www.star​lette.io"]})
+    assert nano.asked[0]["query"] == "starlette streaming response" and nano.asked[0]["includeDomains"] == ["www.starlette.io"]

@@ -30,6 +30,7 @@ import httpx
 
 from . import __version__, creds, identity
 from .llm import websearch
+from .safety.hidden import visible
 from .usagelog import UsageLog
 
 MODES = ("zero-retention", "best", "off")
@@ -104,11 +105,14 @@ class SearchServer:
         """(the tool's reply, whether it is an error)."""
         if self.mode not in ("zero-retention", "best"):
             return "Web search is switched off in DA Private Coder's settings. Use what you know.", True
-        query = " ".join(str(args.get("query") or "").split())[:400]
+        # without what no one can see, checked and sent alike: a zero-width space inside a key, an address
+        # or a name hid it from the check, and the search provider reads past it
+        query = " ".join(visible(str(args.get("query") or "")).split())[:400]
         if len(query) < 2:
             return "Not searched: the query is empty.", True
         purpose = args.get("purpose") if args.get("purpose") in websearch.MODES_OF_USE else "answer"
-        sites = websearch.clean_sites(args.get("sites"))
+        given = args.get("sites")
+        sites = websearch.clean_sites([visible(str(x)) for x in given] if isinstance(given, list) else given)
         after = websearch.clean_date(args.get("after"))
         found = identity.check(" ".join([query, *sites]), self.names)
         if found:

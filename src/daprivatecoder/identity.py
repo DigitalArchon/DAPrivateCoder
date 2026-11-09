@@ -7,8 +7,12 @@ API key or token, a private key, or a long random string. After DA Vibe Manager'
 safety/outside.py (its part about the computer's identity; the rest of it guards what came out of
 its sandbox, which Claude Code here doesn't have: it works on this computer itself).
 
-Plain words go through ("cinnamon", "firefox"): on their own they say nothing about the user, and
-no search would be possible without them. Claude Code also asks before each search, showing it."""
+A query is read as the search provider reads it: without the characters no one can see (a zero-width
+space inside a key, an address or a name hid it from every check, and the provider reads past it),
+and with compatibility forms (fullwidth digits) as their plain ones (safety/hidden.py, DA Toolkit's
+and DA Vibe Manager's). Plain words go through ("cinnamon", "firefox"): on their own they say
+nothing about the user, and no search would be possible without them. Claude Code also asks before
+each search, showing it."""
 
 from __future__ import annotations
 
@@ -17,6 +21,9 @@ import os
 import pwd
 import re
 import socket
+import unicodedata
+
+from .safety.hidden import visible
 
 _EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 _MAC = re.compile(r"\b[0-9a-f]{2}(?::[0-9a-f]{2}){5}\b", re.I)
@@ -62,17 +69,27 @@ def _private_ip(text: str) -> bool:
     return not ip.is_global
 
 
+def readings(text: str) -> list[str]:
+    """`text` as a search provider may read it: without what no one can see, and with compatibility
+    forms (fullwidth digits and letters, ligatures) as their plain ones."""
+    shown = visible(text)
+    plain = unicodedata.normalize("NFKC", shown)
+    return [shown] + ([plain] if plain != shown else [])
+
+
 def check(query: str, known: list[str] | None = None) -> list[str]:
     """The parts of `query` that mustn't leave in a search (empty: it may be searched)."""
     found: list[str] = []
-    low = query.lower()
-    for name in names() if known is None else known:
-        if re.search(rf"(?<![\w]){re.escape(name.lower())}(?![\w])", low):
-            found.append(name)
-    found += _EMAIL.findall(query) + _MAC.findall(query)
-    found += [ip for ip in _IPV4.findall(query) if _private_ip(ip)]
-    for pattern in SECRETS:
-        found += [m.group() for m in pattern.finditer(query)]
-    found += [m.group() for m in _RANDOM.finditer(query)
-              if re.search(r"\d", m.group()) and re.search(r"[A-Za-z]", m.group())]
+    who = names() if known is None else known
+    for text in readings(query):
+        low = text.lower()
+        for name in who:
+            if re.search(rf"(?<![\w]){re.escape(name.lower())}(?![\w])", low):
+                found.append(name)
+        found += _EMAIL.findall(text) + _MAC.findall(text)
+        found += [ip for ip in _IPV4.findall(text) if _private_ip(ip)]
+        for pattern in SECRETS:
+            found += [m.group() for m in pattern.finditer(text)]
+        found += [m.group() for m in _RANDOM.finditer(text)
+                  if re.search(r"\d", m.group()) and re.search(r"[A-Za-z]", m.group())]
     return list(dict.fromkeys(found))
