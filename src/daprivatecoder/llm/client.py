@@ -113,8 +113,8 @@ class LLMClient:
             yield "done", acc.finish()
             return
         stream = await self._client.chat.completions.create(**kwargs)
-        yield "open", None                 # the provider took it, and its reply has begun
         try:
+            yield "open", None                 # the provider took it, and its reply has begun
             async for chunk in stream:
                 for event in acc.feed(chunk):
                     yield event
