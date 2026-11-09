@@ -12,6 +12,7 @@ import re
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 
 APPDIR, OUT, NAME, MODE = sys.argv[1:5]
@@ -20,14 +21,29 @@ ENV = {**os.environ, "HOME": "/tmp/smoke/home", "XDG_CONFIG_HOME": "/tmp/smoke/c
 os.makedirs(ENV["HOME"], exist_ok=True)
 
 
+class _Unfollowed(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None                                  # the redirect itself is what's wanted
+
+
 def start(*args: str) -> tuple[subprocess.Popen, str, str]:
-    """Run the app, return (process, base URL, token) once it prints its URL."""
+    """Run the app, return (process, base URL, token): from the address it prints (--no-open), or as a
+    browser gets it, from the one-time address it is started with ($BROWSER=echo prints it), which sends
+    it on to the window with the token in the fragment."""
     proc = subprocess.Popen([f"{APPDIR}/AppRun", "--port", "8790", *args], env=ENV, text=True,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     for line in proc.stdout:
         print(f"  | {line.rstrip()}")
-        if line.startswith("http://"):
-            return proc, "http://127.0.0.1:8790", line.strip().split("t=", 1)[1]
+        if line.startswith("http://") and "#t=" in line:
+            return proc, "http://127.0.0.1:8790", line.strip().split("#t=", 1)[1]
+        if line.startswith("http://") and "/open/" in line:
+            try:
+                urllib.request.build_opener(_Unfollowed).open(line.strip(), timeout=30)
+            except urllib.error.HTTPError as sent:
+                check(sent.code == 303 and sent.headers["Location"].startswith("/#t="),
+                      f"{NAME}: the browser's one-time address opens the window")
+                return proc, "http://127.0.0.1:8790", sent.headers["Location"].split("#t=", 1)[1]
+            raise SystemExit("the browser's one-time address didn't send it on to the window")
     raise SystemExit("the app exited before printing its URL")
 
 
@@ -153,7 +169,7 @@ def snap() -> bool:
 
 
 view.connect("load-changed", lambda v, e: e == WebKit2.LoadEvent.FINISHED and GLib.timeout_add(4000, snap))
-view.load_uri(f"{base}/?t={token}")
+view.load_uri(f"{base}/?desktop=1#t={token}")
 GLib.timeout_add(30000, Gtk.main_quit)
 Gtk.main()
 check(os.path.exists(shot), f"{NAME}: the page renders ({shot})")
