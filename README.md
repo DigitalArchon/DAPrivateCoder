@@ -169,8 +169,9 @@ of this session's (DA Vibe Manager's verifier). An enclave that doesn't hold get
 Each reply is then checked against the record NanoGPT keeps of it, signed by the attested key: the
 record's hash of the reply must be that of the exact bytes that came, and where RedPill's gateway
 keeps a signed receipt, it must hold too, saying the model the reply came from was verified. The
-check comes once the reply has reached Claude Code: it never holds a reply up or changes it.
-**Usage** marks each TEE request with what it found:
+check comes once the reply has reached Claude Code: it never holds a reply up or changes it. A TEE
+**Images** model's description of an image (for a model that can't see) is a reply too, checked the
+same way. **Usage** marks each TEE request, and each image a TEE model described, with what it found:
 
 - **reply verified**: the record is of the reply that came, byte for byte;
 - **reply signed**: signed by the attested key, but NanoGPT rebuilds this model's replies, so the
