@@ -217,3 +217,117 @@ def test_apprun_looks_for_the_hosts_ca_store_wherever_distributions_keep_it(tmp_
     chosen = subprocess.run([str(apprun)], env={**env, "SSL_CERT_FILE": "/my/bundle.pem"}, capture_output=True,
                             text=True, check=True).stdout.strip()
     assert chosen == "/my/bundle.pem|/my/bundle.pem| REQUESTS_CA_BUNDLE"     # the user's own is left alone
+
+
+# ---------------------------------------------------------------------- what the build takes from this machine
+
+WRAPPER = ROOT / "packaging" / "build-appimage.sh"
+
+
+def test_it_builds_the_commit_with_the_commits_time_and_version():
+    wrapper, build = WRAPPER.read_text(), (PACKAGING / "build.sh").read_text()
+    commands = [line for line in _commands(wrapper) if not line.lstrip().startswith("#")]
+    assert "git ls-tree -r -z HEAD" in wrapper and not any("git archive" in line for line in commands)
+    assert 'EPOCH="$(git log -1 --format=%ct HEAD)"' in wrapper
+    assert "git show HEAD:pyproject.toml" in wrapper
+    assert 'find "$W/AppDir" -exec touch -h -d "@$SOURCE_DATE_EPOCH" {} +' in build
+    # and where its results go: dist/, or DIST
+    assert 'DIST="$(mkdir -p "${DIST:-dist}" && cd "${DIST:-dist}" && pwd)"' in wrapper
+    assert 'run "$DIST" build' in wrapper
+
+
+def test_the_commit_is_built_as_committed_whatever_gits_settings(tmp_path):
+    """A verifier's core.autocrlf, a smudge filter their attributes name: git archive hands each file
+    through them, so the same commit made a different AppImage. The wrapper reads the files from git's
+    objects instead, and sets their modes itself whatever the umask. (DA Assistant's test, d4153ff.)"""
+    import os
+    import shlex
+    import shutil
+    import subprocess
+    import tarfile
+
+    if not shutil.which("git"):
+        pytest.skip("no git")
+    wrapper = WRAPPER.read_text()
+    start = wrapper.index('EPOCH="$(git log -1 --format=%ct HEAD)"')
+    export = wrapper[start:wrapper.index("-- *)\n", start) + 5]
+    repo = tmp_path / "repo"
+    (tmp_path / "attributes").write_text("*.txt filter=pear\n")
+    (tmp_path / "gitconfig").write_text(f"[core]\n\tautocrlf = true\n\tattributesFile = {tmp_path}/attributes\n"
+                                        "[filter \"pear\"]\n\tsmudge = sed s/apple/pear/\n\tclean = cat\n"
+                                        "[user]\n\tname = T\n\temail = t@example.org\n")
+    env = {"PATH": os.environ.get("PATH", ""), "HOME": str(tmp_path), "GIT_CONFIG_NOSYSTEM": "1",
+           "GIT_CONFIG_GLOBAL": str(tmp_path / "gitconfig")}
+    committed = {"notes.txt": b"apple\nbanana\n", "tools/run.sh": b"#!/bin/sh\necho a\n"}
+
+    def git(*args, cwd=repo):
+        return subprocess.run(["git", *args], cwd=cwd, env=env, check=True, capture_output=True).stdout
+
+    git("init", "-q", str(repo), cwd=tmp_path)
+    for name, data in committed.items():
+        (repo / name).parent.mkdir(parents=True, exist_ok=True)
+        (repo / name).write_bytes(data)
+    (repo / "tools/run.sh").chmod(0o755)
+    git("add", "-A")
+    git("commit", "-q", "-m", "files")
+
+    def unpack(tar: Path) -> tuple[dict, dict]:
+        with tarfile.open(tar) as archive:
+            members = {m.name: m for m in archive.getmembers()}
+            return ({name: archive.extractfile(members[name]).read() for name in committed},
+                    {name: members[name].mode & 0o777 for name in committed})
+
+    (tmp_path / "archive.tar").write_bytes(git("archive", "--format=tar", "HEAD"))
+    assert unpack(tmp_path / "archive.tar")[0] != committed            # what git archive does with them
+    work = tmp_path / "work"
+    work.mkdir()
+    run_export = ["bash", "-c", f"set -euo pipefail\numask 077\nWORK={shlex.quote(str(work))}\n{export}"]
+    subprocess.run(run_export, cwd=repo, env=env, check=True, capture_output=True)
+    files, modes = unpack(work / "src.tar")
+    assert files == committed and modes == {"notes.txt": 0o644, "tools/run.sh": 0o755}
+    (repo / "link").symlink_to("notes.txt")                             # nothing but plain files is taken
+    git("add", "-A")
+    git("commit", "-q", "-m", "a link")
+    shutil.rmtree(work)
+    work.mkdir()
+    refused = subprocess.run(run_export, cwd=repo, env=env, capture_output=True, text=True)
+    assert refused.returncode != 0 and "link is a blob of mode 120000" in refused.stderr
+
+
+def test_the_builder_image_takes_no_mount_that_needs_relabelling():
+    """:Z on the host's root-owned CA bundle: rootless Podman on an SELinux host (Fedora, RHEL) can't
+    relabel it, so nobody there could rebuild a release. (DA Assistant's test, d4153ff.)"""
+    wrapper = WRAPPER.read_text()
+    assert not re.search(r"podman build[^\n]*-v ", wrapper)
+    assert 'install -m 0644 "$ca" "$WORK/context/hostca.crt"' in wrapper   # readable by apt's own user
+    containerfile = (PACKAGING / "Containerfile").read_text()
+    assert "COPY hostca.crt /hostca.crt" in containerfile
+    assert re.search(r"rm [^\n]*/hostca\.crt", containerfile)
+
+
+def _lookup(*candidates: str):
+    """host_ca_bundle, as the wrapper defines it, given `candidates`."""
+    import subprocess
+
+    found = re.search(r"^host_ca_bundle\(\) \{\n.*?^\}\n", WRAPPER.read_text(), re.S | re.M)
+    assert found, "the lookup is not where this test looks for it"
+    return subprocess.run(["bash", "-c", found.group(0) + 'host_ca_bundle "$@"', "bash", *candidates],
+                          capture_output=True, text=True, timeout=30)
+
+
+def test_the_build_looks_for_the_hosts_ca_bundle_wherever_apprun_looks(tmp_path):
+    """It looked in three places, and on openSUSE named the last it looked in, which wasn't there.
+    (DA Assistant's tests, 2a569de.)"""
+    listed = re.search(r"^CA_BUNDLES=\((.*?)\)", WRAPPER.read_text(), re.S | re.M).group(1).split()
+    assert listed == apprun_bundles() == HOST_BUNDLES
+    bundle = tmp_path / "ca-bundle.pem"
+    bundle.write_text("certificates")
+    done = _lookup(str(tmp_path / "missing.crt"), str(bundle), str(tmp_path / "also-missing.pem"))
+    assert (done.returncode, done.stdout) == (0, f"{bundle}\n")
+    done = _lookup("/nonexistent/one.crt", "/nonexistent/two.pem")
+    assert done.returncode == 1 and done.stdout == ""
+    assert "No CA bundle on this machine" in done.stderr and "/nonexistent/one.crt /nonexistent/two.pem" in done.stderr
+    assert "ca-certificates" in done.stderr
+    wrapper = WRAPPER.read_text()                   # and only when the builder image is to be made
+    assert wrapper.index('ca="$(host_ca_bundle "${CA_BUNDLES[@]}")"') > wrapper.index('if ! podman image exists "$TAG"; then')
+    assert not re.search(r"(?m)^for ca in ", wrapper)

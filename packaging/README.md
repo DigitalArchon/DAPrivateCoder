@@ -35,17 +35,22 @@ the AppImage that way.
 
 ## Building
 
-You need rootless [Podman](https://podman.io) (`sudo apt install podman`).
+You need rootless [Podman](https://podman.io) (`sudo apt install podman`), with SELinux enforcing
+or not.
 
 ```bash
 packaging/build-appimage.sh build    # dist/DAPrivateCoder-<version>-x86_64.AppImage (+ .sha256)
 packaging/build-appimage.sh check    # build twice from scratch, compare: must be identical
 packaging/test-appimage.sh           # smoke-test it on Ubuntu, Debian, Fedora, Arch, CachyOS
 packaging/build-appimage.sh lock     # re-resolve the dependency locks (review the diff, commit)
+DIST=/some/dir packaging/build-appimage.sh build   # the results there instead of dist/
 ```
 
-Only committed files are built (`git archive HEAD`), and every timestamp is HEAD's commit
-time (`SOURCE_DATE_EPOCH`). Builds run in `packaging/appimage/Containerfile`: Ubuntu 24.04 pinned
+Only committed files are built, each read from git's objects exactly as HEAD has it (not through
+`git archive`, which would apply your git's line-ending settings, filters and attributes first), with
+HEAD's version, and every timestamp is HEAD's commit time (`SOURCE_DATE_EPOCH`). The host's CA bundle
+(wherever the distribution keeps it) is copied into the builder image's build only for its apt to
+reach the package snapshot over https; nothing of it is in the AppImage. Builds run in `packaging/appimage/Containerfile`: Ubuntu 24.04 pinned
 by digest, with packages from the Ubuntu archive as it was at a fixed moment
 ([snapshot.ubuntu.com](https://snapshot.ubuntu.com)). Everything is downloaded over https,
 never plain http, not even through a redirect; downloads are cached in
@@ -83,11 +88,17 @@ build stops if anything in the image still names that folder.
 
 ## Verifying a release
 
-1. Check out the release's tag.
+1. Check out the release's tag, with no line-ending conversion:
+   `git clone -c core.autocrlf=false https://github.com/DigitalArchon/DAPrivateCoder`, then
+   `git checkout v<version>` in it.
 2. `packaging/build-appimage.sh build`.
 3. Compare `sha256sum dist/DAPrivateCoder-*.AppImage` with the release's `.sha256`.
 
-If they differ, `diffoscope` on the two files shows where.
+Your git settings can't change what is built: the build reads each file from git's objects as the
+commit has it. They can change the checkout, though, and the build scripts run from there; with
+`core.autocrlf=true` they would have CRLF line endings and not start at all, hence the `-c` in step 1.
+
+If the hashes differ, `diffoscope` on the two files shows where.
 
 ## Releasing
 
