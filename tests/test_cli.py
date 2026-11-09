@@ -47,6 +47,13 @@ def test_a_key_no_header_can_carry_is_refused_and_never_said(ring, monkeypatch, 
     assert "NanoGPT" in str(refused.value) and "abc" not in str(refused.value)
     assert isinstance(refused.value, creds.KeyringUnavailable)       # said wherever a key can't be had
     assert cli.main(["key", "status"]) == 1 and "abc" not in capsys.readouterr().err
+    # the web search, which reads NanoGPT's key as any request does, says so and searches nothing
+    import asyncio
+
+    from daprivatecoder import search
+    said, failed = asyncio.run(search.SearchServer("zero-retention", "https://nano-gpt.com/api/v1").search(
+        {"query": "python asyncio timeout"}))
+    assert failed and said.startswith("Not searched:") and "no API key has" in said and "abc" not in said
 
 
 def test_the_key_can_come_from_vibe_manager(ring, capsys):
