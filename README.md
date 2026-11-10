@@ -192,7 +192,9 @@ A model whose own attestation NanoGPT can't give for this session's nonce (relay
 another, or too slow) is attested through the gateway that answers it instead, and falls short of GPU
 evidence too. Models Chutes answers (Kimi K3 among them) have each of their instances attested;
 Chutes signs no replies, so theirs show as not verified, unless RedPill's gateway answered in its
-place. The Tinfoil-hosted `TEE/` models are refused: NanoGPT can't attest them for a fresh nonce.
+place. Where the gateway answers some of their requests (GLM 5.1 and 5.2, Kimi K2.6), it is attested
+too, and they are partly verified, like the gateway's own models; if NanoGPT couldn't give the
+gateway's report just then, **Enclave checks** says "RedPill's gateway unchecked". The Tinfoil-hosted `TEE/` models are refused: NanoGPT can't attest them for a fresh nonce.
 
 What an attestation doesn't prove: which software the enclave runs (no measurement is compared with a
 published one: it shows genuine, current hardware holding a live key bound to this session's nonce,
