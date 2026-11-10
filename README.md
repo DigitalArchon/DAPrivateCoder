@@ -166,7 +166,7 @@ to Intel's root (every certificate in its chain one allowed to issue it), with I
 lists and TCB ratings, and its GPUs' evidence by NVIDIA's attestation service, all bound to a nonce
 of this session's (DA Vibe Manager's verifier). An enclave that doesn't hold gets nothing.
 
-Each reply is then checked against the record NanoGPT keeps of it, signed by the attested key: the
+Each reply is then checked against the record NanoGPT keeps of it, signed by an attested key: the
 record's hash of the reply must be that of the exact bytes that came, and where RedPill's gateway
 keeps a signed receipt, it must hold too, saying the model the reply came from was verified. The
 check comes once the reply has reached Claude Code: it never holds a reply up or changes it. A TEE
@@ -176,17 +176,23 @@ same way. **Usage** marks each TEE request, and each image a TEE model described
 - **reply verified**: the record is of the reply that came, byte for byte;
 - **reply signed**: signed by the attested key, but NanoGPT rebuilds this model's replies, so the
   text can't be compared;
-- **⚠ reply not verified**: no record of the reply could be read (some models' providers keep none),
-  so nothing shows it came from the attested enclave;
+- **⚠ reply not verified**: no record of the reply could be read (Chutes, which answers some models,
+  keeps none), so nothing shows it came from the attested enclave;
 - **⚠ reply check failed**: the reply doesn't match its record. The enclave is attested again before
   anything more is sent to that model.
 
-NanoGPT's TEE models attest only in part for now, which **Enclave checks** in the window says, and
-why: most pass through RedPill's gateway, whose enclave is checked but not the model's own; and
-through NanoGPT the receipts' keys aren't in the quote. The quote binds the key that signs each
-reply's record, so the record's tie to the attested enclave holds; the receipt's own key is only
-published beside it, so a receipt's word that the model was verified rests on NanoGPT, not on the
-hardware.
+Most of NanoGPT's TEE models attest only in part, which **Enclave checks** in the window says, and
+why: they pass through RedPill's gateway, whose enclave is checked but not the model's own. Beside a
+model's own attestation, the gateway's own report is asked for too, where NanoGPT has one (every model
+the gateway serves, since November 10 2026): its quote binds all the gateway's keys, those that sign
+each reply's record and its receipts, to another nonce of this session's. Where there's none, the
+receipts' keys aren't in the quote, and **Enclave checks** says so: the record's tie to the attested
+enclave holds, but a receipt's word that the model was verified rests on NanoGPT, not on the hardware.
+A model whose own attestation NanoGPT can't give for this session's nonce (relayed from Chutes for
+another, or too slow) is attested through the gateway that answers it instead, and falls short of GPU
+evidence too. Models Chutes answers (Kimi K3 among them) have each of their instances attested;
+Chutes signs no replies, so theirs show as not verified, unless RedPill's gateway answered in its
+place. The Tinfoil-hosted `TEE/` models are refused: NanoGPT can't attest them for a fresh nonce.
 
 What an attestation doesn't prove: which software the enclave runs (no measurement is compared with a
 published one: it shows genuine, current hardware holding a live key bound to this session's nonce,
