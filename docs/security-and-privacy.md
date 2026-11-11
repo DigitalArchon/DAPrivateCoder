@@ -3,7 +3,8 @@
 How DA Private Coder handles your security and privacy: what leaves your computer and who gets it,
 what is checked and how, what is kept on your computer, and what the app can't protect you from.
 It describes the app as it is now (November 2026). The [README](../README.md) says how to use each
-part; this says what each part does, and what it doesn't.
+part; this says what each part does, and what it doesn't. To report a vulnerability, see
+[SECURITY.md](../SECURITY.md).
 
 ## Contents
 
@@ -477,13 +478,5 @@ RedPill's session records.
 
 ## Reporting a vulnerability
 
-DA Private Coder has no private channel for security reports yet. Report a problem at the project's
-page, <https://github.com/DigitalArchon/DAPrivateCoder>, and leave out anything that would help
-someone exploit it: say there that you have more to send, and ask for a private way to send it.
-
-Anything that breaks one of the promises above is such a problem: something sent while DA Private
-Coder is closed or switched off, or to a model below a session's kind; a private model's request
-leaving unsealed; anything sent to a TEE model whose attestation doesn't hold, or a reply its check
-passes that isn't its attested enclave's; a key or a password written in the clear to a file, a log
-or a message, or reaching Claude Code; a session's or the window's token reaching anyone else;
-something from your computer getting into a web search or an address WebFetch reads.
+Please report it privately, as [SECURITY.md](../SECURITY.md) says, not in a public issue or pull
+request. It lists what is in scope: anything that breaks one of the promises above.

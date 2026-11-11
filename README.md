@@ -47,7 +47,8 @@ standard session's go in the clear to its provider and the model's host: see
 
 Every service the app talks to, what each is sent and what never leaves, the keys, what is kept on
 your computer and what the app can't protect you from are set out in
-[Security and privacy](docs/security-and-privacy.md).
+[Security and privacy](docs/security-and-privacy.md). To report a vulnerability, see
+[SECURITY.md](SECURITY.md).
 
 ## Getting started
 
