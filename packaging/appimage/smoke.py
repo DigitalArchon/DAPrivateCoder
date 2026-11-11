@@ -91,9 +91,9 @@ profiles = st["config"]["profiles"]
 check(not any(st["ready"].values()) and profiles["private"]["model"] == "private/glm-5-3"
       and profiles["tee"]["kind"] == "tee" and profiles["standard"]["kind"] == "standard",
       f"{NAME}: the API answers, not set up yet, with private, TEE and standard sessions")
-api(base, token, "POST", "/api/profile", {"profile": "private", "fields": {"model": "private/kimi-k3", "web_search": "best"}})
+api(base, token, "POST", "/api/profile", {"profile": "private", "fields": {"model": "private/kimi-k3-1-pro", "web_search": "best"}})
 p = api(base, token, "GET", "/api/state")["config"]["profiles"]["private"]
-check(p["model"] == "private/kimi-k3" and p["web_search"] == "best", f"{NAME}: settings are saved")
+check(p["model"] == "private/kimi-k3-1-pro" and p["web_search"] == "best", f"{NAME}: settings are saved")
 api(base, token, "POST", "/api/profile", {"profile": "private", "fields": {"model": "private/glm-5-3", "web_search": "zero-retention"}})
 
 # the commands the AppImage dispatches: claude-private (no Claude Code here: it says so), the search server

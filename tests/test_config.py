@@ -13,7 +13,7 @@ def test_the_defaults_are_written_on_first_use_and_read_back():
     cfg = config.load()
     assert cfg.path == config.config_path() and cfg.path.read_text() == config.DEFAULT_TEXT
     private, tee, standard = cfg.profile("private"), cfg.profile("tee"), cfg.profile("standard")
-    assert private.private and private.models == ("private/glm-5-3", "private/kimi-k3", "private/deepseek-v4-1-flash")
+    assert private.private and private.models == ("private/glm-5-3", "private/kimi-k3-1-pro", "private/deepseek-v4-1-flash")
     assert private.vision_model == "private/deepseek-v4-1-flash" and private.reasoning == "high"
     assert tee.kind == "tee" and tee.models == ("TEE/glm-5.3", "TEE/kimi-k3", "TEE/glm-5.3-flash")
     assert not standard.private and standard.model == "z-ai/glm-5.3" and standard.provider == "nanogpt"
@@ -202,3 +202,19 @@ def test_a_running_session_reads_whether_to_name_providers_afresh_and_no_when_it
     for broken in ("tee_name_upstreams = [true\n", "tee_name_upstreams = \"true\"\n", "\udcff"):
         path.write_text(broken, errors="surrogateescape")
         assert config.names_upstreams(path) is False, broken
+
+
+def test_a_saved_model_is_kept_when_the_default_changes():
+    """NanoGPT stopped offering private/kimi-k3 on Nov 11 2026, and the private profile's Opus is Kimi K3.1 Pro now.
+    The settings file is written with every setting on first use, so one written before names private/kimi-k3
+    itself: it is kept, never swapped for the new default (the window, `daprivatecoder check` and a session's
+    refusal say it's no longer offered). Only a new settings file has the new one."""
+    assert config.load().profile("private").opus_model == "private/kimi-k3-1-pro"        # a new file
+    before = config.DEFAULT_TEXT.replace('opus_model = "private/kimi-k3-1-pro"', 'opus_model = "private/kimi-k3"')
+    assert before != config.DEFAULT_TEXT
+    config.config_path().write_text(before)
+    cfg = config.load()
+    assert cfg.profile("private").opus_model == "private/kimi-k3"
+    config.save(cfg)                                    # saved again, from the window: still the user's choice
+    assert config.load().profile("private").opus_model == "private/kimi-k3"
+    assert 'opus_model = "private/kimi-k3"\n' in config.config_path().read_text()

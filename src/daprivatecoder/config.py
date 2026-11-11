@@ -129,7 +129,10 @@ class Config:
 
 
 DEFAULTS = Config(profiles={
-    "private": Profile("private", "private", "private/glm-5-3", "private/kimi-k3", "private/deepseek-v4-1-flash",
+    # Opus: Kimi K3.1 Pro, since NanoGPT retired private/kimi-k3 from Private Mode (Nov 11 2026). A settings file
+    # keeps the model it names, never changed for another: one naming private/kimi-k3 is told it's no longer
+    # offered (the window's Models, `daprivatecoder check`, and a session's refusal: private_mode.ModelRetired)
+    "private": Profile("private", "private", "private/glm-5-3", "private/kimi-k3-1-pro", "private/deepseek-v4-1-flash",
                        "private/deepseek-v4-1-flash", "high", "zero-retention"),
     "tee": Profile("tee", "tee", "TEE/glm-5.3", "TEE/kimi-k3", "TEE/glm-5.3-flash", "TEE/glm-5.3-flash", "high",
                    "zero-retention"),

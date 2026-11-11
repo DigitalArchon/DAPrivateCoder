@@ -17,7 +17,7 @@ from daprivatecoder.launcher import (LaunchError, child_env, claude_args, claude
                                   managed_conflicts, split_wrapper_args)
 from daprivatecoder.usagelog import read
 
-PRIVATE = Profile("private", "private", "private/glm-5-3", "private/kimi-k3", "private/deepseek-v4-1-flash",
+PRIVATE = Profile("private", "private", "private/glm-5-3", "private/kimi-k3-1-pro", "private/deepseek-v4-1-flash",
                   "private/deepseek-v4-1-flash", "low")
 NANO = Profile("nano", "standard", "z-ai/glm-5.3", "moonshotai/kimi-k3", "z-ai/glm-5.3-flash", "", "low")
 BIN = Path(sys.executable).parent
@@ -65,7 +65,7 @@ def test_claude_code_is_pointed_at_the_proxy_with_the_profiles_models():
     env = claude_env(PRIVATE, 4321, "tok")
     assert env["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:4321" and env["ANTHROPIC_AUTH_TOKEN"] == "tok"
     assert env["ANTHROPIC_MODEL"] == env["ANTHROPIC_DEFAULT_SONNET_MODEL"] == "private/glm-5-3"
-    assert env["ANTHROPIC_DEFAULT_OPUS_MODEL"] == env["ANTHROPIC_DEFAULT_FABLE_MODEL"] == "private/kimi-k3"
+    assert env["ANTHROPIC_DEFAULT_OPUS_MODEL"] == env["ANTHROPIC_DEFAULT_FABLE_MODEL"] == "private/kimi-k3-1-pro"
     assert env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "private/deepseek-v4-1-flash"
     assert env["ANTHROPIC_DEFAULT_OPUS_MODEL_DESCRIPTION"].startswith("Private")
     for way_around in ("ANTHROPIC_API_KEY", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"):
@@ -270,7 +270,7 @@ def test_the_search_server_comes_first_with_what_it_needs(tmp_path):
     assert search_notice(PRIVATE) == ""
 
 
-PRIVATE_SEARCH = Profile("private", "private", "private/glm-5-3", "private/kimi-k3", "private/deepseek-v4-1-flash",
+PRIVATE_SEARCH = Profile("private", "private", "private/glm-5-3", "private/kimi-k3-1-pro", "private/deepseek-v4-1-flash",
                          "private/deepseek-v4-1-flash", "low", "zero-retention")
 
 

@@ -67,7 +67,7 @@ Code is used), and a NanoGPT API key with credit (Private Mode is paid per use).
    enclave, or not). Claude Code not listed there runs as usual, on Anthropic's models.
 
 In a session, `/status` shows the base URL as `http://127.0.0.1:…`: that is DA Private Coder.
-`/model` offers the profile's models (Sonnet is GLM-5.3, Opus Kimi K3, Haiku DeepSeek V4.1 Flash) and
+`/model` offers the profile's models (Sonnet is GLM-5.3, Opus Kimi K3.1 Pro, Haiku DeepSeek V4.1 Flash) and
 the other models NanoGPT's Private Mode offers now. The model Claude Code shows is the one that runs:
 one a session won't send to (a Claude model in a private session, say) is refused, saying why, and
 never swapped for another; Claude Code then keeps the model it had.
@@ -123,11 +123,15 @@ Chosen in the window (**Models**, Private), or in `~/.config/daprivatecoder/conf
 | Role | Model | Input | Cached input | Output |
 |---|---|---|---|---|
 | Default, `/model sonnet` | `private/glm-5-3` | $1.47 | $0.27 | $4.62 |
-| `/model opus` | `private/kimi-k3` | $3.15 | $1.58 | $15.75 |
+| `/model opus` | `private/kimi-k3-1-pro` | $4.20 | $0.42 | $21.00 |
 | `/model haiku`, background tasks, describing images | `private/deepseek-v4-1-flash` | $0.68 | $0.14 | $1.52 |
 
 Prices are per million tokens, in November 2026, with NanoGPT's 5% Private Mode markup; the window
-shows today's. Kimi K3 and DeepSeek V4.1 Flash see images, while GLM-5.3 has them described.
+shows today's. Kimi K3.1 Pro and DeepSeek V4.1 Flash see images, while GLM-5.3 has them described.
+Kimi K3.1 Pro took the place of Kimi K3 (`private/kimi-k3`), which NanoGPT stopped offering on
+November 11 2026. A settings file that names a model keeps it: if yours says `private/kimi-k3`, the
+window shows it as no longer listed, and a session refuses it before anything is sent, naming the
+models NanoGPT offers. Choose another under **Models**.
 
 Claude Code sends the whole conversation with every request; what repeats comes from the prompt
 cache, at the cached price. **Usage** in the window shows each request's tokens and cost. Ignore
@@ -145,9 +149,10 @@ its provider lists for it; one that refuses a level, naming those it takes, is a
 
 **Context** in the window (`context` in the file) is where Claude Code compacts the conversation
 (summarises it, and goes on): 200K by default, which is what Claude Code assumes for models it
-doesn't know, or 400K, or 1M, what NanoGPT lists for these. Claude Code sends the whole conversation
-with every request, so a bigger one costs more each time, even from the cache: at 1M, about $1.60 a
-Kimi K3 request. The window says so if a model of the profile holds less than the size chosen.
+doesn't know, or 400K, or 1M, what NanoGPT lists for GLM-5.3 and DeepSeek V4.1 Flash (Kimi K3.1 Pro:
+262K). Claude Code sends the whole conversation with every request, so a bigger one costs more each
+time, even from the cache: at 1M, about $0.30 a GLM-5.3 request. The window says so if a model of the
+profile holds less than the size chosen.
 
 Each model's reasoning shows as Claude Code shows Claude's thinking (collapsed in the editor; Ctrl+O
 in a terminal), unless Claude Code's thinking is off; the model still reasons then, at its effort. As
@@ -155,7 +160,7 @@ with Claude, what Claude Code sends back of it goes to the model with the rest o
 A provider that won't take it back is asked again without it, from then on (the log says so). It
 never goes to a Claude model: Anthropic's API takes only its own thinking.
 
-A model that sees images (Kimi K3, DeepSeek V4.1 Flash) gets them as they are. Only one that
+A model that sees images (Kimi K3.1 Pro, DeepSeek V4.1 Flash) gets them as they are. Only one that
 doesn't (GLM-5.3) has them described, by the **Images** model, also a private one.
 
 ## TEE and standard sessions

@@ -17,7 +17,7 @@ from daprivatecoder.usagelog import UsageLog, read
 
 BASE = "https://nano-gpt.com/api/v1"
 TOKEN = "session-token-" + "x" * 30
-PRIVATE = Profile("private", "private", "private/glm-5-3", "private/kimi-k3", "private/deepseek-v4-1-flash",
+PRIVATE = Profile("private", "private", "private/glm-5-3", "private/kimi-k3-1-pro", "private/deepseek-v4-1-flash",
                   "private/deepseek-v4-1-flash", "low")
 NANO = Profile("nano", "standard", "z-ai/glm-5.3", "moonshotai/kimi-k3", "z-ai/glm-5.3-flash", "", "low")
 CAPS = [
@@ -27,7 +27,7 @@ CAPS = [
      "pricing": {"prompt": 1.4, "completion": 4.4, "cacheReadInputPer1kTokens": 0.00026, "currency": "USD", "unit": "per_million_tokens"}},
     {"id": "TEE/deepseek-v4.1-flash", "capabilities": {"vision": True, "tool_calling": True}},
 ]
-LISTED = ["private/deepseek-v4-1-flash", "private/gemma4-31b", "private/glm-5-3", "private/kimi-k3"]
+LISTED = ["private/deepseek-v4-1-flash", "private/gemma4-31b", "private/glm-5-3", "private/kimi-k3-1-pro"]
 SAID = "what we said in private"
 CACHED = {"prompt_tokens": 100_000, "completion_tokens": 50, "prompt_tokens_details": {"cached_tokens": 90_000}}
 PNG = b"\x89PNG\r\n\x1a\n fake"
@@ -166,7 +166,7 @@ async def test_a_private_session_seals_everything_and_runs_only_the_model_it_say
     for asked, why in (("claude-opus-5-5", "is one of Claude's own models"), ("z-ai/glm-5.3", "isn't end-to-end encrypted")):
         r = await call(p, "POST", "/v1/messages", message(asked))
         assert r.status_code == 400 and why in r.json()["error"]["message"] and r.headers["x-should-retry"] == "false"
-        assert "private/kimi-k3" in r.json()["error"]["message"]          # what /model opus is here
+        assert "private/kimi-k3-1-pro" in r.json()["error"]["message"]    # what /model opus is here
     assert len(fake.calls) == 4
 
 
@@ -494,7 +494,7 @@ async def test_the_model_list_offers_every_private_model_in_a_private_session():
     p, _ = make()
     r = await call(p, "GET", "/v1/models?limit=1000")
     ids = [m["id"] for m in r.json()["data"]]
-    assert ids[:3] == ["private/glm-5-3", "private/kimi-k3", "private/deepseek-v4-1-flash"]
+    assert ids[:3] == ["private/glm-5-3", "private/kimi-k3-1-pro", "private/deepseek-v4-1-flash"]
     assert "private/gemma4-31b" in ids and len(ids) == len(set(ids))
     assert all(m["type"] == "model" for m in r.json()["data"])
     p, _ = make(NANO)

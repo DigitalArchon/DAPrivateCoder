@@ -2,8 +2,8 @@
 model list (GET /models?detailed=true, public: no key is sent). From DA Vibe Manager's
 llm/capabilities.py.
 
-Private Mode models (private/kimi-k3) are not in that list, so they are matched to their public
-counterpart by name (TEE/kimi-k3, moonshotai/kimi-k3), the enclave build first.
+Private Mode models (private/kimi-k3-1-pro) are not in that list, so they are matched to their public
+counterpart by name (TEE/kimi-k3.1-pro, moonshotai/kimi-k3.1-pro), the enclave build first.
 
 OpenRouter's list (GET /models, public too) says the same in its own shape: read by parse_openrouter.
 Another provider's list, if it has one, names its models and nothing more: what they can do isn't

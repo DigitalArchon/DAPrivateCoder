@@ -417,7 +417,7 @@ function contextRows(tab, p, save) {
       CONTEXTS.map(([v, l]) => h("option", { value: String(v), selected: p.context === v }, l)))),
   h("div", { class: "model-row" }, h("span", {}), h("div", { class: "small muted" },
     "When a conversation reaches this size, Claude Code summarises it and carries on. Every request resends the whole "
-    + "conversation, so a larger size costs more per request, even with caching: at 1M, about $1.60 per Kimi K3 request. "
+    + "conversation, so a larger size costs more per request, even with caching: at 1M, about $0.30 per GLM-5.3 request. "
     + "200K is Claude Code's default for these models.",
     smallest < p.context ? h("div", { class: "warnbox" }, `One of these models holds only ${Math.round(smallest / 1000)}K, `
       + "so its requests would fail before Claude Code summarises.") : null))];

@@ -222,7 +222,7 @@ starts with it on 127.0.0.1 and which ends with it:
 
 ## Private sessions
 
-NanoGPT's `private/` models (Private GLM-5.3, Kimi K3, DeepSeek V4.1 Flash) run in Tinfoil's
+NanoGPT's `private/` models (Private GLM-5.3, Kimi K3.1 Pro, DeepSeek V4.1 Flash) run in Tinfoil's
 enclaves, and are end-to-end encrypted:
 
 - **Attested before anything is sent.** Before a session's first private request, and before any
