@@ -90,12 +90,16 @@ def test_a_tee_requests_mark_follows_its_reply():
     went = script("whereItWent") + "\nconst test = (last) => whereItWent(last);"
     lasts = [{"sent": "tee", "reply": "verified"}, {"sent": "tee", "reply": "signed", "attested": "gateway"},
              {"sent": "tee", "reply": "verified", "attested": "gateway"}, {"sent": "tee", "reply": "checking"},
-             {"sent": "tee", "reply": "unchecked"}, {"sent": "tee", "reply": "failed"}, {"sent": "tee"}]
+             {"sent": "tee", "reply": "unchecked"}, {"sent": "tee", "reply": "failed"}, {"sent": "tee"},
+             # a model Chutes serves, whose instances sign no replies: verified, its reply was the gateway's (live,
+             # TEE/deepseek-v3.2, Nov 11 2026)
+             {"sent": "tee", "reply": "verified", "attested": "instances"},
+             {"sent": "tee", "reply": "unchecked", "attested": "instances"}]
     said = run(went, lasts)
     assert said[0] == "received by the attested TEE, through NanoGPT (which can read it)"
-    assert said[1] == said[2] == "received by the attested TEE gateway, through NanoGPT (which can read it)"
+    assert said[1] == said[2] == said[7] == "received by the attested TEE gateway, through NanoGPT (which can read it)"
     assert "received" not in said[3] and said[3].endswith("its reply is being checked")
-    assert set(said[4:]) == {"⚠ not shown to reach the attested enclave; sent through NanoGPT (which can read it)"}
+    assert set(said[4:7] + said[8:]) == {"⚠ not shown to reach the attested enclave; sent through NanoGPT (which can read it)"}
 
 
 def test_a_tee_reply_says_who_ran_its_model_beside_its_mark_when_settings_ask():

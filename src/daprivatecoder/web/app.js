@@ -554,7 +554,10 @@ function whereItWent(last) {
   if (last.sent === "sealed") return "end-to-end encrypted, to the verified enclave";
   if (last.sent === "tee") {
     if (["verified", "signed"].includes(last.reply)) {
-      return `received by the attested TEE${last.attested === "gateway" ? " gateway" : ""}, through NanoGPT (which can read it)`;
+      // signed by a key of RedPill's gateway: a model it serves, or one Chutes serves (whose instances sign no
+      // replies) that the gateway answered this time
+      const gateway = last.attested === "gateway" || last.attested === "instances";
+      return `received by the attested TEE${gateway ? " gateway" : ""}, through NanoGPT (which can read it)`;
     }
     if (last.reply === "checking") return "sent through NanoGPT (which can read it) while its attestation held; its reply is being checked";
     return "⚠ not shown to reach the attested enclave; sent through NanoGPT (which can read it)";
