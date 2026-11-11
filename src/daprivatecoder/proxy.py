@@ -121,6 +121,9 @@ class Refused(Exception):
         self.status = status
         self.kind = kind
         self.retry = retry
+        # already in the request log as the request that was sent and refused (Proxy._translated): not logged
+        # again, as one this proxy refused before sending anything
+        self.logged = False
 
 
 def upstream_url(base: str, path: str, query: str = "") -> str:
@@ -874,7 +877,8 @@ class Proxy:
                     return await self._forward(request, path, data, model, asked, body)
                 return await self._translated(path, data, model, asked, len(body), tier)
             except Refused as e:
-                self._record("request", path=path, model=asked, status=e.status, error=str(e))
+                if not e.logged:              # refused here, before anything was sent: a line of its own
+                    self._record("request", path=path, model=asked, status=e.status, error=str(e))
                 return self._error(e)
 
         return Starlette(routes=[Route("/{path:path}", handle, methods=["GET", "POST", "HEAD"])])
@@ -966,6 +970,7 @@ class Proxy:
         except Exception as e:  # noqa: BLE001
             refusal = upstream_refusal(model, e, self._provider_of(tier))
             await done({}, refusal.status, error=str(e)[:300])
+            refusal.logged = True
             raise refusal from e
 
         if not data.get("stream"):
@@ -975,6 +980,7 @@ class Proxy:
             except Exception as e:  # noqa: BLE001
                 refusal = upstream_refusal(model, e, self._provider_of(tier), answering=True)
                 await done(stats, refusal.status, error=str(e)[:300])
+                refusal.logged = True
                 raise refusal from e
             await done(stats, 200)
             self._check_later(model, check, ended, rec)

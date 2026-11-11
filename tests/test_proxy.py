@@ -591,6 +591,25 @@ async def test_a_request_the_provider_refuses_is_told_by_its_status_and_asked_ag
     assert "NanoGPT balance is too low for this request" in said and "Top it up" in said
 
 
+async def test_a_request_the_provider_refuses_is_logged_once_as_sent(tmp_path):
+    """It was logged as the request sent, with how it went, and again as one refused here, before anything was
+    sent: Usage showed a second row, "not sent", for a request NanoGPT had refused. One refused here is logged once
+    too, as not sent."""
+    from daprivatecoder.manager import _sent
+    for stream, partway in ((True, False), (False, False), (False, True)):
+        log = UsageLog(tmp_path / f"requests-{stream}-{partway}.log", "s1")
+        p, fake = make(fake=Refusing(nanogpt_refused(402), partway=partway), log=log)
+        r = await call(p, "POST", "/v1/messages", message("private/kimi-k3", stream=stream))
+        assert r.status_code == (200 if stream and partway else 402), (stream, partway)
+        lines = [e for e in read(log.path) if e["kind"] == "request"]
+        assert [(e["tier"], e["status"], _sent(e)) for e in lines] == [("private", 402, "sealed")], (stream, partway)
+    log = UsageLog(tmp_path / "refused-here.log", "s1")
+    p, fake = make(log=log)
+    assert (await call(p, "POST", "/v1/messages", message("z-ai/glm-5.3"))).status_code == 400
+    (line,) = [e for e in read(log.path) if e["kind"] == "request"]
+    assert _sent(line) == "" and not fake.calls
+
+
 async def test_a_model_that_stops_partway_says_so_in_the_stream_by_its_name():
     from daprivatecoder.llm.private_mode import PrivateModeError
     p, fake = make(fake=Refusing(PrivateModeError("the model stopped: context length exceeded"), partway=True))
