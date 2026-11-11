@@ -93,6 +93,31 @@ def test_the_log_shows_tokens_and_cost(capsys):
     assert "2 requests, $0.0395" in out
 
 
+def test_check_says_what_a_tee_models_attestation_was_of(ring, monkeypatch, capsys):
+    """`daprivatecoder check --profile tee` said "Verified in part" of RedPill's gateway as of anything else: it
+    names what was attested now, and what that leaves to someone's word (SealedLore's, Nov 11 2026)."""
+    from daprivatecoder import proxy
+    from daprivatecoder.llm import capabilities
+    from daprivatecoder.llm.tee import GPUS_LOOSE, MODEL_ENCLAVE_UNCHECKED
+
+    async def listed(*_a, **_k):
+        return {}
+    gateway = {"level": "partial", "attested": "gateway", "shortfalls": [MODEL_ENCLAVE_UNCHECKED, GPUS_LOOSE],
+               "summary": f"partially verified: {MODEL_ENCLAVE_UNCHECKED}, {GPUS_LOOSE} (8 GPUs verified by NVIDIA)"}
+    found = {"TEE/glm-5.3": gateway, "TEE/glm-5.3-flash": gateway,
+             "TEE/kimi-k3": {"level": "full", "attested": "instances", "instances": 4,
+                             "summary": "Intel TDX quote verified (4 instances, 32 GPUs verified by NVIDIA)"}}
+    monkeypatch.setattr(capabilities, "fetch_nanogpt", listed)
+    monkeypatch.setattr(proxy, "attest_tee", lambda base, key, model: found[model])
+    creds.set_key("sk-nano-123456")
+    assert cli.main(["check", "--profile", "tee"]) == 0
+    out = capsys.readouterr().out
+    assert "Verified" not in out
+    assert "  TEE gateway attested, only in part. Attested: RedPill's TEE gateway" in out
+    assert "the gateway's word, in each reply's signed receipt" in out and "GPUs not tied to the quote" in out
+    assert "  TEE attested. Attested: each of the 4 instances this model's provider listed." in out
+
+
 def test_status_says_what_is_set_up(monkeypatch, capsys):
     monkeypatch.setattr(editor, "EDITORS", ())
     monkeypatch.setenv("PATH", "/nonexistent")

@@ -25,12 +25,14 @@ from daprivatecoder.llm.ethsig import (
 )
 from daprivatecoder.llm.secure_http import ProviderError
 from daprivatecoder.llm.tee import (
+    GPUS_LOOSE,
     MODEL_ENCLAVE_UNCHECKED,
     NRAS_URL,
     RECEIPT_KEYS_LOOSE,
     TeeClient,
     TeeRefused,
     is_tee,
+    what_was_attested,
 )
 
 KEY = 0xB25C7DB31FEED9122727BF0939DC769A96564B2DE4C4726D035B36ECF1E5B364
@@ -163,8 +165,9 @@ def client_for(*, intel=UP_TO_DATE, nvidia=8, **server) -> TeeClient:
 
 
 def besides_receipts(result) -> list[str]:
-    """The shortfalls other than the receipt keys, which nano-gpt's form always has."""
-    return [what for what in result.shortfalls if what != RECEIPT_KEYS_LOOSE]
+    """The shortfalls other than the two nano-gpt's form always has: the receipt keys, and GPUs its quote
+    doesn't commit to."""
+    return [what for what in result.shortfalls if what not in (RECEIPT_KEYS_LOOSE, GPUS_LOOSE)]
 
 
 def test_a_bound_quote_intel_and_nvidia_vouch_for_is_attested_its_receipt_keys_named():
@@ -172,11 +175,17 @@ def test_a_bound_quote_intel_and_nvidia_vouch_for_is_attested_its_receipt_keys_n
     # it, which is said (SealedLore's: warn wherever it falls short).
     client = client_for()
     result = client.attest()
-    assert result.verified and result.shortfalls == [RECEIPT_KEYS_LOOSE]
+    # Its GPUs too (SealedLore's, Nov 11 2026): NVIDIA vouches for them, for our nonce, but the quote's report
+    # data is the signing key and the nonce, nothing of the GPUs'.
+    assert result.verified and result.shortfalls == [RECEIPT_KEYS_LOOSE, GPUS_LOOSE]
     assert (result.gpus, result.tcb_status, result.gpu_ok) == (8, "UpToDate", True)
     assert result.signing_address == address_of(KEY).lower()
     assert "binds the signing key to our nonce" in result.detail
     assert "vouches for 8 GPUs" in result.detail
+    assert "the GPUs may be another machine's" in result.detail
+    # No gateway report: the machine whose key signs, not known to be a gateway.
+    assert result.attested == "enclave" and result.to_dict()["attested"] == "enclave"
+    assert "Whether that machine runs the model itself" in what_was_attested(result)
     assert client.verify_reply("req_1") is True
 
 
@@ -614,7 +623,7 @@ def test_a_key_nvidia_does_not_publish_is_refused(real):
         nvidia(real, jwks={"keys": []})
 
 
-def test_the_whole_real_attestation_holds_with_only_its_receipt_keys_short(real, monkeypatch):
+def test_the_whole_real_attestation_holds_with_only_its_receipt_keys_and_gpus_short(real, monkeypatch):
     import daprivatecoder.llm.tee as tee_module
 
     client = TeeClient(
@@ -627,8 +636,9 @@ def test_the_whole_real_attestation_holds_with_only_its_receipt_keys_short(real,
     )
     monkeypatch.setattr(tee_module.secrets, "token_hex", lambda _n: real["nonce"])
     result = client.attest()
-    # Sept 2026's capture has no keyset: no receipts, so nothing binds them either
-    assert result.verified and result.shortfalls == [RECEIPT_KEYS_LOOSE]
+    # Sept 2026's capture has no keyset: no receipts, so nothing binds them either; and its quote binds the
+    # signing key and our nonce, not its GPUs
+    assert result.verified and result.shortfalls == [RECEIPT_KEYS_LOOSE, GPUS_LOOSE]
     assert (result.gpus, result.tcb_status) == (8, "UpToDate")
     assert result.signing_address == real["signing_address"]
 
@@ -767,8 +777,12 @@ def test_every_instance_bound_and_signed_is_fully_attested(instances):
     seen: dict = {}
     client = shaped(lambda nonce: (200, instances.body(nonce)), seen=seen)
     result = client.attest()
+    # Each instance's quote binds its GPU evidence's nonce: its GPUs are its own.
     assert result.level == "full" and result.instances == 2 and result.gpus == 16
     assert "signs no replies" in result.detail
+    assert result.attested == "instances"
+    assert "each of the 2 instances" in what_was_attested(result)
+    assert "nothing shows which machine answered" in what_was_attested(result)
     # NVIDIA's verdict is sought for the nonce each quote binds, as measured live.
     assert seen["nras_nonces"] == seen["verified_nonces"] == [instances.gpu_nonce] * 2
     with pytest.raises(ProviderError, match="signs no replies"):
@@ -926,7 +940,9 @@ def test_redpills_gateway_is_attested_only_in_part_and_its_expired_keys_are_refu
     but not that the model itself runs in an enclave, so it isn't called "full"."""
     result = _real_client(real, monkeypatch, extra=REDPILL).attest()
     assert result.level == "partial" and result.shortfalls == [
-        RECEIPT_KEYS_LOOSE, "the model's own enclave unchecked (RedPill's gateway)"]
+        RECEIPT_KEYS_LOOSE, "the model's own enclave unchecked (RedPill's gateway)", GPUS_LOOSE]
+    # the relay's JSON calls it RedPill's gateway, but no gateway report binds its key: not shown to be one
+    assert result.attested == "enclave"
     assert result.gpus == 8 and result.tcb_status == "UpToDate"
     expired = {**REDPILL, "attestation": {"workload_keyset": {"not_after": 1_700_000_000}}}
     with pytest.raises(TeeRefused, match="attested keys expired"):
@@ -1211,7 +1227,9 @@ def test_a_receipt_under_keys_renewed_since_is_unchecked_not_failed():
 def test_a_keyset_the_quote_binds_itself_is_taken_and_one_tied_neither_way_is_not():
     bound = receipt_client(tied="statement")
     assert bound.keyset is not None
-    assert bound.attest().shortfalls == [], "RedPill's own form binds the receipt keys"
+    result = bound.attest()
+    assert result.shortfalls == [GPUS_LOOSE], "RedPill's own form binds the receipt keys"
+    assert result.attested == "gateway", "the keyset is the gateway's"
     loose = receipt_client(tied="none")
     assert loose.keyset is None
     # Still signed by the attested key, for these bytes: the receipt goes unread.
@@ -1272,9 +1290,14 @@ def test_the_gateways_report_binds_the_receipt_keys_and_only_the_model_behind_it
     seen: list = []
     client = receipt_client(aci="bound", seen=seen)
     result = client.attest()
-    # the signing key is in the keyset the gateway's quote binds: the gateway's, so the model behind it unchecked
-    assert result.level == "partial" and result.shortfalls == [MODEL_ENCLAVE_UNCHECKED]
+    # the signing key is in the keyset the gateway's quote binds: the gateway's, so the model behind it unchecked,
+    # and the GPUs the quote doesn't name
+    assert result.level == "partial" and result.shortfalls == [MODEL_ENCLAVE_UNCHECKED, GPUS_LOOSE]
     assert "binds its receipt keys" in result.detail
+    # what was attested is the gateway
+    assert result.attested == "gateway"
+    assert "RedPill's TEE gateway" in what_was_attested(result)
+    assert "gateway's word" in what_was_attested(result)
     assert client.keyset is not None
     assert client.check_reply("req_9", receipt_id="rcpt-1", body_hash=streamed()) == "verified"
     asked = [r for r in seen if "/tee/attestation" in str(r.url)]
@@ -1330,6 +1353,7 @@ def test_the_gateway_stands_in_for_a_model_whose_own_evidence_was_relayed():
     result = client.attest()
     assert result.level == "partial" and result.shortfalls == ["no GPU evidence", MODEL_ENCLAVE_UNCHECKED]
     assert "the gateway that answers it is attested instead" in result.detail
+    assert result.attested == "gateway"
     assert client.check_reply("req_9", receipt_id="rcpt-1", body_hash=streamed()) == "verified"
     # Without the gateway, refused as before.
     with pytest.raises(TeeRefused, match="nonce the relay chose"):
@@ -1634,6 +1658,8 @@ async def test_a_model_attested_through_the_gateway_alone_is_logged_in_part_and_
     (att,) = [e for e in log if e["kind"] == "attested_tee"]
     assert att["level"] == "partial" and att["shortfalls"] == ["no GPU evidence", MODEL_ENCLAVE_UNCHECKED]
     assert "partially verified: no GPU evidence" in att["summary"]
+    # what was attested is logged, for Enclave checks to say (SealedLore's, Nov 11 2026): the gateway
+    assert att["attested"] == "gateway"
     lookups = [r for r in seen if "/tee/signature/" in str(r.url)]
     assert lookups and all(r.headers.get("X-TEE-Verification-Route") == "r9" for r in lookups)
     assert not [r for r in seen if "/tee/attestation" in str(r.url) and "X-TEE-Verification-Route" in r.headers]

@@ -207,11 +207,17 @@ class Manager:
         return {k: found.get(k) for k in ("t", "summary", "hardware", "release", "latest", "key_sha256", "enclave")}
 
     def tee_attestations(self) -> list[dict]:
-        """Each TEE model's last attestation (the newest first): what was found, or why it didn't hold."""
+        """Each TEE model's last attestation (the newest first): what was found, or why it didn't hold. One that
+        held says what was attested ("TEE gateway attested" for RedPill's gateway) and, first in what it says of
+        it, what that leaves to someone's word (proxy.attested_as, what_attested)."""
+        from .proxy import attested_as, what_attested
         last: dict[str, dict] = {}
         for r in usagelog.read(config.state_dir() / "requests.log"):
             if r.get("kind") == "attested_tee" and r.get("model"):
-                last[r["model"]] = {k: r.get(k) for k in ("t", "model", "level", "summary", "shortfalls", "error")}
+                found = {k: r.get(k) for k in ("t", "model", "level", "summary", "shortfalls", "attested", "error")}
+                if not r.get("error"):
+                    found.update(attested_as=attested_as(r), what=what_attested(r))
+                last[r["model"]] = found
         return sorted(last.values(), key=lambda a: str(a.get("t")), reverse=True)
 
     # ------------------------------------------------------------------ the keys
@@ -475,7 +481,7 @@ class Manager:
 
     async def check_tee(self, cfg, model: str) -> dict:
         """A TEE model's enclave, attested now (llm/tee.py): NanoGPT asks for the key to answer."""
-        from .proxy import attest_tee
+        from .proxy import ATTESTED, attest_tee
         if not is_tee(model):
             raise UserError(f"{model} isn't one of NanoGPT's TEE models.")
         key = await in_thread(creds.get_key)
@@ -486,8 +492,7 @@ class Manager:
         except Exception as e:  # noqa: BLE001 - said as it is
             self.log.write("attested_tee", model=model, error=str(e)[:300])
             raise UserError(f"{model}'s enclave didn't attest: {e}") from None
-        self.log.write("attested_tee", model=model, **{k: att.get(k) for k in (
-            "level", "summary", "shortfalls", "tcb_status", "gpus", "instances", "signing_address")})
+        self.log.write("attested_tee", model=model, **{k: att.get(k) for k in ATTESTED})
         return next(a for a in self.tee_attestations() if a["model"] == model)
 
     # ------------------------------------------------------------------ opening Claude Code

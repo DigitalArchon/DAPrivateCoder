@@ -310,6 +310,31 @@ def attest_tee(base_url: str, key: str, model: str) -> dict:
         client.close()
 
 
+# what the request log keeps of a TEE model's attestation (its "attested_tee" line, a session's or the window's
+# Check): what was found and what was attested (llm/tee.py Attestation.attested: "gateway", "instances",
+# "enclave"; none before Nov 11 2026), never the evidence itself
+ATTESTED = ("level", "summary", "shortfalls", "tcb_status", "gpus", "instances", "signing_address", "attested")
+
+
+def attested_as(found: dict) -> str:
+    """A TEE model's attestation that held, as the window's Enclave checks and `daprivatecoder check` name it:
+    "TEE gateway attested" where what was attested is RedPill's gateway, which passes the model's requests on
+    to the machine that runs it, else "TEE attested"; "only in part" where it fell short (SealedLore's,
+    Nov 11 2026: say what was attested, not only that something was)."""
+    what = "TEE gateway attested" if found.get("attested") == "gateway" else "TEE attested"
+    return f"{what}, only in part" if found.get("level") == "partial" else what
+
+
+def what_attested(found: dict) -> str:
+    """What that attestation was of, and what it leaves to someone's word, plainly (llm/tee.py
+    what_was_attested): "" for one logged before Nov 11 2026, which didn't say."""
+    from .llm import tee
+    instances = found.get("instances")
+    return tee.what_was_attested(tee.Attestation(
+        attested=found.get("attested") if isinstance(found.get("attested"), str) else "",
+        instances=instances if isinstance(instances, int) and not isinstance(instances, bool) else 0))
+
+
 class AttestedTee:
     """A TEE model's enclave as it attested: what it found, and the client that attested it, kept for
     its replies' checks against it (as DA Vibe Manager keeps it)."""
@@ -575,8 +600,7 @@ class Proxy:
             att = getattr(attested, "found", attested)
             self._tee[model] = (since_boot(), att, getattr(attested, "check", None))
             self._doubted.discard(model)
-            self._record("attested_tee", model=model, **why, **{k: att.get(k) for k in (
-                "level", "summary", "shortfalls", "tcb_status", "gpus", "instances", "signing_address")})
+            self._record("attested_tee", model=model, **why, **{k: att.get(k) for k in ATTESTED})
             return att
 
     def _reply_check(self, model: str) -> Callable[[object], str] | None:

@@ -256,7 +256,7 @@ def _check(args) -> int:
 
     async def tee() -> int:
         from . import creds
-        from .proxy import attest_tee
+        from .proxy import attest_tee, attested_as, what_attested
         caps = await capabilities.fetch_nanogpt(cfg.base_url)
         print("NanoGPT TEE models now (prices per million tokens, input / cached input / output). Not end-to-end "
               "encrypted: NanoGPT's gateway reads what is sent to them.")
@@ -274,7 +274,9 @@ def _check(args) -> int:
                 print(f"  NOT verified: {e}")
                 failed += 1
                 continue
-            print(f"  {'Verified' if att.get('level') == 'full' else 'Verified in part'}: {att.get('summary')}")
+            # what was attested, and what that leaves to someone's word (RedPill's gateway isn't the machine
+            # that runs the model), then what was found
+            print(f"  {attested_as(att)}. {what_attested(att)}".rstrip() + f"\n  {att.get('summary')}")
         return 1 if failed else 0
 
     async def standard() -> int:

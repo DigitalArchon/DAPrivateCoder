@@ -663,6 +663,12 @@ function searchPart(st, tab, p) {
 
 // ------------------------------------------------------------------ the enclaves
 
+// a TEE attestation that held, as its chip names it (manager.tee_attestations, proxy.attested_as: "TEE gateway
+// attested" for RedPill's gateway); one logged before Nov 11 2026 doesn't say what was attested
+function attestedAs(t) {
+  return t.attested_as || (t.level === "full" ? "TEE attested" : "TEE attested, only in part");
+}
+
 function verifySection(st) {
   const a = st.attestation;
   const tee = st.config && st.config.profiles.tee;
@@ -672,12 +678,16 @@ function verifySection(st) {
       const { attestation } = await api("POST", "/api/check", model ? { model } : {});
       const n = ++S.asked;
       take(n, await api("GET", "/api/state"));
-      toast(model ? `${model}: ${attestation.level === "full" ? "verified" : "partly verified"}.` : "The enclave is verified.", "ok", 4000);
+      toast(model ? `${model}: ${attestedAs(attestation)}.` : "The enclave is verified.", "ok", 4000);
     } finally { S.checking = ""; render(); }
   });
+  // each TEE model's last attestation: what was attested ("TEE gateway attested": RedPill's gateway, not the
+  // machine that runs the model), then what that leaves to someone's word, then what was found
   const teeRows = (st.tee_attestations || []).slice(0, 4).map((t) => h("div", { class: "attest" },
-    h("div", {}, t.error ? h("span", { class: "chip bad" }, "failed") : h("span", { class: `chip ${t.level === "full" ? "ok" : "tee"}` },
-      t.level === "full" ? "verified" : "partly verified"), " ", h("b", {}, t.model), " ", t.error || t.summary),
+    h("div", {}, h("span", { class: `chip ${t.error ? "bad" : t.level === "full" ? "ok" : "tee"}` }, t.error ? "failed" : attestedAs(t)),
+      " ", h("b", {}, t.model), t.error ? ` ${t.error}` : ""),
+    t.what ? h("div", { class: "small" }, t.what) : null,
+    t.error ? null : h("div", { class: "small muted" }, t.summary),
     h("div", { class: "small muted" }, `Checked ${t.t ? t.t.slice(0, 16).replace("T", " ") : ""}.`)));
   return h("div", { class: "section" }, h("h3", {}, "Enclave checks"),
     h("div", { class: "small muted" }, "Private models"),

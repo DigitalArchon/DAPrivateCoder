@@ -384,6 +384,40 @@ async def test_usage_says_what_each_tee_replys_check_found(window):
     assert "(vision)" in lines[4] and lines[4].endswith("reply verified")
 
 
+async def test_enclave_checks_say_what_was_attested_and_what_is_someones_word(window, monkeypatch):
+    """A model RedPill serves is attested as its gateway, which passes each request on to the machine that runs the
+    model, and that machine is the gateway's word; Chutes' instances sign no replies. Enclave checks said "partly
+    verified" of either, and nothing of what had been attested (SealedLore's, Nov 11 2026: "always make clear to
+    the user what is actually happening and if it is properly attested or not")."""
+    from daprivatecoder import creds, proxy, usagelog
+    from daprivatecoder.llm.tee import GPUS_LOOSE, MODEL_ENCLAVE_UNCHECKED
+    log = usagelog.UsageLog(config.state_dir() / "requests.log", "s1")
+    log.write("attested_tee", model="TEE/kimi-k3", level="full", attested="instances", instances=4, shortfalls=[],
+              summary="Intel TDX quote verified (4 instances, 32 GPUs verified by NVIDIA, Intel TCB UpToDate)")
+    log.write("attested_tee", model="TEE/old", level="partial", shortfalls=["receipt keys not in the quote"],
+              summary="partially verified: receipt keys not in the quote")       # logged before Nov 11 2026
+    log.write("attested_tee", model="TEE/qwen3.8-27b", error="TEE/qwen3.8-27b's attestation couldn't be fetched")
+    gateway = {"level": "partial", "attested": "gateway", "instances": 0, "gpus": 8, "tcb_status": "UpToDate",
+               "shortfalls": [MODEL_ENCLAVE_UNCHECKED, GPUS_LOOSE], "signing_address": "0xabc",
+               "summary": f"partially verified: {MODEL_ENCLAVE_UNCHECKED}, {GPUS_LOOSE} (8 GPUs verified by NVIDIA)"}
+    monkeypatch.setattr(proxy, "attest_tee", lambda base, key, model: gateway)
+    creds.set_key("sk-nano-123")
+    app, *_ = window
+    status, said = await call(app, "POST", "/api/check", {"model": "TEE/glm-5.3"})      # Check, in the window
+    assert status == 200 and said["attestation"]["attested_as"] == "TEE gateway attested, only in part"
+    rows = {a["model"]: a for a in (await call(app, "GET", "/api/state"))[1]["tee_attestations"]}
+    glm = rows["TEE/glm-5.3"]
+    assert glm["attested"] == "gateway" and glm["what"].startswith("Attested: RedPill's TEE gateway")
+    assert "That machine isn't attested by this app" in glm["what"] and "the gateway's word" in glm["what"]
+    assert "passes NanoGPT's servers in the clear" in glm["what"]
+    assert rows["TEE/kimi-k3"]["attested_as"] == "TEE attested" and "each of the 4 instances" in rows["TEE/kimi-k3"]["what"]
+    assert rows["TEE/old"]["attested_as"] == "TEE attested, only in part" and rows["TEE/old"]["what"] == ""
+    assert "attested_as" not in rows["TEE/qwen3.8-27b"] and rows["TEE/qwen3.8-27b"]["error"]
+    from daprivatecoder.usagelog import read
+    logged = [r for r in read(config.state_dir() / "requests.log") if r.get("model") == "TEE/glm-5.3"]
+    assert logged[-1]["attested"] == "gateway" and logged[-1]["shortfalls"] == [MODEL_ENCLAVE_UNCHECKED, GPUS_LOOSE]
+
+
 async def test_an_editor_on_another_programs_wrapper_is_left_as_it_is(window, capsys):
     app, started, settings, _ = window
     assert [editor.owner(v) for v in (None, "", "/home/u/.local/bin/claude-private", "/opt/wrap", 3)] == \
