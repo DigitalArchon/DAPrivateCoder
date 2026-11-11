@@ -15,7 +15,8 @@ from dataclasses import dataclass, field
 from typing import AsyncIterator
 from urllib.parse import urlparse
 
-from ..netpolicy import check_key, check_url
+from ..netpolicy import check_key, check_url, shown
+from .secure_http import ProviderError
 
 # private: sealed on this computer to an attested enclave (NanoGPT Private Mode). tee: runs in an
 # enclave this app attests first, but the prompt passes NanoGPT's gateway in the clear (NanoGPT's
@@ -97,8 +98,10 @@ class LLMClient:
         """Yield ("open", None) once the provider has taken the request and its reply has begun,
         ("text"|"reasoning", str) deltas and ("tool", name) as each tool call starts, then ("done",
         TurnResult). With `exact` (a TEE model's reply, checked against its signed record afterwards:
-        llm/tee.py check_reply), the stream is read as it came and every byte of it hashed, to its
-        end, and the receipt's headers kept, on the TurnResult (as DA Vibe Manager's does)."""
+        llm/tee.py check_reply), every byte of the stream is hashed, to its end, and the receipt's
+        headers kept, on the TurnResult (as DA Vibe Manager's does). An answer with not one event in
+        it (a web page where the API was expected) is an error saying so, never an empty reply
+        (`_read`)."""
         if is_private_mode(model):
             raise RuntimeError(f"{model} is a Private Mode model and is only ever sent sealed; nothing was sent")
         kwargs: dict = {"model": model, "messages": messages, "stream": True, "stream_options": {"include_usage": True}}
@@ -107,38 +110,35 @@ class LLMClient:
             kwargs["tool_choice"] = "auto"
         kwargs.update(_split_params(params))
         acc = StreamAccumulator()
-        if exact:
-            async for event in self._exactly(kwargs, acc):
-                yield event
-            yield "done", acc.finish()
-            return
-        stream = await self._client.chat.completions.create(**kwargs)
-        try:
-            yield "open", None                 # the provider took it, and its reply has begun
-            async for chunk in stream:
-                for event in acc.feed(chunk):
-                    yield event
-        finally:
-            await stream.close()     # stopped or cancelled: drop the connection, so the provider stops generating
+        async for event in self._read(kwargs, acc, exact=exact):
+            yield event
         yield "done", acc.finish()
 
-    async def _exactly(self, kwargs: dict, acc: StreamAccumulator) -> AsyncIterator[tuple[str, object]]:
+    async def _read(self, kwargs: dict, acc: StreamAccumulator, *, exact: bool) -> AsyncIterator[tuple[str, object]]:
         """The stream as the SDK would read it (its chunks, an error chunk raised as its APIError),
-        but by this client, so that every byte it carries is hashed, the "[DONE]" and anything after
-        it too: the hash the signed record names is of the exact bytes the stream carried (SealedLore's
-        openai_compat._lines, Nov 2026)."""
+        but by this client: so that, with `exact`, every byte it carries is hashed, the "[DONE]" and
+        anything after it too, the hash the signed record names being of the exact bytes the stream
+        carried (SealedLore's openai_compat._lines, Nov 2026); and so that an answer with not one SSE
+        data line in it is told for what it is. The SDK read that as a stream with nothing in it, so a
+        web page answering 200 where the API was expected, or an empty body, ended Claude Code's turn
+        with an empty reply and no reason (SealedLore's e947938, as DA Vibe Manager's d6f1ca8). A body
+        with data lines is read whatever its content type says, and one that says nothing but "[DONE]"
+        is the empty reply its endpoint sent. Stopped or cancelled, the connection is dropped, so the
+        provider stops generating."""
         from openai import APIError
         from openai.types.chat import ChatCompletionChunk
         digest = hashlib.sha256()
         async with self._client.chat.completions.with_streaming_response.create(**kwargs) as response:
-            headers = response.headers
-            acc.result.receipt_id = headers.get("x-receipt-id") or headers.get("x-tee-signature-id")
-            acc.result.tee_route = headers.get("x-tee-verification-route")
+            if exact:
+                headers = response.headers
+                acc.result.receipt_id = headers.get("x-receipt-id") or headers.get("x-tee-signature-id")
+                acc.result.tee_route = headers.get("x-tee-verification-route")
             yield "open", None                 # the provider took it, and its reply has begun
-            done = False
+            done = seen = False
             async for line in _lines(response.iter_bytes(), digest):
                 if done or not line.startswith("data:"):
                     continue
+                seen = True
                 data = line[5:].strip()
                 if data == "[DONE]":
                     done = True                # read on (nothing after it is taken): the hash covers it all
@@ -156,7 +156,10 @@ class LLMClient:
                                    response.http_request, body=error)
                 for event in acc.feed(ChatCompletionChunk.model_construct(**parsed)):
                     yield event
-        acc.result.body_hash = "sha256:" + digest.hexdigest()
+            if not seen:
+                raise _no_stream(response)
+        if exact:
+            acc.result.body_hash = "sha256:" + digest.hexdigest()
 
     async def complete(self, model: str, messages: list[dict], params: dict | None = None, *,
                        exact: bool = False) -> str:
@@ -182,6 +185,20 @@ class LLMClient:
 
     async def aclose(self) -> None:
         await self._client.close()
+
+
+def _no_stream(response) -> ProviderError:
+    """An answer that carried no event stream at all (a web page where the API was expected, a sign-in page on a
+    local network), as the error to raise: nothing in it was a reply, and an empty one would say nothing of why.
+    Its status and content type are named, and where it came from, without a password written into the address
+    (SealedLore's streaming._no_stream, as DA Vibe Manager's). Its status, a success, says asking again won't help."""
+    kind = response.headers.get("content-type", "").split(";")[0].strip() or "no content type"
+    return ProviderError(
+        f"{shown(str(response.http_request.url))} answered HTTP {response.status_code} ({kind[:80]}) with no reply "
+        "in it, not the stream a chat endpoint sends: a web page answers like this where the API was expected (an "
+        "address without its /v1, say).",
+        status_code=response.status_code,
+    )
 
 
 async def _lines(chunks, digest) -> AsyncIterator[str]:
