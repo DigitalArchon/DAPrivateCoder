@@ -160,8 +160,8 @@ as usual (plain `claude`, or a folder not chosen for DA Private Coder) is Anthro
   the key would go wherever it points: the request fails, and Claude Code is told so. Nor is a
   redirect followed in a TEE model's checks, or for RedPill's record. Tinfoil's checks of a private
   model follow one only to HTTPS, and never from a server on the internet into this computer or
-  your network. Sigstore's trust root is fetched by Sigstore's own library, by its own rules; what
-  it fetches is signed, and checked.
+  your network, Sigstore's trust root included, which Sigstore's own library fetches for them: a
+  redirect it may not follow fails the check, and nothing is sent.
 - **Proxies.** The app has no proxy setting of its own: its requests use your system's proxy
   settings (`HTTPS_PROXY` and the like), as most programs do. It doesn't run Tor or send anything
   through it itself.
