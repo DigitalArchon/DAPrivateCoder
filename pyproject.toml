@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "daprivatecoder"
-version = "0.1.0b4"
+version = "0.1.0b5"
 description = "Claude Code on NanoGPT's end-to-end encrypted private models: a small window to set it up and start it, a local proxy that seals each request to an attested enclave, and a switch for Claude Code in VSCodium and VS Code."
 readme = "README.md"
 license = "AGPL-3.0-or-later"
