@@ -343,12 +343,16 @@ def _log(args) -> int:
 def _search_server(args) -> int:
     import asyncio
 
-    from . import search
+    from . import gate, search
     from .usagelog import UsageLog
     cfg = config.load(Path(args.config) if args.config else None)
     profile = cfg.profile(args.profile)
     log = UsageLog(state_dir() / "requests.log", secrets.token_hex(4))
-    server = search.SearchServer(profile.web_search, cfg.base_url, log=log)
+    editors = [(name, Path(path)) for name, path in args.editor]
+    # only while the session may send, as its proxy asks before every request (gate.py): DA Private Coder open, and
+    # the editor that started the session (if one did) still running it, in its folder
+    server = search.SearchServer(profile.web_search, cfg.base_url, log=log,
+                                 gate=gate.Gate(profile.name, editors, args.folder or os.getcwd()).why)
     asyncio.run(search.serve_stdio(server))
     return 0
 
@@ -458,6 +462,9 @@ def _parser() -> argparse.ArgumentParser:
     w = sub.add_parser("search-server", help="the web search tool for Claude Code (claude-private adds it)")
     w.add_argument("--profile", default=PRIVATE)
     w.add_argument("--config", help=argparse.SUPPRESS)
+    # as the session's proxy has them: the editor whose switch started the session, and its folder (gate.py)
+    w.add_argument("--editor", nargs=2, action="append", default=[], help=argparse.SUPPRESS)
+    w.add_argument("--folder", help=argparse.SUPPRESS)
     w.set_defaults(func=_search_server)
     return ap
 

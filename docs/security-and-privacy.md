@@ -51,8 +51,8 @@ part; this says what each part does, and what it doesn't.
   each request went, never a prompt, a reply, a file, an image or a search's query.
 - **Anything of a private session in the clear**: a private model is sent sealed or not at all,
   and once a session has used one, nothing more of it goes in the clear.
-- **A session's requests while DA Private Coder is closed**: a session on it stops at its next
-  request to its model.
+- **Anything of a session's while DA Private Coder is closed**: a session on it stops at its next
+  request, and its web search at its next search.
 - **Your computer's names or a secret in a web search**, or in an address WebFetch reads: the app
   refuses such a search or address in code.
 
@@ -213,7 +213,9 @@ starts with it on 127.0.0.1 and which ends with it:
 - **Only while DA Private Coder is open.** Before each request the proxy asks whether it may: the
   app holds a lock while it is open, which ends with it however it ends, and a session your editor
   started also reads the editor's switch and its folder's choice. Closed, or switched off, the next
-  request is refused, saying so, and nothing is sent.
+  request is refused, saying so, and nothing is sent. A request already under way when you quit
+  finishes, its reply's check included. The session's web search asks the same before each search
+  ([below](#web-searches-and-the-pages-claude-code-reads)).
 - **Nothing kept of what was said.** Each request is logged with its model, how it was sent,
   status, tokens, cost and timing, and for a TEE model what its reply's check found; never its
   content.
@@ -393,9 +395,10 @@ and the search provider read each one.
   what it found, a secret only by its first characters. It is read as the search provider reads
   it: characters no one can see are taken out first, so they can't hide anything from the check,
   and the query checked is the one sent.
-- **Not stopped by closing the app.** The search server goes with the Claude Code that started it,
-  not with DA Private Coder: a search Claude Code asks you about after you quit it still goes if you
-  allow it.
+- **Only while DA Private Coder is open.** Before each search, the search server asks what the
+  session's proxy asks before each request: the app open, and for a session your editor started,
+  its switch and its folder's choice still naming the session's kind. If not, nothing is sent, and
+  Claude Code is told why.
 - **Limited.** A session makes at most 40 searches. Each is logged with its provider, status, the
   number of results and the cost, never the query.
 - **Results are untrusted.** Text in them that looks like instructions to the model is named in the

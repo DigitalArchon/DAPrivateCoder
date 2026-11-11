@@ -158,9 +158,8 @@ async def test_the_search_client_asks_nanogpt_as_vibe_manager_does():
         await websearch.web_search("http://nano-gpt.com/api/v1", "sk-nano", "q", "linkup", http=http)
 
 
-def test_a_whole_mcp_session_over_stdio(tmp_path):
-    """The server as Claude Code starts it: a subprocess, one JSON message a line. Nothing leaves:
-    the one search asked for is refused before it goes."""
+def _mcp_session(tmp_path, query: str) -> dict:
+    """The server as Claude Code starts it: a subprocess, one JSON message a line; its replies, by id."""
     env = {**os.environ, "XDG_CONFIG_HOME": str(tmp_path / "config"), "XDG_STATE_HOME": str(tmp_path / "state"),
            "PYTHON_KEYRING_BACKEND": "keyring.backends.null.Keyring"}
     messages = [
@@ -168,16 +167,56 @@ def test_a_whole_mcp_session_over_stdio(tmp_path):
                                                                        "clientInfo": {"name": "t", "version": "1"}}},
         {"jsonrpc": "2.0", "method": "notifications/initialized"},
         {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
-        {"jsonrpc": "2.0", "id": 3, "method": "tools/call",
-         "params": {"name": "web_search", "arguments": {"query": "write to jo@example.com"}}},
+        {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "web_search", "arguments": {"query": query}}},
     ]
     done = subprocess.run([sys.executable, "-m", "daprivatecoder", "search-server", "--profile", "private"],
                           input="".join(json.dumps(m) + "\n" for m in messages), capture_output=True, text=True,
                           env=env, timeout=30)
     replies = {r["id"]: r for r in map(json.loads, done.stdout.splitlines())}
     assert sorted(replies) == [1, 2, 3], done.stderr
+    return replies
+
+
+def test_a_whole_mcp_session_over_stdio(tmp_path):
+    """Nothing leaves: with DA Private Coder open (its window holds the lock), the one search asked for is refused
+    before it goes, for what it names; with it closed, for that (gate.py), whatever the query."""
+    import fcntl
+
+    from daprivatecoder import gate
+    gate.lock_path().parent.mkdir(parents=True, exist_ok=True)
+    held = os.open(gate.lock_path(), os.O_RDWR | os.O_CREAT, 0o600)
+    fcntl.flock(held, fcntl.LOCK_SH)                    # as the window holds it while it is open
+    try:
+        replies = _mcp_session(tmp_path, "write to jo@example.com")
+    finally:
+        os.close(held)
     assert replies[2]["result"]["tools"][0]["name"] == "web_search"
-    assert replies[3]["result"]["isError"] and "Not searched" in replies[3]["result"]["content"][0]["text"]
+    said = replies[3]["result"]["content"][0]["text"]
+    assert replies[3]["result"]["isError"] and said.startswith("Not searched: the query names this computer")
+    closed = _mcp_session(tmp_path, "python asyncio timeout")[3]["result"]
+    assert closed["isError"] and closed["content"][0]["text"].startswith("Not searched: DA Private Coder is closed")
+
+
+async def test_nothing_is_searched_while_the_session_may_send_nothing(tmp_path):
+    """The search server goes with Claude Code, not with DA Private Coder: closed, or switched off in the editor
+    that started the session, a search Claude Code asked about (and the user allowed) still went to NanoGPT. It
+    asks before each search what the session's proxy asks before each request (gate.py), and says why."""
+    log = UsageLog(tmp_path / "requests.log", "s1")
+    nano = NanoGPT()
+    why = {"now": "DA Private Coder is closed, so nothing was sent. Open it to go on with this conversation."}
+    s = SearchServer("zero-retention", BASE, key=lambda: "sk-nano", log=log, gate=lambda: why["now"],
+                     http=httpx.AsyncClient(transport=httpx.MockTransport(nano)))
+    text, failed = await s.search({"query": "python asyncio timeout"})
+    assert failed and text == f"Not searched: {why['now']}" and nano.asked == []
+    why["now"] = ("DA Private Coder was switched off for VSCodium (Back to normal), so nothing was sent: this "
+                  "conversation was started on it. Start a new conversation to use Claude.")
+    text, failed = await s.search({"query": "python asyncio timeout"})
+    assert failed and "switched off for VSCodium" in text and nano.asked == [] and s.count == 0
+    (first, second) = [e for e in read(tmp_path / "requests.log") if e["kind"] == "search"]
+    assert first["status"] == second["status"] == "refused" and first["reason"].startswith("DA Private Coder is closed")
+    why["now"] = ""                                    # open again: it searches
+    text, failed = await s.search({"query": "python asyncio timeout"})
+    assert not failed and nano.providers == ["linkup"]
 
 
 @pytest.mark.parametrize("query", ["build fails on jo-​laptop", "can't reach 192.168.1​.20 from docker",

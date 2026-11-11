@@ -260,6 +260,11 @@ def test_the_search_server_comes_first_with_what_it_needs(tmp_path):
     args = claude_args(PRIVATE_SEARCH, claude_env(PRIVATE_SEARCH, 1, "t"), ["fix the build"], mcp)
     assert args[0] == "--mcp-config" and args[2] == "--settings" and args[4:] == ["fix the build"]
     assert mcp_config(PRIVATE, None, base) is None and claude_args(PRIVATE, {}, [])[0] == "--settings"
+    # what the session's proxy is given to know whether it may send (gate.py), the search server is given too
+    editors = [("VSCodium", tmp_path / "settings.json")]
+    asks = mcp_config(PRIVATE_SEARCH, None, base, editors, "/home/u/project")["mcpServers"]["daprivatecoder"]["args"]
+    assert asks[asks.index("--editor"):] == ["--editor", "VSCodium", str(tmp_path / "settings.json"),
+                                             "--folder", "/home/u/project"]
     assert "neither keeps it" in search_notice(PRIVATE_SEARCH)
     assert "not zero data retention" in search_notice(Profile("p", "private", "private/glm-5-3", "", "", web_search="best"))
     assert search_notice(PRIVATE) == ""

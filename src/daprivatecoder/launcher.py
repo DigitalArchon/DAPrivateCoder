@@ -232,13 +232,20 @@ def python_argv(*args: str) -> list[str]:
     return [sys.executable, "-I", "-m", "daprivatecoder", *args]
 
 
-def mcp_config(profile: Profile, config_path: Path | None, base: dict[str, str]) -> dict | None:
-    """The web search server for Claude Code's --mcp-config (None: the profile doesn't search)."""
+def mcp_config(profile: Profile, config_path: Path | None, base: dict[str, str],
+               editors: list[tuple[str, Path]] | tuple = (), folder: str = "") -> dict | None:
+    """The web search server for Claude Code's --mcp-config (None: the profile doesn't search). It is given
+    what the session's proxy is (start_proxy): the editor whose switch started the session, if one did, and
+    the session's folder, so that before each search it asks what the proxy asks before each request (gate.py)."""
     if profile.web_search == "off":
         return None
     args = python_argv("search-server", "--profile", profile.name)[1:]
     if config_path is not None:
         args += ["--config", str(config_path)]
+    for name, path in editors:
+        args += ["--editor", name, str(path)]
+    if folder:
+        args += ["--folder", folder]
     return {"mcpServers": {"daprivatecoder": {"type": "stdio", "command": sys.executable, "args": args,
                                            "env": {k: base[k] for k in SEARCH_ENV if base.get(k)}}}}
 
@@ -451,7 +458,7 @@ def run(cfg: Config, profile_name: str, argv: list[str]):
     if clash:
         raise LaunchError(f"Your managed Claude Code settings ({MANAGED_SETTINGS}) set {', '.join(clash)}, which would "
                           "override DA Private Coder's, so Claude Code wasn't started.")
-    full_args = claude_args(profile, env, args, mcp_config(profile, cfg.path, dict(os.environ)))
+    full_args = claude_args(profile, env, args, mcp_config(profile, cfg.path, dict(os.environ), editors, os.getcwd()))
     proxy = start_proxy(profile, sock, token, cfg.path, editors)
     sock.close()                                  # the proxy has it now
     full_args = write_settings(full_args, proxy.pid)

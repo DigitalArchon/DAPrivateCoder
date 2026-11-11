@@ -110,8 +110,7 @@ tray (GNOME without the AppIndicator extension, say), closing the window quits.
 Once it has quit, every session on it stops at its next request, saying "DA Private Coder is closed,
 so nothing was sent"; opened again, each goes on where it was. `claude-private` in a terminal doesn't
 start at all while it's closed, and the editor's Claude Code in a folder chosen for it says so in the
-conversation. No request of a session's reaches its model without it open; only a web search that
-Claude Code asks you about after you quit still goes, if you allow it.
+conversation. Nothing reaches NanoGPT without it open.
 
 A request NanoGPT or the provider refuses is said as it is: an empty balance as "your NanoGPT
 balance is too low for this request", which Claude Code doesn't ask again (it would ten times, calling

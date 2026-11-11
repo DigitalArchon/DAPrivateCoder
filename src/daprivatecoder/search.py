@@ -15,7 +15,9 @@ profile searches with is its choice (`web_search` in the settings):
 
 Whatever the choice, a query naming this computer or its user, or holding a secret, is refused
 before it goes (identity.py); Claude Code asks before each search, as for any MCP tool, showing
-it; and a session makes at most MAX_SEARCHES. Each search is logged with its cost, never the query.
+it; and a session makes at most MAX_SEARCHES. Nothing is searched while the session may send nothing:
+before each search the server asks what the session's proxy asks before each request (gate.py: DA
+Private Coder closed, the editor that started the session switched off or to another kind). Each search is logged with its cost, never the query.
 Results are untrusted: text in them that looks like instructions is named in the reply
 (safety/inject.py, DA Toolkit's and DA Vibe Manager's), and what no one can see is taken out.
 """
@@ -88,7 +90,9 @@ class SearchServer:
 
     def __init__(self, mode: str, base_url: str, key: Callable[[], str | None] = creds.get_key,
                  log: UsageLog | None = None, http: httpx.AsyncClient | None = None,
-                 names: list[str] | None = None):
+                 names: list[str] | None = None, gate: Callable[[], str] | None = None):
+        """`gate` says why nothing may be sent now ("": it may), as the session's proxy has it (gate.py)."""
+        self._gate = gate
         self.mode = mode
         self.base_url = base_url
         self._key = key
@@ -108,6 +112,12 @@ class SearchServer:
         """(the tool's reply, whether it is an error)."""
         if self.mode not in ("zero-retention", "best"):
             return "Web search is switched off in DA Private Coder's settings. Use what you know.", True
+        # asked before every search, as the session's proxy asks before every request: closed, or switched off for
+        # this session, nothing goes (the search server lives on with Claude Code, after DA Private Coder has quit)
+        why = self._gate() if self._gate is not None else ""
+        if why:
+            self._record(status="refused", reason=why)
+            return f"Not searched: {why}", True
         # without what no one can see, checked and sent alike: a zero-width space inside a key, an address
         # or a name hid it from the check, and the search provider reads past it
         query = " ".join(visible(str(args.get("query") or "")).split())[:400]
