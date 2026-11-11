@@ -477,12 +477,13 @@ RedPill's session records.
 
 ## Reporting a vulnerability
 
-Please report it privately, not in a public issue or pull request: write to
-github@digitalarchon.com.au, the address the project's commits come from, with the details and, if
-you can, the steps to reproduce it. Anything that breaks one of the promises above is in scope:
-something sent while DA Private Coder is closed or switched off, or to a model below a session's
-kind; a private model's request leaving unsealed; anything sent to a TEE model whose attestation
-doesn't hold, or a reply its check passes that isn't its attested enclave's; a key or a password
-written in the clear to a file, a log or a message, or reaching Claude Code; a session's or the
-window's token reaching anyone else; something from your computer getting into a web search or an
-address WebFetch reads.
+DA Private Coder has no private channel for security reports yet. Report a problem at the project's
+page, <https://github.com/DigitalArchon/DAPrivateCoder>, and leave out anything that would help
+someone exploit it: say there that you have more to send, and ask for a private way to send it.
+
+Anything that breaks one of the promises above is such a problem: something sent while DA Private
+Coder is closed or switched off, or to a model below a session's kind; a private model's request
+leaving unsealed; anything sent to a TEE model whose attestation doesn't hold, or a reply its check
+passes that isn't its attested enclave's; a key or a password written in the clear to a file, a log
+or a message, or reaching Claude Code; a session's or the window's token reaching anyone else;
+something from your computer getting into a web search or an address WebFetch reads.
