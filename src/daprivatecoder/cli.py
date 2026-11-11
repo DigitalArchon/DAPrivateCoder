@@ -327,9 +327,11 @@ def _log(args) -> int:
         from .manager import _sent
         how = {"sealed": "sealed", "tee": "TEE   ", "clear": "clear "}.get(_sent(r), "unsent")
         what = r.get("model", "") + (" (vision)" if r.get("kind") == "vision" else "")
-        reply = _reply_of(r, checks).get("reply")
+        found = _reply_of(r, checks)
+        reply, up = found.get("reply"), found.get("reply_upstream") or {}
+        named = f" · run by {up.get('label') or up.get('name')}" if up.get("name") and reply in ("verified", "signed") else ""
         extra = (f" {r['error']}" if r.get("error") else "") + (
-            f" reply {'⚠ ' if reply in ('failed', 'unchecked') else ''}{reply}" if reply else "")
+            f" reply {'⚠ ' if reply in ('failed', 'unchecked') else ''}{reply}{named}" if reply else "")
         if _sent(r) == "tee" and not reply:
             extra += " ⚠ not shown to reach the attested enclave"       # no reply's record shows it got there
         print(f"{r.get('t', '')[:19]} {r.get('session', '')} {how} {r.get('status', ''):>3} {what:<30} {tokens} "
@@ -381,7 +383,9 @@ def _serve(args) -> int:
               folder=os.getcwd(), editor=", ".join(name for name, _ in editors))
     # only while DA Private Coder is open, and the editor that started it (if one did) still runs its profile
     p = proxy.Proxy(profile, cfg.base_url, token, log=log, provider_url=cfg.provider_url(profile),
-                    gate=gate.Gate(profile.name, editors).why)
+                    gate=gate.Gate(profile.name, editors).why,
+                    # whether to name the provider behind each TEE reply, as the settings file says now
+                    name_upstreams=lambda: config.names_upstreams(cfg.path))
 
     def ready(port: int) -> None:
         if args.fd is None:

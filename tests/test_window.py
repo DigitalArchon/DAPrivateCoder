@@ -451,6 +451,35 @@ async def test_enclave_checks_say_what_was_attested_and_what_is_someones_word(wi
     assert logged[-1]["attested"] == "gateway" and logged[-1]["shortfalls"] == [MODEL_ENCLAVE_UNCHECKED, GPUS_LOOSE]
 
 
+async def test_naming_a_tee_replys_provider_is_switched_in_the_window_and_said_beside_its_mark(window):
+    """Enclave checks' switch (off by default, its note beside it) saves the settings file, which every running
+    session's proxy reads before each TEE reply's check. Usage and Running now carry who ran the model as the
+    reply's check found it (RedPill's word), and `daprivatecoder log` says it too."""
+    import argparse
+    import contextlib
+    import io
+
+    from daprivatecoder import usagelog
+    app, *_ = window
+    st = (await call(app, "GET", "/api/state"))[1]
+    assert st["config"]["tee_name_upstreams"] is False and st["tee_upstreams_note"] == config.TEE_UPSTREAMS_NOTE
+    st = (await call(app, "POST", "/api/tee-names", {"on": True}))[1]
+    assert st["config"]["tee_name_upstreams"] is True and config.names_upstreams() is True
+    assert (await call(app, "POST", "/api/tee-names", {"on": "yes"}))[0] == 400
+    st = (await call(app, "POST", "/api/tee-names", {"on": False}))[1]
+    assert st["config"]["tee_name_upstreams"] is False and config.names_upstreams() is False
+    s1 = usagelog.UsageLog(config.state_dir() / "requests.log", "s1")
+    s1.write("request", model="TEE/glm-5.3-flash", tier="tee", status=200, ref="aa11", reply="checking", attested="gateway")
+    up = {"name": "fortanix-272", "label": "Fortanix", "words": "Run by Fortanix (as GLM-5.3-Flash): RedPill's record …"}
+    s1.write("tee_reply", of="aa11", model="TEE/glm-5.3-flash", reply="verified", upstream=up)
+    (row,) = (await call(app, "GET", "/api/state"))[1]["usage"]["last"]
+    assert row["reply"] == "verified" and row["reply_upstream"] == up
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        assert cli._log(argparse.Namespace(n=10)) == 0
+    assert out.getvalue().splitlines()[0].endswith("reply verified · run by Fortanix")
+
+
 async def test_an_editor_on_another_programs_wrapper_is_left_as_it_is(window, capsys):
     app, started, settings, _ = window
     assert [editor.owner(v) for v in (None, "", "/home/u/.local/bin/claude-private", "/opt/wrap", 3)] == \

@@ -168,3 +168,37 @@ def test_the_context_window_is_200k_unless_said_and_read_back_as_written():
     for wrong in ("50000", '"1M"', "true", "2000000"):
         with pytest.raises(ConfigError, match="context must be a number of tokens"):
             parse(f'[profiles.private]\nmodel = "private/glm-5-3"\ncontext = {wrong}\n')
+
+
+def test_naming_a_tee_replys_provider_is_a_setting_off_by_default_that_says_where_it_goes():
+    """The author, Nov 11 2026, of SealedLore's "Name the provider behind each TEE reply": "Port it, off by default,
+    include the warning to the user about what it does". The window says the same note (config.TEE_UPSTREAMS_NOTE)."""
+    cfg = config.load()
+    assert cfg.tee_name_upstreams is False and "tee_name_upstreams = false" in cfg.path.read_text()
+    note = config.TEE_UPSTREAMS_NOTE
+    for said in ("connects to api.redpill.ai directly, not through NanoGPT", "RedPill sees this computer's internet address",
+                 "that one of its models was used around then", "Only the session's id is sent, never your messages or your key",
+                 "one small download a model an hour", "never for models Chutes serves, whose records are megabytes each",
+                 "What it names is RedPill's word, matched to the receipt the attested gateway signed"):
+        assert said in note, said
+    assert " ".join(line.removeprefix("# ") for line in cfg.path.read_text().splitlines()
+                    if line.startswith("# ")).count("connects to api.redpill.ai directly") == 1
+    saved = config.save(replace(cfg, tee_name_upstreams=True))
+    assert saved.tee_name_upstreams is True and config.load().tee_name_upstreams is True
+    assert "tee_name_upstreams = true" in cfg.path.read_text()
+    with pytest.raises(ConfigError, match="tee_name_upstreams must be true or false"):
+        parse('tee_name_upstreams = "yes"\n')
+
+
+def test_a_running_session_reads_whether_to_name_providers_afresh_and_no_when_it_cant(tmp_path):
+    """A session's proxy asks before each TEE reply's check (proxy.Proxy name_upstreams): switched off, nothing more
+    goes to api.redpill.ai, as closing the window stops the next request. A file that can't be read says no."""
+    path = tmp_path / "config.toml"
+    assert config.names_upstreams(path) is False                     # none there
+    config.save(replace(config.load(path), tee_name_upstreams=True), path)
+    assert config.names_upstreams(path) is True
+    config.save(replace(config.load(path), tee_name_upstreams=False), path)
+    assert config.names_upstreams(path) is False
+    for broken in ("tee_name_upstreams = [true\n", "tee_name_upstreams = \"true\"\n", "\udcff"):
+        path.write_text(broken, errors="surrogateescape")
+        assert config.names_upstreams(path) is False, broken

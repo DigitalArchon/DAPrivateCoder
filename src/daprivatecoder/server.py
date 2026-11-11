@@ -188,6 +188,12 @@ def create_app(token: str, manager: Manager, desktop=None, on_quit: Callable[[],
         await in_thread(manager.set_start, str(body.get("session") or ""))
         return await in_thread(manager.state)
 
+    async def tee_names(request, body):
+        if not isinstance(body.get("on"), bool):
+            raise UserError("Say on (true) or off (false).")
+        await in_thread(manager.set_tee_names, body["on"])
+        return await in_thread(manager.state)
+
     async def check(request, body):
         return {"attestation": await manager.check(str(body.get("model") or ""))}
 
@@ -251,6 +257,7 @@ def create_app(token: str, manager: Manager, desktop=None, on_quit: Callable[[],
         Route("/api/hosts", api(hosts), methods=["POST"]),
         Route("/api/route", api(route), methods=["POST"]),
         Route("/api/start", api(start), methods=["POST"]),
+        Route("/api/tee-names", api(tee_names), methods=["POST"]),
         Route("/api/models", api(models)),
         Route("/api/check", api(check), methods=["POST"]),
         Route("/api/open", api(open_folder), methods=["POST"]),

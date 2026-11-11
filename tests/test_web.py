@@ -96,3 +96,31 @@ def test_a_tee_requests_mark_follows_its_reply():
     assert said[1] == said[2] == "received by the attested TEE gateway, through NanoGPT (which can read it)"
     assert "received" not in said[3] and said[3].endswith("its reply is being checked")
     assert set(said[4:]) == {"⚠ not shown to reach the attested enclave; sent through NanoGPT (which can read it)"}
+
+
+def test_a_tee_reply_says_who_ran_its_model_beside_its_mark_when_settings_ask():
+    """Enclave checks' switch (SealedLore's, Nov 11 2026): the provider RedPill's record names goes beside a mark whose
+    receipt the name rests on, "TEE, reply verified · run by Phala", and what that means in its tooltip; never beside
+    a failed check, and a lookup that named nobody says why in the tooltip alone."""
+    phala = {"name": "phala-244", "label": "Phala", "words": "Run by Phala: RedPill's record of its gateway's session …"}
+    nobody = {"name": "", "label": "", "words": "The provider that ran it wasn't named: api.redpill.ai answered HTTP 503."}
+    cases = [{"sent": "tee", "reply": "verified", "reply_upstream": phala},
+             {"sent": "tee", "reply": "signed", "reply_upstream": {**phala, "label": "Tinfoil"}},
+             {"sent": "tee", "reply": "failed", "reply_upstream": phala},
+             {"sent": "tee", "reply": "verified", "reply_upstream": nobody}, {"sent": "tee", "reply": "verified"}]
+    verified, signed, failed, unnamed, plain = run(sent_chip(), cases)
+    assert verified[1] == "TEE, reply verified · run by Phala" and verified[2].endswith("\n\n" + phala["words"])
+    assert signed[1] == "TEE, reply signed · run by Tinfoil"
+    assert failed[1] == "TEE ⚠ reply check failed" and phala["words"] not in failed[2]
+    assert unnamed[1] == "TEE, reply verified" and unnamed[2].endswith("\n\n" + nobody["words"])
+    assert plain[1] == "TEE, reply verified" and "\n\n" not in plain[2]
+
+
+def test_naming_a_tee_replys_provider_is_a_switch_with_its_note_beside_it():
+    """The author, Nov 11 2026: "Port it, off by default, include the warning to the user about what it does". The
+    note is the settings file's (config.TEE_UPSTREAMS_NOTE), sent with the window's state."""
+    text = APP_JS.read_text(encoding="utf-8")
+    switch = text[text.index("Name the provider behind each TEE reply (config.py"):]
+    switch = switch[:switch.index(");\n}")]
+    assert 'checked: Boolean(st.config.tee_name_upstreams)' in switch and 'act("POST", "/api/tee-names"' in switch
+    assert '"Name the provider behind each TEE reply"' in switch and "st.tee_upstreams_note" in switch

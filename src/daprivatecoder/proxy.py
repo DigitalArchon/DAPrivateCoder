@@ -335,6 +335,17 @@ def what_attested(found: dict) -> str:
         instances=instances if isinstance(instances, int) and not isinstance(instances, bool) else 0))
 
 
+def upstream_view(upstream) -> dict:
+    """Who ran a TEE reply's model (llm/tee.py served_by), as its check's log line carries it: RedPill's record
+    as read, the provider's name as the mark shows it ("Phala"), and what it means, for the mark's tooltip (DA
+    Vibe Manager's models.upstream_view)."""
+    from dataclasses import asdict
+
+    from .llm import tee
+    return {**asdict(upstream), "label": tee.upstream_label(upstream) if upstream.name else "",
+            "words": tee.upstream_words(upstream)}
+
+
 def as_sent(rec: dict, ended: dict) -> dict:
     """A TEE request's log line as it went. One whose whole reply never came (refused, stopped, cut short) has no
     check coming (Proxy._check_later), so it names none: it was "checking" for ever, and the window marked it so.
@@ -352,13 +363,15 @@ class AttestedTee:
         self.client = client
         self.found = found
 
-    def check(self, reply) -> str:
+    def check(self, reply, name_upstream: bool = False):
         """A reply read with exact=True (its TurnResult), against the record the attested key signed
-        (llm/tee.py check_reply; blocking): "verified", "signed" or "failed". Raises when it can't be
-        checked ("unchecked")."""
-        return self.client.check_reply(getattr(reply, "id", None), receipt_id=getattr(reply, "receipt_id", None),
-                                       body_hash=getattr(reply, "body_hash", None),
-                                       route=getattr(reply, "tee_route", None))
+        (llm/tee.py check; blocking): "verified", "signed" or "failed"; with `name_upstream`, a ReplyCheck
+        of that mark and who ran its model (a lookup on api.redpill.ai, the user's choice: llm/tee.py
+        served_by), which never changes the mark. Raises when it can't be checked ("unchecked")."""
+        found = self.client.check(getattr(reply, "id", None), receipt_id=getattr(reply, "receipt_id", None),
+                                  body_hash=getattr(reply, "body_hash", None), route=getattr(reply, "tee_route", None),
+                                  name_upstream=name_upstream)
+        return found if name_upstream else found.mark
 
 
 def attest_tee_for_replies(base_url: str, key: str, model: str) -> AttestedTee:
@@ -404,11 +417,14 @@ class Proxy:
                  provider_url: str = "", provider_key: Callable[[], str | None] | None = None,
                  plain_client: PlainClientFactory | None = None, tee_check: TeeCheck = attest_tee_for_replies,
                  provider_capabilities_loader: Callable[[], Awaitable[dict | None]] | None = None,
-                 gate: Callable[[], str] | None = None):
+                 gate: Callable[[], str] | None = None, name_upstreams: Callable[[], bool] | None = None):
         """`base_url` and `key` are NanoGPT's (private and TEE models); a standard profile's provider
         is at `provider_url`, with `provider_key`. `gate` says why nothing may be sent now ("": it may;
-        gate.py: DA Private Coder closed, the editor switched off)."""
+        gate.py: DA Private Coder closed, the editor switched off). `name_upstreams` says whether to name
+        the provider behind each TEE reply now (config.names_upstreams: the user's choice, off by default,
+        asked before each reply's check); without it, none is."""
         self._gate = gate
+        self._name_upstreams = name_upstreams
         self.profile = profile
         self.base_url = check_url(base_url, "NanoGPT's base URL").rstrip("/")
         self.token = token
@@ -629,16 +645,26 @@ class Proxy:
         if check is None or reply is None:
             return
 
+        def checked():
+            # who ran its model too, where the user asked for it (the settings file, read afresh: a lookup on
+            # api.redpill.ai, off by default; llm/tee.py served_by), never the mark's concern
+            if self._name_upstreams is not None and self._name_upstreams():
+                found = check(reply, name_upstream=True)
+                return found.mark, found.upstream
+            return check(reply), None
+
         async def run():
+            upstream = None
             try:
-                outcome, detail = await asyncio.to_thread(check, reply), ""
+                (outcome, upstream), detail = await asyncio.to_thread(checked), ""
             except Exception as e:  # noqa: BLE001 - a check that couldn't be made is "unchecked", never a failure
                 outcome, detail = "unchecked", str(e)[:300]
             if outcome == "failed":
                 self._doubted.add(model)
                 print(f"daprivatecoder: {model}'s reply didn't match the record its attested enclave signed: its "
                       "enclave is attested again before anything more is sent to it.", file=sys.stderr, flush=True)
-            self._record("tee_reply", of=rec.get("ref"), model=model, reply=outcome, **({"detail": detail} if detail else {}))
+            self._record("tee_reply", of=rec.get("ref"), model=model, reply=outcome, **({"detail": detail} if detail else {}),
+                         **({"upstream": upstream_view(upstream)} if upstream is not None else {}))
         task = asyncio.get_running_loop().create_task(run())
         self._checks.add(task)
         task.add_done_callback(self._checks.discard)

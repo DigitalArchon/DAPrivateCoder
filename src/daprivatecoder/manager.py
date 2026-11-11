@@ -66,7 +66,9 @@ def _reply_of(record: dict, checks: dict[tuple, dict]) -> dict:
     found = checks.get((record.get("session"), record["ref"])) or {}
     if not found and (record.get("error") or record.get("status") != 200):
         return {}
-    return {"reply": found.get("reply") or record.get("reply") or "checking", "reply_detail": found.get("detail", "")}
+    return {"reply": found.get("reply") or record.get("reply") or "checking", "reply_detail": found.get("detail", ""),
+            # who ran its model, where the user asked for it (proxy.upstream_view: RedPill's word)
+            **({"reply_upstream": found["upstream"]} if isinstance(found.get("upstream"), dict) else {})}
 
 
 def _key_state(provider: str = "nanogpt", base_url: str = "") -> dict:
@@ -122,7 +124,9 @@ class Manager:
             # an address with a password: as typed for its field, never so in what the window says of it
             out["config"] = {"base_url": shown(cfg.base_url), "path": str(cfg.path),
                              "profiles": {n: {**asdict(p), "base_url_shown": shown(p.base_url)}
-                                          for n, p in cfg.profiles.items()}}
+                                          for n, p in cfg.profiles.items()},
+                             # Enclave checks' switch: off unless the user turned it on (config.py)
+                             "tee_name_upstreams": cfg.tee_name_upstreams}
             out["config_error"] = ""
         except ConfigError as e:
             cfg, out["config"], out["config_error"] = None, None, str(e)
@@ -159,6 +163,7 @@ class Manager:
             out["folders"] = {"list": [], "other": "", "error": str(e)}
         out["sessions"] = self.sessions()
         out["usage"] = self.usage()
+        out["tee_upstreams_note"] = config.TEE_UPSTREAMS_NOTE          # beside its switch, in Enclave checks
         out["attestation"] = self.last_attestation()
         out["tee_attestations"] = self.tee_attestations()
         # whether a session of each kind can start: Claude Code, and the key its models need
@@ -385,6 +390,13 @@ class Manager:
         if route:
             chosen[model] = route
         config.save(cfg.with_profile(replace(profile, routes=chosen)))
+
+    def set_tee_names(self, on: bool) -> None:
+        """Enclave checks' "Name the provider behind each TEE reply" (config.py tee_name_upstreams): saved in the
+        settings file, which every running session's proxy reads before each TEE reply's check, so it holds from
+        the next reply on; off, nothing more is asked of api.redpill.ai."""
+        cfg = config.load()
+        config.save(replace(cfg, tee_name_upstreams=bool(on)))
 
     def set_start(self, session: str) -> None:
         if session not in SESSIONS:

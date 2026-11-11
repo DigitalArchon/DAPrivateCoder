@@ -533,9 +533,16 @@ const REPLY = {
 const TEE_UNPROVEN = "Not shown to reach the attested enclave: sent to the TEE model while its attestation held, but no reply's signed record shows the enclave received it, since no whole reply came back to check (it was refused, stopped or cut short), or it was logged before replies were checked. NanoGPT routes each request, and a model may be served elsewhere when its provider is busy." + TEE_CLEAR;
 
 // how a request left this computer, as a chip [class, label] and what it means: a TEE one, its reply's check, or
-// that there is none to show it reached the attested enclave
+// that there is none to show it reached the attested enclave. Who ran its model, where the user asked for it
+// (Enclave checks; proxy.upstream_view, RedPill's word), goes beside a mark whose receipt the name rests on, never
+// beside a failed one, and what that means in its tooltip
 function sentChip(r) {
-  if (r.sent === "tee" && REPLY[r.reply]) return [REPLY[r.reply][0], REPLY[r.reply][1], REPLY[r.reply][2] + (r.reply_detail ? ` (${r.reply_detail})` : "")];
+  if (r.sent === "tee" && REPLY[r.reply]) {
+    const [chip, label, tip] = REPLY[r.reply];
+    const up = ["verified", "signed"].includes(r.reply) ? r.reply_upstream : null;
+    return [chip, label + (up && up.name ? ` · run by ${up.label || up.name}` : ""),
+      tip + (r.reply_detail ? ` (${r.reply_detail})` : "") + (up && up.words ? `\n\n${up.words}` : "")];
+  }
   const [chip, how] = SENT[r.sent] || SENT[""];
   return [chip, how, r.sent === "tee" ? TEE_UNPROVEN : ""];
 }
@@ -720,7 +727,14 @@ function verifySection(st) {
     teeRows.length ? teeRows : h("p", { class: "lead" }, "None checked yet. A TEE session checks each model's enclave before sending it anything, and every 15 minutes after that. You can also check one now (this needs your NanoGPT key)."),
     tee && /^tee\//i.test(tee.model) ? h("div", { class: "row" }, h("button", { disabled: Boolean(S.checking) || !st.key.stored, onclick: () => run(tee.model),
       title: st.key.stored ? "" : "NanoGPT only shows a TEE model's attestation to someone with an API key" },
-      S.checking === tee.model ? "Checking…" : `Check ${tee.model}`), S.checking === tee.model ? h("span", { class: "spinner" }) : null) : null);
+      S.checking === tee.model ? "Checking…" : `Check ${tee.model}`), S.checking === tee.model ? h("span", { class: "spinner" }) : null) : null,
+    // Name the provider behind each TEE reply (config.py tee_name_upstreams): off by default, and what it does said
+    // beside it (SealedLore's, the author's, Nov 11 2026): the one request that goes to RedPill directly, not through
+    // NanoGPT. Running sessions follow it from their next reply
+    st.config ? h("label", { class: "radio spaced" }, h("input", { type: "checkbox", checked: Boolean(st.config.tee_name_upstreams),
+      onchange: (e) => act("POST", "/api/tee-names", { on: e.target.checked }, e.target.checked
+        ? "TEE replies name the provider that ran them, from the next one." : "Nothing more is asked of api.redpill.ai.") }),
+      h("div", {}, h("div", {}, "Name the provider behind each TEE reply"), h("div", { class: "small muted" }, st.tee_upstreams_note))) : null);
 }
 
 // ------------------------------------------------------------------ usage

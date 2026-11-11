@@ -16,6 +16,7 @@ import json
 import os
 import re
 import tempfile
+import textwrap
 import tomllib
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -97,6 +98,11 @@ class Config:
     base_url: str = NANOGPT_BASE_URL
     claude: str = ""
     profiles: dict[str, Profile] = field(default_factory=dict)
+    # after a TEE reply whose receipt holds, name the provider that ran its model, from RedPill's public record
+    # of its gateway's session (llm/tee.py served_by), beside the reply's mark. Off by default: it connects to
+    # api.redpill.ai directly, not through NanoGPT, so RedPill sees this computer's address (SealedLore's, the
+    # author's, Nov 11 2026: a clear choice, off by default). A running session reads it afresh (names_upstreams)
+    tee_name_upstreams: bool = False
     path: Path | None = None
     # the addresses whose password the keyring couldn't be asked for when the file was read (_as_typed):
     # saved, they don't take out the one it may have
@@ -138,6 +144,16 @@ _HEADER = """\
 # starts uses what is saved here. Saved from the window, the file is written again with these notes
 # (notes of your own aren't kept). The API keys aren't here but in your keyring.
 """
+# beside "Name the provider behind each TEE reply" (the window's Enclave checks, tee_name_upstreams): what it
+# does, and whom it tells (SealedLore's TEE_UPSTREAMS_NOTE, Nov 11 2026); the window says the same
+TEE_UPSTREAMS_NOTE = (
+    "Most TEE models are attested as RedPill's gateway, which passes each request on to the provider that runs "
+    "the model. With this on, after a TEE reply checks out, DA Private Coder asks RedPill which provider that was "
+    "(Phala, Fortanix, NEAR AI, 0G, Tinfoil…) and shows it beside the reply's mark in Usage and Running now. This "
+    "connects to api.redpill.ai directly, not through NanoGPT, so RedPill sees this computer's internet address "
+    "and that one of its models was used around then. Only the session's id is sent, never your messages or your "
+    "key. It is one small download a model an hour, and never for models Chutes serves, whose records are "
+    "megabytes each. What it names is RedPill's word, matched to the receipt the attested gateway signed.")
 _KIND_INTRO = {
     "private": ("NanoGPT Private Mode models only (private/…). Each request is sealed on this computer to a\n"
                 "# Tinfoil enclave whose attestation was checked first; NanoGPT relays ciphertext."),
@@ -183,7 +199,11 @@ def render(cfg: Config) -> str:
     out = [_HEADER,
            "# NanoGPT's API (https only)", f"base_url = {_q(cfg.base_url)}", "",
            "# The Claude Code program to start. Empty: the one on your PATH, else the newest one bundled with",
-           "# the Claude Code extension of VSCodium or VS Code.", f"claude = {_q(cfg.claude)}"]
+           "# the Claude Code extension of VSCodium or VS Code.", f"claude = {_q(cfg.claude)}", "",
+           "# Name the provider behind each TEE reply: true or false (false unless you turn it on). Running",
+           "# sessions follow it from their next reply.",
+           *("# " + line for line in textwrap.wrap(TEE_UPSTREAMS_NOTE, 98)),
+           f"tee_name_upstreams = {'true' if cfg.tee_name_upstreams else 'false'}"]
     noted: set[str] = set()                     # each setting's note, the first time it's written
 
     def note(key: str) -> list[str]:
@@ -380,13 +400,28 @@ def parse(text: str, path: Path | None = None) -> Config:
     except InsecureURL as e:
         raise ConfigError(str(e)) from None
     claude = os.path.expanduser(_text(data, "claude", where))
+    names = data.get("tee_name_upstreams", False)
+    if not isinstance(names, bool):
+        raise ConfigError(f"{where}: tee_name_upstreams must be true or false (not {names!r}).")
     profiles_table = data.get("profiles", {})
     if not isinstance(profiles_table, dict):
         raise ConfigError(f"{where}: profiles must be tables, as [profiles.private].")
     profiles = {name: _profile(name, table, where) for name, table in profiles_table.items()}
     # the window's three kinds of session are always there: one left out of the file is its default
     profiles.update({name: p for name, p in DEFAULTS.profiles.items() if name not in profiles})
-    return Config(base_url=base_url.rstrip("/"), claude=claude, profiles=profiles, path=path)
+    return Config(base_url=base_url.rstrip("/"), claude=claude, profiles=profiles, path=path, tee_name_upstreams=names)
+
+
+def names_upstreams(path: Path | None = None) -> bool:
+    """Whether the settings file says to name the provider behind each TEE reply (tee_name_upstreams), read
+    afresh: a running session's proxy asks before each reply's check, so switching it off stops the next
+    lookup, as closing the window stops the next request. A file that can't be read says no: nothing goes to
+    api.redpill.ai on a guess."""
+    try:
+        data = tomllib.loads((path or config_path()).read_text())
+    except (OSError, ValueError, UnicodeDecodeError):
+        return False
+    return data.get("tee_name_upstreams") is True
 
 
 def load(path: Path | None = None) -> Config:
