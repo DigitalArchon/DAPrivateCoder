@@ -45,6 +45,10 @@ All of this is a private session's. A TEE session's prompts are read by NanoGPT'
 standard session's go in the clear to its provider and the model's host: see
 [TEE and standard sessions](#tee-and-standard-sessions).
 
+Every service the app talks to, what each is sent and what never leaves, the keys, what is kept on
+your computer and what the app can't protect you from are set out in
+[Security and privacy](docs/security-and-privacy.md).
+
 ## Getting started
 
 You need x86-64 Linux with GLib 2.80 or newer (Ubuntu 24.04, Mint 22, Debian 13, current Fedora and
@@ -106,7 +110,8 @@ tray (GNOME without the AppIndicator extension, say), closing the window quits.
 Once it has quit, every session on it stops at its next request, saying "DA Private Coder is closed,
 so nothing was sent"; opened again, each goes on where it was. `claude-private` in a terminal doesn't
 start at all while it's closed, and the editor's Claude Code in a folder chosen for it says so in the
-conversation. Nothing reaches NanoGPT without it open.
+conversation. No request of a session's reaches its model without it open; only a web search that
+Claude Code asks you about after you quit still goes, if you allow it.
 
 A request NanoGPT or the provider refuses is said as it is: an empty balance as "your NanoGPT
 balance is too low for this request", which Claude Code doesn't ask again (it would ten times, calling
@@ -157,7 +162,7 @@ doesn't (GLM-5.3) has them described, by the **Images** model, also a private on
 ## TEE and standard sessions
 
 Neither is end-to-end encrypted. The window warns of it where you choose one, and **Usage** marks
-each request: sealed, TEE, or clear.
+each request: sealed, TEE (with its reply's check), or clear.
 
 **TEE** sessions run NanoGPT's `TEE/` models (by default GLM-5.3, Kimi K3 for `/model opus`, and
 GLM-5.3 Flash for quick tasks and images). Before anything is sent to one, its enclave is attested,
@@ -168,33 +173,49 @@ of this session's (DA Vibe Manager's verifier). An enclave that doesn't hold get
 
 Each reply is then checked against the record NanoGPT keeps of it, signed by an attested key: the
 record's hash of the reply must be that of the exact bytes that came, and where RedPill's gateway
-keeps a signed receipt, it must hold too, saying the model the reply came from was verified. The
-check comes once the reply has reached Claude Code: it never holds a reply up or changes it. A TEE
-**Images** model's description of an image (for a model that can't see) is a reply too, checked the
-same way. **Usage** marks each TEE request, and each image a TEE model described, with what it found:
+keeps a signed receipt, it must hold too, under the attested keys: the gateway's word that the
+machine the reply came from was verified. The check comes once the reply has reached Claude Code: it
+never holds a reply up or changes it. A TEE **Images** model's description of an image (for a model
+that can't see) is a reply too, checked the same way. **Usage** and **Running now** mark each TEE
+request, and each image a TEE model described, with what it found; hovering over a mark says what in
+it is the gateway's word, and that what was sent passed NanoGPT in the clear:
 
-- **reply verified**: the record is of the reply that came, byte for byte;
+- **reply verified**: the record is of the reply that came, byte for byte, and its receipt (where
+  read) holds;
 - **reply signed**: signed by the attested key, but NanoGPT rebuilds this model's replies, so the
   text can't be compared;
 - **⚠ reply not verified**: no record of the reply could be read (Chutes, which answers some models,
-  keeps none), so nothing shows it came from the attested enclave;
+  keeps none), so nothing shows it came from the attested enclave. A model attested through the
+  gateway alone has its own enclave only as the gateway's word: a reply of it with no receipt that
+  holds is marked so too;
 - **⚠ reply check failed**: the reply doesn't match its record. The enclave is attested again before
   anything more is sent to that model.
 
-Most of NanoGPT's TEE models attest only in part, which **Enclave checks** in the window says, and
-why: they pass through RedPill's gateway, whose enclave is checked but not the model's own. Beside a
-model's own attestation, the gateway's own report is asked for too, where NanoGPT has one (every model
-the gateway serves, since November 10 2026): its quote binds all the gateway's keys, those that sign
-each reply's record and its receipts, to another nonce of this session's. Where there's none, the
-receipts' keys aren't in the quote, and **Enclave checks** says so: the record's tie to the attested
-enclave holds, but a receipt's word that the model was verified rests on NanoGPT, not on the hardware.
-A model whose own attestation NanoGPT can't give for this session's nonce (relayed from Chutes for
-another, or too slow) is attested through the gateway that answers it instead, and falls short of GPU
-evidence too. Models Chutes answers (Kimi K3 among them) have each of their instances attested;
-Chutes signs no replies, so theirs show as not verified, unless RedPill's gateway answered in its
-place. Where the gateway answers some of their requests (GLM 5.1 and 5.2, Kimi K2.6), it is attested
-too, and they are partly verified, like the gateway's own models; if NanoGPT couldn't give the
-gateway's report just then, **Enclave checks** says "RedPill's gateway unchecked". The Tinfoil-hosted `TEE/` models are refused: NanoGPT can't attest them for a fresh nonce.
+A request is shown to have reached the attested enclave only by its reply: **Running now** says it
+was received by the attested TEE only when its reply is verified or signed, and one with no reply to
+check (refused, stopped or cut short) is marked **TEE ⚠ not shown to reach the enclave**. NanoGPT
+routes each request, and only a record the attested key signed shows the enclave received it.
+
+Most of NanoGPT's TEE models attest only in part, which **Enclave checks** in the window (and
+`daprivatecoder check --profile tee`) says, beginning with what was attested. For a model RedPill
+serves, that is RedPill's gateway (**TEE gateway attested**), which passes each request on to the
+machine that runs the model: that machine is the gateway's word, in each reply's receipt, and this app
+doesn't check it ("the model's own enclave unchecked"). The GPU evidence in NanoGPT's report is made
+for this session's nonce, but the gateway's quote doesn't commit to it, so the GPUs may be another
+machine's ("GPUs not tied to the quote"). Beside a model's own attestation, the gateway's own report
+is asked for too, where NanoGPT has one (every model the gateway serves, since November 10 2026): its
+quote binds all the gateway's keys, those that sign each reply's record and its receipts, to another
+nonce of this session's. Where there's none, the receipts' keys aren't in the quote, and **Enclave
+checks** says so: the record's tie to the attested enclave holds, but a receipt's word rests on
+NanoGPT, not on the hardware. A model whose own attestation NanoGPT can't give for this session's
+nonce (relayed from Chutes for another, or too slow) is attested through the gateway alone instead,
+and falls short of GPU evidence too. Models Chutes answers (Kimi K3 among them) have each of their
+instances attested (**TEE attested**): Chutes signs no replies, so nothing shows which instance
+answered, and theirs show as not verified, unless RedPill's gateway answered in its place. Where the
+gateway answers some of their requests (GLM 5.1 and 5.2, Kimi K2.6), it is attested too, and they are
+partly verified, like the gateway's own models; if NanoGPT couldn't give the gateway's report just
+then, **Enclave checks** says "RedPill's gateway unchecked". The Tinfoil-hosted `TEE/` models are
+refused: NanoGPT can't attest them for a fresh nonce.
 
 What an attestation doesn't prove: which software the enclave runs (no measurement is compared with a
 published one: it shows genuine, current hardware holding a live key bound to this session's nonce,
@@ -202,6 +223,16 @@ not what runs on it), or what was sent (the record hashes the request as NanoGPT
 this app can't reproduce). And either way, **NanoGPT's gateway reads every prompt and reply in the
 clear**: the enclave protects them from the host that runs the model, not from NanoGPT. A TEE session
 never sends to a model in the clear: a request for one is refused, saying so.
+
+**Name the provider behind each TEE reply** (in **Enclave checks**, off by default) shows who ran
+the model beside the reply's mark, "TEE, reply verified · run by Phala" say, from RedPill's public
+record of the gateway's session with that machine, which the receipt names by its hash: the record
+is believed only if it is that one. It connects to api.redpill.ai directly, not through NanoGPT, so
+RedPill sees this computer's internet address and that one of its models was used around then. Only
+the session's id is sent, never your messages or your key; it is one small download a model an hour,
+and never for models Chutes serves. What it names is RedPill's word. Sessions already running follow
+the switch from their next reply. How each check works, and what each leaves to someone's word:
+[Security and privacy](docs/security-and-privacy.md#tee-sessions).
 
 **Standard** sessions run any model of their provider, **in the clear** to it and to the host that
 runs the model:
