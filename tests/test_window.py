@@ -384,6 +384,39 @@ async def test_usage_says_what_each_tee_replys_check_found(window):
     assert "(vision)" in lines[4] and lines[4].endswith("reply verified")
 
 
+async def test_a_tee_request_with_no_reply_to_check_is_never_said_to_be_checked_or_received(window, tmp_path, monkeypatch):
+    """Refused, stopped or cut short, a TEE request has no reply to check: the proxy logged one as "checking" until
+    Nov 11 2026, and the window said so of it for ever. Read now by the reply shown with it (SealedLore's, Nov 11
+    2026): none, so it isn't shown to have reached the attested enclave. Running now has what was attested too."""
+    from daprivatecoder import launcher, usagelog
+    s1 = usagelog.UsageLog(config.state_dir() / "requests.log", "s1")
+    s1.write("request", model="TEE/glm-5.3", tier="tee", status=402, ref="aa11", reply="checking",
+             error="Error code: 402 - Insufficient balance")                        # logged so before Nov 11 2026
+    s1.write("request", model="TEE/glm-5.3", tier="tee", status=502, ref="bb22", reply="checking", error="cut short")
+    s1.write("request", model="TEE/glm-5.3", tier="tee", status=200, attested="gateway")      # stopped, logged now
+    s1.write("request", model="TEE/glm-5.3", tier="tee", status=200, ref="cc33", reply="checking", attested="gateway")
+    app, *_ = window
+    rows = (await call(app, "GET", "/api/state"))[1]["usage"]["last"][::-1]
+    assert [(r["sent"], r.get("reply")) for r in rows] == [("tee", None)] * 3 + [("tee", "checking")]
+    import argparse
+    import contextlib
+    import io
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        assert cli._log(argparse.Namespace(n=10)) == 0
+    lines = out.getvalue().splitlines()
+    assert all(line.endswith("⚠ not shown to reach the attested enclave") for line in lines[:3])
+    assert lines[3].endswith("reply checking")
+    # Running now: the last request, its reply still being checked, attested as RedPill's gateway
+    me = os.getpid()
+    monkeypatch.setattr(launcher, "proxy_alive", lambda pid: pid == me)
+    launcher.sessions_dir().mkdir(parents=True)
+    launcher.session_file(me).write_text(json.dumps({"session": "s1", "profile": "tee", "kind": "tee",
+                                                     "folder": str(tmp_path), "editors": [], "started": 1}))
+    [s] = (await call(app, "GET", "/api/state"))[1]["sessions"]
+    assert (s["last"]["sent"], s["last"]["reply"], s["last"]["attested"]) == ("tee", "checking", "gateway")
+
+
 async def test_enclave_checks_say_what_was_attested_and_what_is_someones_word(window, monkeypatch):
     """A model RedPill serves is attested as its gateway, which passes each request on to the machine that runs the
     model, and that machine is the gateway's word; Chutes' instances sign no replies. Enclave checks said "partly

@@ -1539,11 +1539,11 @@ TEE_CAPS = [{"id": "TEE/glm-5.3-flash", "capabilities": {"vision": False, "tool_
 
 
 def _tee_proxy(tmp_path, seen: list, stream: bytes = STREAM, receipt: str | None = "rcpt-1", vision: str = "",
-               sent: list | None = None, route: str | None = None, **server):
+               sent: list | None = None, route: str | None = None, refuse: int = 0, **server):
     """A TEE session's proxy whose models' enclaves attest on receipt_server, and whose models stream
     `stream` as it is through the real client, naming its receipt (and `route`; `sent`: the bodies they
-    were sent). With `vision`, that TEE model describes images for its own model, which can't see
-    (TEE_CAPS)."""
+    were sent), or with `refuse`, answer that HTTP status instead. With `vision`, that TEE model describes
+    images for its own model, which can't see (TEE_CAPS)."""
     from daprivatecoder.config import Profile
     from daprivatecoder.llm.client import LLMClient
     from daprivatecoder.proxy import AttestedTee, Proxy
@@ -1557,6 +1557,8 @@ def _tee_proxy(tmp_path, seen: list, stream: bytes = STREAM, receipt: str | None
     def chat(request: httpx.Request) -> httpx.Response:
         if sent is not None:
             sent.append(json.loads(request.content))
+        if refuse:
+            return httpx.Response(refuse, json={"error": {"message": "Insufficient balance"}})
         return httpx.Response(200, content=stream, headers={
             "content-type": "text/event-stream", **({"X-Receipt-Id": receipt} if receipt else {}),
             **({"X-TEE-Verification-Route": route} if route else {})})
@@ -1658,8 +1660,10 @@ async def test_a_model_attested_through_the_gateway_alone_is_logged_in_part_and_
     (att,) = [e for e in log if e["kind"] == "attested_tee"]
     assert att["level"] == "partial" and att["shortfalls"] == ["no GPU evidence", MODEL_ENCLAVE_UNCHECKED]
     assert "partially verified: no GPU evidence" in att["summary"]
-    # what was attested is logged, for Enclave checks to say (SealedLore's, Nov 11 2026): the gateway
+    # what was attested is logged, for Enclave checks to say (SealedLore's, Nov 11 2026): the gateway; and on the
+    # request, for Running now
     assert att["attested"] == "gateway"
+    assert [e["attested"] for e in log if e["kind"] == "request"] == ["gateway"]
     lookups = [r for r in seen if "/tee/signature/" in str(r.url)]
     assert lookups and all(r.headers.get("X-TEE-Verification-Route") == "r9" for r in lookups)
     assert not [r for r in seen if "/tee/attestation" in str(r.url) and "X-TEE-Verification-Route" in r.headers]
@@ -1701,6 +1705,21 @@ async def test_a_reply_cut_short_is_not_checked(tmp_path):
     assert '"ok"' in said[0] and "error" in said[0]                 # what came, then that it broke off
     assert not [e for e in log if e["kind"] == "tee_reply"] and not p._checks
     assert not [r for r in seen if "/tee/signature/" in str(r.url)]
+    # and its request isn't logged as being checked, for ever: none will be (the window marked it "checking")
+    (request,) = [e for e in log if e["kind"] == "request"]
+    assert "reply" not in request and "ref" not in request
+
+
+async def test_a_tee_request_with_no_reply_at_all_is_never_logged_as_being_checked(tmp_path):
+    """Refused by NanoGPT (no balance, say): no reply came, so none is checked, and the window said "checking"
+    of it for ever. Its request is then not shown to have reached the attested enclave (the window says so)."""
+    seen: list = []
+    said, log = await _ask(_tee_proxy(tmp_path, seen, refuse=402), tmp_path, checked=False, stream=False)
+    assert "balance is too low" in said[0]
+    (request,) = [e for e in log if e["kind"] == "request" and e.get("tier")]     # the line of what was sent
+    assert request["status"] == 402 and request["tier"] == "tee" and request["attested"] == "enclave"
+    assert "reply" not in request and "ref" not in request
+    assert not [e for e in log if e["kind"] == "tee_reply"]
 
 
 def test_the_plain_client_and_the_verifier_take_no_key_a_header_cant_carry():

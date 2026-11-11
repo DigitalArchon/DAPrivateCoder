@@ -330,6 +330,8 @@ def _log(args) -> int:
         reply = _reply_of(r, checks).get("reply")
         extra = (f" {r['error']}" if r.get("error") else "") + (
             f" reply {'⚠ ' if reply in ('failed', 'unchecked') else ''}{reply}" if reply else "")
+        if _sent(r) == "tee" and not reply:
+            extra += " ⚠ not shown to reach the attested enclave"       # no reply's record shows it got there
         print(f"{r.get('t', '')[:19]} {r.get('session', '')} {how} {r.get('status', ''):>3} {what:<30} {tokens} "
               f"{price:>9} {r.get('seconds', '')}s{extra}")
     print(f"{len(shown)} requests, ${total:.4f} (~: estimated from NanoGPT's listed prices)")

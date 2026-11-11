@@ -58,10 +58,14 @@ def _reply_checks(records: list[dict]) -> dict[tuple, dict]:
 
 def _reply_of(record: dict, checks: dict[tuple, dict]) -> dict:
     """A TEE request's reply as its check found it ("verified", "signed", "failed", "unchecked", or
-    "checking" until then), and why when it couldn't be checked; {} for any other request."""
+    "checking" until then), and why when it couldn't be checked; {} for any other request, and for one whose
+    whole reply never came (refused, stopped, cut short), which has nothing to check: the proxy logs none of
+    those as checking now (proxy.as_sent), but did until Nov 11 2026, and they read so for ever."""
     if not record.get("ref"):
         return {}
     found = checks.get((record.get("session"), record["ref"])) or {}
+    if not found and (record.get("error") or record.get("status") != 200):
+        return {}
     return {"reply": found.get("reply") or record.get("reply") or "checking", "reply_detail": found.get("detail", "")}
 
 
@@ -341,7 +345,8 @@ class Manager:
                         "last": {"t": r.get("t", "")[:19].replace("T", " "), "model": r.get("model", ""),
                                  "asked_for": r.get("asked_for", ""), "sent": _sent(r), "status": r.get("status"),
                                  "error": str(r.get("error") or "")[:300], "provider": r.get("provider", ""),
-                                 **_reply_of(r, checks)} if r else None,
+                                 # what the TEE model's attestation was of ("gateway": RedPill's), for the window
+                                 "attested": r.get("attested", ""), **_reply_of(r, checks)} if r else None,
                         "stops": gate.Gate(info.get("profile", ""), editors, info.get("folder", "")).why()})
         return sorted(out, key=lambda s: s.get("started") or 0, reverse=True)
 

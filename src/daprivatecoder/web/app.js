@@ -152,7 +152,9 @@ function leadOf(st, kind) {
   if (kind === "private") return "Requests are encrypted on this computer so that only a verified enclave can read them. "
     + "NanoGPT passes them on but can't read them.";
   if (kind === "tee") return "NanoGPT's TEE models, which run in secure enclaves (Intel TDX with NVIDIA GPUs). "
-    + "DA Private Coder verifies each enclave before sending it anything, and again every 15 minutes.";
+    + "DA Private Coder verifies each enclave before sending it anything, and again every 15 minutes. For most of "
+    + "them, the enclave verified is RedPill's gateway, which passes requests on to the machine that runs the model: "
+    + "that machine is the gateway's word.";
   return `Any model from ${providerName(st, "standard")}. Choose them under Models, below.`;
 }
 
@@ -514,26 +516,42 @@ function modelsSection(st) {
 
 // ------------------------------------------------------------------ what runs on it now
 
-// a TEE reply's check (proxy.py), against the record its attested enclave signed: [chip, label, what it means]
+// What every TEE mark leaves out, short of end-to-end encryption (SealedLore's TEE_MARK_TIPS, Nov 11 2026)
+const TEE_CLEAR = " What was sent passed NanoGPT's servers in the clear: a private model is end-to-end encrypted instead.";
+// a TEE reply's check (proxy.py), against the record its attested enclave signed: [chip, label, what it means]. For
+// a model RedPill serves, the enclave attested is RedPill's gateway, and the machine that ran the model is the
+// gateway's word (SealedLore's TEE_MARK_TIPS, Nov 11 2026)
 const REPLY = {
-  verified: ["tee", "TEE, reply verified", "The attested enclave's key signed a record of this reply, and it is the reply that came, byte for byte."],
-  signed: ["tee", "TEE, reply signed", "The attested enclave's key signed this reply's record, but NanoGPT rebuilds this model's replies, so the text couldn't be compared with it."],
-  failed: ["bad", "TEE ⚠ reply check failed", "The reply doesn't match the record the attested enclave signed. Its enclave is checked again before anything more is sent to it."],
-  unchecked: ["warn", "TEE ⚠ reply not verified", "No record of this reply could be read (its provider keeps none, or the check couldn't be made), so nothing shows it came from the attested enclave."],
-  checking: ["tee", "TEE, checking reply", "The reply is being checked against the record its attested enclave signed."],
+  verified: ["tee", "TEE, reply verified", "Reply verified: the attested enclave's key signed this reply's record, and the record is for the exact text that came back. For a model RedPill serves, that enclave is RedPill's gateway, which passed the request on to the machine running the model: the gateway's signed receipt, read too, says that machine was verified, which is the gateway's word, not checked by this app. No measurement of the software is compared either." + TEE_CLEAR],
+  signed: ["tee", "TEE, reply signed", "Reply signed: the attested enclave's key signed this reply's record, but NanoGPT rebuilds this model's replies, so the text couldn't be compared with it, and a change on the way here wouldn't show. As for a verified reply, the machine running the model is the gateway's word." + TEE_CLEAR],
+  failed: ["bad", "TEE ⚠ reply check failed", "This reply doesn't match its record: not signed by the attested key, not the text that was signed, or its receipt doesn't hold (another key, another reply, or a model that wasn't verified). Its enclave is attested again before anything more is sent to it."],
+  unchecked: ["warn", "TEE ⚠ reply not verified", "Not verified: no signed record of this reply could be read (this model's provider keeps none, as Chutes doesn't, or the check couldn't be made), so nothing shows it came from the enclave that was attested. NanoGPT routes each request, and a model may be served elsewhere when its provider is busy." + TEE_CLEAR],
+  checking: ["tee", "TEE, checking reply", "The reply is being checked against the record its attested enclave signed." + TEE_CLEAR],
 };
+// a TEE request with no reply to check (refused, stopped or cut short, or logged before replies were checked): sent
+// while its model's attestation held, but nothing shows the attested enclave received it (SealedLore's, Nov 11 2026)
+const TEE_UNPROVEN = "Not shown to reach the attested enclave: sent to the TEE model while its attestation held, but no reply's signed record shows the enclave received it, since no whole reply came back to check (it was refused, stopped or cut short), or it was logged before replies were checked. NanoGPT routes each request, and a model may be served elsewhere when its provider is busy." + TEE_CLEAR;
 
-// how a request left this computer, as a chip [class, label] and what it means (a TEE reply's check, where there is one)
+// how a request left this computer, as a chip [class, label] and what it means: a TEE one, its reply's check, or
+// that there is none to show it reached the attested enclave
 function sentChip(r) {
   if (r.sent === "tee" && REPLY[r.reply]) return [REPLY[r.reply][0], REPLY[r.reply][1], REPLY[r.reply][2] + (r.reply_detail ? ` (${r.reply_detail})` : "")];
   const [chip, how] = SENT[r.sent] || SENT[""];
-  return [chip, how, ""];
+  return [chip, how, r.sent === "tee" ? TEE_UNPROVEN : ""];
 }
 
-// where a request went, in words, after its chip
+// where a request went, in words, after its chip. A TEE one reached the attested enclave only as far as its reply's
+// check shows (SealedLore's, Nov 11 2026): NanoGPT routes each request, and only a record the attested key signed
+// shows that enclave received it. For most TEE models the enclave attested is RedPill's gateway ("attested")
 function whereItWent(last) {
   if (last.sent === "sealed") return "end-to-end encrypted, to the verified enclave";
-  if (last.sent === "tee") return "to a verified enclave, through NanoGPT (which can read it)";
+  if (last.sent === "tee") {
+    if (["verified", "signed"].includes(last.reply)) {
+      return `received by the attested TEE${last.attested === "gateway" ? " gateway" : ""}, through NanoGPT (which can read it)`;
+    }
+    if (last.reply === "checking") return "sent through NanoGPT (which can read it) while its attestation held; its reply is being checked";
+    return "⚠ not shown to reach the attested enclave; sent through NanoGPT (which can read it)";
+  }
   if (last.sent === "clear") return `unencrypted, to ${last.provider === "openrouter" ? "OpenRouter" : last.provider === "custom" ? "your provider" : "NanoGPT"}`;
   return "not sent";
 }
@@ -708,8 +726,10 @@ function verifySection(st) {
 // ------------------------------------------------------------------ usage
 
 // how each request left this computer (manager.py's "sent"): sealed to the enclave, to an attested TEE
-// through NanoGPT, in the clear (a search, a standard session's models), or not at all (refused here first)
-const SENT = { sealed: ["private", "sealed"], tee: ["tee", "TEE"], clear: ["warn", "clear"], "": ["", "not sent"] };
+// through NanoGPT, in the clear (a search, a standard session's models), or not at all (refused here first).
+// A TEE request shows its reply's check (REPLY); one with no reply to check isn't shown to have reached the
+// attested enclave, and says so rather than "TEE" (SealedLore's, Nov 11 2026)
+const SENT = { sealed: ["private", "sealed"], tee: ["warn", "TEE ⚠ not shown to reach the enclave"], clear: ["warn", "clear"], "": ["", "not sent"] };
 
 function usageSection(st) {
   const u = st.usage;
@@ -738,10 +758,13 @@ function usageSection(st) {
     rows.length ? h("div", { class: "usage-box" }, h("table", { class: "usage" },
       h("thead", {}, h("tr", {}, ["When", "Model", "Sent", "In", "Cached", "Out", "Cost"].map((c) => h("th", {}, c)))),
       h("tbody", {}, rows))) : h("p", { class: "lead" }, "Nothing yet. Each request's cost will show here, never its content."),
-    rows.length ? h("div", { class: "small muted spaced" }, "Sent: sealed = end-to-end encrypted · TEE = to an enclave, through "
+    rows.length ? h("div", { class: "small muted spaced" }, "Sent: sealed = end-to-end encrypted · TEE = to an attested "
+      + "enclave (for most TEE models RedPill's gateway, which passes it on to the machine running the model), through "
       + "NanoGPT, which can read it · clear = unencrypted, readable by the provider · not sent = stopped on this computer. "
       + "Each TEE reply is checked against the record its enclave signed: verified (the same, byte for byte), signed "
-      + "(its text couldn't be compared), ⚠ not verified (no record could be read), or ⚠ check failed.") : null);
+      + "(its text couldn't be compared), ⚠ not verified (no record could be read), or ⚠ check failed. Only a verified "
+      + "or signed reply shows its request reached the attested enclave: one with no reply to check is ⚠ not shown to "
+      + "reach it. Hover over a mark for what in it is the gateway's word.") : null);
 }
 
 // ------------------------------------------------------------------ this app

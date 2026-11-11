@@ -335,6 +335,15 @@ def what_attested(found: dict) -> str:
         instances=instances if isinstance(instances, int) and not isinstance(instances, bool) else 0))
 
 
+def as_sent(rec: dict, ended: dict) -> dict:
+    """A TEE request's log line as it went. One whose whole reply never came (refused, stopped, cut short) has no
+    check coming (Proxy._check_later), so it names none: it was "checking" for ever, and the window marked it so.
+    Its request is then not shown to have reached the attested enclave (SealedLore's, Nov 11 2026)."""
+    if rec.get("reply") == "checking" and ended.get("reply") is None:
+        return {k: v for k, v in rec.items() if k not in ("ref", "reply")}
+    return rec
+
+
 class AttestedTee:
     """A TEE model's enclave as it attested: what it found, and the client that attested it, kept for
     its replies' checks against it (as DA Vibe Manager keeps it)."""
@@ -733,13 +742,13 @@ class Proxy:
                         {"type": "text", "text": "What the assistant is doing: " + (context.strip() or "(not said)")},
                         {"type": "image_url", "image_url": {"url": data_url}}]}]
         started = time.monotonic()
-        if tier == "tee":
-            await self._attest_tee(model)
+        attested = await self._attest_tee(model) if tier == "tee" else {}
         # checked against the record its attested key signs, as the attestation just made has it
         check = self._reply_check(model) if tier == "tee" else None
         client = self._chat_client(model, tier)
         effort = await self._effort(model, tier, VISION_EFFORT)
-        rec = {"model": model, "tier": tier}
+        # what was attested goes with it (the window says "TEE gateway" for RedPill's gateway)
+        rec = {"model": model, "tier": tier, **({"attested": attested["attested"]} if attested.get("attested") else {})}
         # a TEE model's reply is read as a stream, every byte hashed (LLMClient.complete, exact): the record
         # names the hash of a stream's bytes, and NanoGPT's records of replies not streamed can't be compared
         exact = {"exact": True} if check is not None else {}
@@ -764,7 +773,8 @@ class Proxy:
             self._record("vision", model=model, tier=tier, status=502, error=str(e)[:300])
             raise
         usage = getattr(client, "last_usage", None)
-        self._record("vision", **rec, sealed=tier == "private", status=200, seconds=round(time.monotonic() - started, 2),
+        self._record("vision", **as_sent(rec, ended), sealed=tier == "private", status=200,
+                     seconds=round(time.monotonic() - started, 2),
                      **({"usage": await self._priced(model, openai_usage(usage), tier)} if usage else {}))
         self._check_later(model, check, ended, rec)
         return text.strip()
@@ -879,8 +889,8 @@ class Proxy:
 
         if path == "/v1/messages/count_tokens":
             return JSONResponse({"input_tokens": estimate_tokens(data)})
-        if tier == "tee":
-            await self._attest_tee(model)                  # raises Refused: nothing goes to it unattested
+        # raises Refused: nothing goes to a TEE model unattested
+        attested = await self._attest_tee(model) if tier == "tee" else {}
         # a TEE model's reply is checked against the record its attested key signs, once it has gone on
         check = self._reply_check(model) if tier == "tee" else None
         client = self._chat_client(model, tier)            # raises Refused: no key, not NanoGPT
@@ -905,7 +915,9 @@ class Proxy:
         rec = {"path": path, "model": model, "asked_for": asked if asked and asked.strip().lower() != model.lower() else "",
                "sealed": tier == "private", "tier": tier, "provider": self._provider_of(tier), "sees": native,
                "effort": effort, **({"effort_asked": wanted} if wanted != effort else {}), "bytes_out": size,
-               **({"route": routes.describe(self.provider, route)} if route else {})}
+               **({"route": routes.describe(self.provider, route)} if route else {}),
+               # what was attested, for the window to say (RedPill's gateway is not the machine that runs the model)
+               **({"attested": attested["attested"]} if attested.get("attested") else {})}
         if check is not None:
             # its reply's check comes later, as a line of its own naming this one (the window marks the request)
             rec.update(ref=secrets.token_hex(6), reply="checking")
@@ -913,7 +925,8 @@ class Proxy:
 
         async def done(stats: dict, status: int, **extra) -> None:
             usage = stats.get("usage")
-            self._record("request", **rec, status=status, seconds=round(time.monotonic() - started, 2), **extra,
+            self._record("request", **as_sent(rec, ended), status=status, seconds=round(time.monotonic() - started, 2),
+                         **extra,
                          **({"usage": await self._priced(model, openai_usage(usage), tier)} if usage else {}))
 
         try:
