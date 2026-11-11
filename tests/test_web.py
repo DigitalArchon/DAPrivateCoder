@@ -128,3 +128,14 @@ def test_naming_a_tee_replys_provider_is_a_switch_with_its_note_beside_it():
     switch = switch[:switch.index(");\n}")]
     assert 'checked: Boolean(st.config.tee_name_upstreams)' in switch and 'act("POST", "/api/tee-names"' in switch
     assert '"Name the provider behind each TEE reply"' in switch and "st.tee_upstreams_note" in switch
+
+
+def test_a_checkbox_keeps_its_size_whatever_the_systems_theme_draws():
+    """Seen in the lab on Fedora 44's WebKitGTK (Nov 11 2026): the general input style (padding, a border) and the
+    flex row of its label squeezed Enclave checks' "Name the provider behind each TEE reply" to a dot, so whether it
+    was on couldn't be seen. Radio buttons had a size of their own; checkboxes have it too now."""
+    css = (APP_JS.parent / "style.css").read_text(encoding="utf-8")
+    rule = re.search(r"^([^{}\n]*input\[type=checkbox\][^{}\n]*)\{([^}]*)\}", css, re.M)
+    assert rule, "no rule sizes a checkbox"
+    for wanted in ("width: 15px", "height: 15px", "flex: none"):
+        assert wanted in rule.group(2), wanted

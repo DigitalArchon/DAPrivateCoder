@@ -191,8 +191,9 @@ table.usage tr.note td { white-space: normal; overflow-wrap: anywhere; padding-t
 .attest { display: flex; flex-direction: column; gap: 3px; font-size: 13px; }
 .fingerprint { font-family: var(--mono); font-size: 11.5px; color: var(--muted); overflow-wrap: anywhere; }
 .paths { font-size: 12.5px; color: var(--muted); display: flex; flex-direction: column; gap: 2px; overflow-wrap: anywhere; }
-/* the same radio button whatever the system's GTK theme draws */
-input[type=radio] { accent-color: var(--private); width: 15px; height: 15px; flex: none; }
+/* the same radio button and checkbox whatever the system's GTK theme draws: without a size of their own, the
+   input style above (padding, border) and a flex row squeezed a checkbox to a dot (Fedora 44's WebKitGTK) */
+input[type=radio], input[type=checkbox] { accent-color: var(--private); width: 15px; height: 15px; flex: none; }
 /* the kinds of session: three buttons, the one chosen pressed in its colour */
 .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin: 0 0 8px; }
 .seg-btn { border: none; border-radius: 0; background: transparent; color: var(--muted); padding: 3px 14px; }
