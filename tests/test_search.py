@@ -234,3 +234,20 @@ async def test_results_with_text_aimed_at_the_model_are_named_and_hidden_text_ne
     assert read(tmp_path / "requests.log")[0]["flagged"] >= 3
     plain, _ = await server("best")[0].search({"query": "python asyncio event loop"})
     assert "looks like instructions" not in plain
+
+
+async def test_a_search_that_couldnt_be_made_never_says_the_password_in_nanogpts_address(tmp_path):
+    """A password written into NanoGPT's address (a proxy of your own in front of it) is kept in the keyring and
+    put back when the settings are read (config.py), so the search's own address carries it. "could not reach"
+    named that address whole, in the tool's reply, which goes to the model and Claude Code's own transcript, in
+    the clear (as DA Vibe Manager's 414a0dc; SealedLore's 0db15a2: a password in an address kept nowhere but the
+    keyring)."""
+    def down(request):
+        raise httpx.ConnectError("connection refused", request=request)
+    log = UsageLog(tmp_path / "requests.log", "s1")
+    server = SearchServer("zero-retention", "https://alice:s3cret-pw@nano-gpt.com/api/v1", key=lambda: "sk-nano",
+                          log=log, http=httpx.AsyncClient(transport=httpx.MockTransport(down)))
+    said, failed = await server.search({"query": "python asyncio timeout"})
+    assert failed and said.startswith("The search failed: could not reach https://…@nano-gpt.com/api/web")
+    assert "s3cret" not in said and "alice" not in said
+    assert "s3cret" not in (tmp_path / "requests.log").read_text()

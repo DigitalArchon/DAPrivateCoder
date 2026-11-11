@@ -15,7 +15,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from ..netpolicy import InsecureURL, check_url
+from ..netpolicy import InsecureURL, check_url, shown
 
 # Best first, from DA-Assistant's measurement (2026-09-21: three queries, eight results each, scored
 # by primary sources): perplexity 10/16 with ~1,300 clean characters per result; valyu 5/16, clean
@@ -104,7 +104,9 @@ async def web_search(base_url: str, api_key: str, query: str, provider: str = "p
     try:
         r = await client.post(search_url(base_url), json=body, headers={"Authorization": f"Bearer {api_key}"})
     except httpx.HTTPError as e:
-        raise SearchError(f"could not reach {search_url(base_url)}: {e}") from e
+        # the address as it may be said: the tool's reply goes to the model, and a password written into
+        # NanoGPT's address is kept in the keyring alone (as DA Vibe Manager's 414a0dc)
+        raise SearchError(f"could not reach {shown(search_url(base_url))}: {e}") from e
     finally:
         if http is None:
             await client.aclose()
