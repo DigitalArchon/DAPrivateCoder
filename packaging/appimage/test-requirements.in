@@ -1,0 +1,4 @@
+# What packaging/test-locked.sh adds to the AppImage's own packages to run the test suite on
+# them: pyproject.toml's dev group, locked with hashes in test-requirements.lock like the rest.
+pytest>=8
+pytest-asyncio>=0.23

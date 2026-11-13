@@ -35,24 +35,38 @@ the AppImage that way.
 
 ## Building
 
-You need rootless [Podman](https://podman.io) (`sudo apt install podman`), with SELinux enforcing
-or not.
+The machine that builds needs four things, and `build-appimage.sh` says which is missing before
+it starts: rootless [Podman](https://podman.io) (`sudo apt install podman`), with SELinux enforcing
+or not, git, GNU tar (its `--sort=name` packs the commit's files in one order) and python3 3.11 or
+newer (its `tomllib` reads the version from `pyproject.toml`). Everything else the build uses is in
+the container.
 
 ```bash
 packaging/build-appimage.sh build    # dist/DAPrivateCoder-<version>-x86_64.AppImage (+ .sha256)
 packaging/build-appimage.sh check    # build twice from scratch, compare: must be identical
+packaging/test-locked.sh             # the test suite, on the AppImage's own Python and packages
 packaging/test-appimage.sh           # smoke-test it on Ubuntu, Debian, Fedora, Arch, CachyOS
-packaging/build-appimage.sh lock     # re-resolve the dependency locks (review the diff, commit)
+packaging/build-appimage.sh lock     # lock what pyproject.toml and the *.in files add (review, commit)
+UPGRADE=1 packaging/build-appimage.sh lock   # re-resolve every lock to what is newest now
 DIST=/some/dir packaging/build-appimage.sh build   # the results there instead of dist/
 ```
 
 Only committed files are built, each read from git's objects exactly as HEAD has it (not through
 `git archive`, which would apply your git's line-ending settings, filters and attributes first), with
-HEAD's version, and every timestamp is HEAD's commit time (`SOURCE_DATE_EPOCH`). The host's CA bundle
+HEAD's version, and every timestamp is HEAD's commit time (`SOURCE_DATE_EPOCH`). What builds them is
+the commit's too. `build.sh`, the locks and the pins come out of the commit with the sources;
+`build-appimage.sh` itself is the file that was run, and it reads `pins.sh` and the Containerfile from
+the working tree to make the builder image, so it first compares itself and everything in
+`packaging/appimage/` with HEAD's, byte for byte, and builds nothing while any of them differs: it
+names the files, to be committed or put aside. Other uncommitted changes are not built, and a note
+says so. The lock run reads `pyproject.toml` and the `*.in` files as they are in the working tree, so
+a requirement is locked before it is committed, and keeps every pin it can (`UPGRADE=1` moves them
+all); a lock written for the first time is named, to be added. The host's CA bundle
 (wherever the distribution keeps it) is copied into the builder image's build only for its apt to
 reach the package snapshot over https; nothing of it is in the AppImage. Builds run in `packaging/appimage/Containerfile`: Ubuntu 24.04 pinned
 by digest, with packages from the Ubuntu archive as it was at a fixed moment
-([snapshot.ubuntu.com](https://snapshot.ubuntu.com)). Everything is downloaded over https,
+([snapshot.ubuntu.com](https://snapshot.ubuntu.com)). The builder image is made on this machine
+and run from there (`--pull=never`: no registry is asked for it). Everything is downloaded over https,
 never plain http, not even through a redirect; downloads are cached in
 `~/.cache/daprivatecoder-appimage` and verified on every build.
 
@@ -68,6 +82,7 @@ relay and Tinfoil's public records), with the bundled Tinfoil SDK and that distr
 | PyGObject, pycairo (source archives, with hashes) | `appimage/sdists.lock` |
 | meson, meson-python, ninja, setuptools (with hashes) | `appimage/build-requirements.lock` |
 | pip and pip-tools, which write the locks above, and what they run on (with hashes) | `appimage/lock-requirements.lock`, from `lock-requirements.in` |
+| pytest and pytest-asyncio, for `test-locked.sh` (with hashes; not in the image) | `appimage/test-requirements.lock`, from `test-requirements.in` |
 
 Changing any of these changes the AppImage, which is the point: an update is a reviewed commit.
 Runtime packages are installed only as prebuilt wheels; the few without one (`SDIST_ONLY` in
@@ -84,7 +99,31 @@ read-only image); files are owned by root with no extended attributes, and dated
 Nor does the build's own folder get in. Each `.pyc` names its source as it is inside the image
 (`/usr/python/lib/...`); pip's `direct_url.json` files and the console scripts it writes
 (`daprivatecoder`, `keyring`, ...), whose `#!` line names the build's Python, are left out; and the
-build stops if anything in the image still names that folder.
+build stops if anything in the image still names that folder. Each package's `RECORD` is then made
+to say what is in the image (`appimage/records.py`): the lines of files the build left out
+(`direct_url.json`, the console scripts) are dropped, and a file the build changed gets its present
+hash and size; every other line stays as pip wrote it.
+
+## Testing what ships
+
+A developer's venv is not the AppImage: its packages are the newest of the day it was made, on the
+system's Python. `packaging/test-locked.sh` runs the test suite on the AppImage instead:
+
+```bash
+packaging/test-locked.sh                          # the whole suite, on dist/'s newest AppImage
+packaging/test-locked.sh -q tests/test_safety.py  # any pytest arguments
+APPIMAGE=/elsewhere/DAPrivateCoder-<version>-x86_64.AppImage packaging/test-locked.sh
+```
+
+It unpacks the AppImage into a temporary folder and has its Python (`-I`, as AppRun runs it) run the
+checkout's `tests/` against the `daprivatecoder` and the packages installed in the image. The image
+must be of the checkout: if a file of its `daprivatecoder` is not the one in `src/daprivatecoder`, the
+script names it and tests nothing. pytest and pytest-asyncio are not in the image; they are installed
+from `appimage/test-requirements.lock`, with hashes, into a folder of their own that comes last on the
+path, so that nothing they bring stands in for a package that ships. The pip that installs them is the
+pinned Python's the build uses (`pins.sh`), taken from the build's cache or downloaded and checked as
+the build does. The suite runs under a 3 GB memory cap where there is a systemd user session. The
+script needs git, GNU tar, curl and the network (for those few wheels).
 
 ## Verifying a release
 
@@ -103,7 +142,8 @@ If the hashes differ, `diffoscope` on the two files shows where.
 ## Releasing
 
 1. Update the version in `pyproject.toml` and `src/daprivatecoder/__init__.py`, commit, tag.
-2. `packaging/build-appimage.sh check` (reproducible), then `packaging/test-appimage.sh`.
+2. `packaging/build-appimage.sh check` (reproducible), then `packaging/test-locked.sh` (the test
+   suite passes on what was built) and `packaging/test-appimage.sh` (it starts on each distribution).
 3. Write the release notes in `dist/release-notes-v<version>.md` (beside the AppImage, not in git).
 4. Attach the AppImage and its `.sha256` to the release, with those notes.
 

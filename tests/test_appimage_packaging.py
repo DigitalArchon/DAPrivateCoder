@@ -112,11 +112,13 @@ def test_nothing_is_installed_but_from_a_lock_with_hashes_or_built_here():
             assert re.search(r'pip"? install( -[-\w]+)* "\$W/wheels"/\S+\.whl$', command), command
     assert installs >= 5
     assert '--require-hashes --no-deps -r "$P/lock-requirements.lock"' in build
-    assert "--output-file /out/lock-requirements.lock lock-requirements.in" in build
+    # each *.in file is locked in one loop (lock-requirements.in among them), as DA Vibe Manager's
+    assert re.search(r"for name in [^;]*\block-requirements\b[^;]*; do", build)
+    assert '--output-file "/out/$name.lock" "$name.in"' in build
 
 
 def test_every_locked_package_carries_a_hash():
-    for name in ("requirements", "build-requirements", "sdists", "lock-requirements"):
+    for name in ("requirements", "build-requirements", "sdists", "lock-requirements", "test-requirements"):
         entries = re.findall(r"^([\w.-]+)==([^\s]+)((?:\s*\\\s*--hash=sha256:\w+)*)",
                              (PACKAGING / f"{name}.lock").read_text(), re.M)
         assert entries, name
@@ -249,8 +251,10 @@ def test_the_commit_is_built_as_committed_whatever_gits_settings(tmp_path):
     if not shutil.which("git"):
         pytest.skip("no git")
     wrapper = WRAPPER.read_text()
-    start = wrapper.index('EPOCH="$(git log -1 --format=%ct HEAD)"')
-    export = wrapper[start:wrapper.index("-- *)\n", start) + 5]
+    assert 'EPOCH="$(git log -1 --format=%ct HEAD)"' in wrapper
+    found = re.search(r"^export_head\(\) \{.*?^\}\n", wrapper, re.S | re.M)
+    assert found, "export_head is not where this test looks for it"
+    export = found.group(0)
     repo = tmp_path / "repo"
     (tmp_path / "attributes").write_text("*.txt filter=pear\n")
     (tmp_path / "gitconfig").write_text(f"[core]\n\tautocrlf = true\n\tattributesFile = {tmp_path}/attributes\n"
@@ -281,7 +285,8 @@ def test_the_commit_is_built_as_committed_whatever_gits_settings(tmp_path):
     assert unpack(tmp_path / "archive.tar")[0] != committed            # what git archive does with them
     work = tmp_path / "work"
     work.mkdir()
-    run_export = ["bash", "-c", f"set -euo pipefail\numask 077\nWORK={shlex.quote(str(work))}\n{export}"]
+    run_export = ["bash", "-c", f"set -euo pipefail\numask 077\nWORK={shlex.quote(str(work))}\n"
+                                f'EPOCH="$(git log -1 --format=%ct HEAD)"\n{export}\nexport_head']
     subprocess.run(run_export, cwd=repo, env=env, check=True, capture_output=True)
     files, modes = unpack(work / "src.tar")
     assert files == committed and modes == {"notes.txt": 0o644, "tools/run.sh": 0o755}
