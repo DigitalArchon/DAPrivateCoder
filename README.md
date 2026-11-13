@@ -174,7 +174,9 @@ GLM-5.3 Flash for quick tasks and images). Before anything is sent to one, its e
 and again every 15 minutes, the time the computer slept included: its Intel TDX quote is verified up
 to Intel's root (every certificate in its chain one allowed to issue it), with Intel's revocation
 lists and TCB ratings, and its GPUs' evidence by NVIDIA's attestation service, all bound to a nonce
-of this session's (DA Vibe Manager's verifier). An enclave that doesn't hold gets nothing.
+of this session's (DA Vibe Manager's verifier). An enclave that doesn't hold gets nothing, nor does one
+whose evidence can't be read or whose attestation isn't done within three minutes. A new NanoGPT key
+drops the attestations made with the old one: each model is attested again with it.
 
 Each reply is then checked against the record NanoGPT keeps of it, signed by an attested key: the
 record's hash of the reply must be that of the exact bytes that came, and where RedPill's gateway
@@ -183,7 +185,8 @@ machine the reply came from was verified. The check comes once the reply has rea
 never holds a reply up or changes it. A TEE **Images** model's description of an image (for a model
 that can't see) is a reply too, checked the same way. **Usage** and **Running now** mark each TEE
 request, and each image a TEE model described, with what it found; hovering over a mark says what in
-it is the gateway's word, and that what was sent passed NanoGPT in the clear:
+it is the gateway's word, whether the reply's receipt was read, and that what was sent passed NanoGPT
+in the clear:
 
 - **reply verified**: the record is of the reply that came, byte for byte, and its receipt (where
   read) holds;

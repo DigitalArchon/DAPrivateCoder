@@ -52,7 +52,7 @@ def test_a_tee_attestation_is_named_by_what_was_attested():
 
 def sent_chip() -> str:
     """How a request left this computer, as Usage and Running now mark it (sentChip): [colour, words, tooltip]."""
-    return script("TEE_CLEAR", "REPLY", "TEE_UNPROVEN", "SENT", "sentChip") + "\nconst test = (r) => sentChip(r);"
+    return script("TEE_CLEAR", "REPLY", "TEE_UNPROVEN", "SENT", "replyTip", "sentChip") + "\nconst test = (r) => sentChip(r);"
 
 
 def test_a_tee_replys_mark_says_what_is_the_gateways_word_and_that_it_passed_in_the_clear():
@@ -118,6 +118,26 @@ def test_a_tee_reply_says_who_ran_its_model_beside_its_mark_when_settings_ask():
     assert failed[1] == "TEE ⚠ reply check failed" and phala["words"] not in failed[2]
     assert unnamed[1] == "TEE, reply verified" and unnamed[2].endswith("\n\n" + nobody["words"])
     assert plain[1] == "TEE, reply verified" and "\n\n" not in plain[2]
+
+
+def test_a_tee_marks_tooltip_says_whether_a_receipt_was_read():
+    """A model attested itself is verified by its own key's signature, with a receipt or without, yet the tooltip
+    said "the gateway's signed receipt, read too" either way (DA Toolkit's review, Nov 2026; DA Vibe Manager's
+    teeTip). The check says which (proxy.py's tee_reply "receipt", the row's reply_receipt), and a line logged
+    before says that wasn't kept."""
+    read, unread, old, signed_unread, unchecked = run(sent_chip(), [
+        {"sent": "tee", "reply": "verified", "reply_receipt": True}, {"sent": "tee", "reply": "verified", "reply_receipt": False},
+        {"sent": "tee", "reply": "verified"}, {"sent": "tee", "reply": "signed", "reply_receipt": False},
+        {"sent": "tee", "reply": "unchecked", "reply_receipt": False}])
+    assert "the gateway's signed receipt, read too" in read[2] and "wasn't kept" not in read[2]
+    assert read[1] == unread[1] == old[1] == "TEE, reply verified"     # which replies count as verified doesn't change
+    assert "receipt, read too" not in unread[2] and "No receipt was read" in unread[2]
+    assert "exact text that came back" in unread[2] and "nothing here says the machine running the model was verified" in unread[2]
+    assert "wasn't kept with it" in old[2]
+    assert "No receipt was read" in signed_unread[2] and "can't be compared" in signed_unread[2]
+    assert "No receipt" not in unchecked[2]
+    for tip in (unread[2], old[2], signed_unread[2]):
+        assert "passed NanoGPT's servers in the clear" in tip
 
 
 def test_naming_a_tee_replys_provider_is_a_switch_with_its_note_beside_it():

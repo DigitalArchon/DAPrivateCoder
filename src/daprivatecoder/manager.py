@@ -67,6 +67,9 @@ def _reply_of(record: dict, checks: dict[tuple, dict]) -> dict:
     if not found and (record.get("error") or record.get("status") != 200):
         return {}
     return {"reply": found.get("reply") or record.get("reply") or "checking", "reply_detail": found.get("detail", ""),
+            # whether a verified or signed reply's receipt was read under the attested keys and held (proxy.py, from
+            # Nov 13 2026; a line from before doesn't say): the mark's tooltip words one without as what it is
+            **({"reply_receipt": found["receipt"]} if isinstance(found.get("receipt"), bool) else {}),
             # who ran its model, where the user asked for it (proxy.upstream_view: RedPill's word)
             **({"reply_upstream": found["upstream"]} if isinstance(found.get("upstream"), dict) else {})}
 

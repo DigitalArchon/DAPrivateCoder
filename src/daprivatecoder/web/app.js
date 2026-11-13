@@ -538,13 +538,30 @@ const TEE_UNPROVEN = "Not shown to reach the attested enclave: sent to the TEE m
 // beside a failed one, and what that means in its tooltip
 function sentChip(r) {
   if (r.sent === "tee" && REPLY[r.reply]) {
-    const [chip, label, tip] = REPLY[r.reply];
+    const [chip, label] = REPLY[r.reply];
     const up = ["verified", "signed"].includes(r.reply) ? r.reply_upstream : null;
     return [chip, label + (up && up.name ? ` · run by ${up.label || up.name}` : ""),
-      tip + (r.reply_detail ? ` (${r.reply_detail})` : "") + (up && up.words ? `\n\n${up.words}` : "")];
+      replyTip(r) + (r.reply_detail ? ` (${r.reply_detail})` : "") + (up && up.words ? `\n\n${up.words}` : "")];
   }
   const [chip, how] = SENT[r.sent] || SENT[""];
   return [chip, how, r.sent === "tee" ? TEE_UNPROVEN : ""];
+}
+
+// A TEE reply's tooltip, by whether its receipt was read under the attested keys and held (r.reply_receipt:
+// proxy.py's tee_reply line). A model attested itself is verified by its own key's signature, with or without one,
+// and the tooltip said a receipt was read either way (DA Toolkit's review, Nov 2026; DA Vibe Manager's teeTip).
+// Without one it says so, and what the signature alone shows; a line logged before Nov 13 2026 doesn't say whether
+// one was read, and its tooltip says that.
+function replyTip(r) {
+  const tip = REPLY[r.reply][2];
+  if (!["verified", "signed"].includes(r.reply) || r.reply_receipt === true) return tip;
+  if (r.reply_receipt !== false) return `${tip} Whether a receipt was read for this reply wasn't kept with it (it was logged by an earlier version).`;
+  const compared = r.reply === "verified" ? "and the record is for the exact text that came back"
+    : "but the reply's text can't be compared with it (NanoGPT rebuilds this model's replies), so a change on the way here wouldn't show";
+  return `Checked against the attested signing key: that key signed this reply's record, ${compared}. No receipt was read `
+    + "(none came with the record, or the attestation kept no receipt keys to read one by). So for a model RedPill serves, "
+    + "nothing here says the machine running the model was verified: the signature shows the reply passed through the "
+    + "attested gateway." + TEE_CLEAR;
 }
 
 // where a request went, in words, after its chip. A TEE one reached the attested enclave only as far as its reply's

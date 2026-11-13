@@ -46,7 +46,8 @@ from .llm import capabilities, routes
 from .llm.dcap import since_boot
 from .llm.anthropic_bridge import VISION_PROMPT, ImageDescriber, estimate_tokens, has_images, message, sse, to_openai
 from .llm.client import RANK, LLMClient, is_claude, is_private_mode, is_tee, private_id, tier_of
-from .llm.private_mode import Attestation, Enclave, PrivateModeClient, list_private_models, offers_private_mode, relay_url
+from .llm.private_mode import (Attestation, Enclave, PrivateModeClient, list_private_models, offers_private_mode,
+                               relay_said, relay_url)
 from .netpolicy import check_url, key_problem, scrubbed, shown
 from .usagelog import UsageLog
 
@@ -368,13 +369,16 @@ class AttestedTee:
 
     def check(self, reply, name_upstream: bool = False):
         """A reply read with exact=True (its TurnResult), against the record the attested key signed
-        (llm/tee.py check; blocking): "verified", "signed" or "failed"; with `name_upstream`, a ReplyCheck
-        of that mark and who ran its model (a lookup on api.redpill.ai, the user's choice: llm/tee.py
-        served_by), which never changes the mark. Raises when it can't be checked ("unchecked")."""
-        found = self.client.check(getattr(reply, "id", None), receipt_id=getattr(reply, "receipt_id", None),
-                                  body_hash=getattr(reply, "body_hash", None), route=getattr(reply, "tee_route", None),
-                                  name_upstream=name_upstream)
-        return found if name_upstream else found.mark
+        (llm/tee.py check; blocking): a ReplyCheck of its mark ("verified", "signed" or "failed"), whether
+        its receipt was read under the attested keys and held, and, with `name_upstream`, who ran its model
+        (a lookup on api.redpill.ai, the user's choice: llm/tee.py served_by), which never changes the
+        mark. Raises when it can't be checked ("unchecked")."""
+        return self.client.check(getattr(reply, "id", None), receipt_id=getattr(reply, "receipt_id", None),
+                                 body_hash=getattr(reply, "body_hash", None), route=getattr(reply, "tee_route", None),
+                                 name_upstream=name_upstream)
+
+    def close(self) -> None:
+        self.client.close()
 
 
 def attest_tee_for_replies(base_url: str, key: str, model: str) -> AttestedTee:
@@ -386,6 +390,22 @@ def attest_tee_for_replies(base_url: str, key: str, model: str) -> AttestedTee:
     except BaseException:
         client.close()
         raise
+
+
+def _close_attested(attested) -> None:
+    """Close what attested a TEE model (AttestedTee: its client), if it has anything to close."""
+    close = getattr(attested, "close", None)
+    if close is not None:
+        try:
+            close()
+        except Exception:  # noqa: BLE001 - it is forgotten all the same
+            pass
+
+
+def _close_when_done(attempt: asyncio.Future) -> None:
+    """An attestation given up (Proxy._attest_tee): once its thread is done, what it made is closed, never kept."""
+    if not attempt.cancelled() and attempt.exception() is None:
+        _close_attested(attempt.result())
 
 
 async def refuse_insecure(response: httpx.Response) -> None:
@@ -443,8 +463,12 @@ class Proxy:
         self._plain_client = plain_client or LLMClient
         self._plain: dict[tuple[str, str], object] = {}
         self._tee_check = tee_check
-        # model -> when it attested, what it found, and the check of its replies against that (None: none)
-        self._tee: dict[str, tuple[float, dict, Callable[[object], str] | None]] = {}
+        # (NanoGPT's base_url, model) -> when it attested, what it found, the check of its replies against that
+        # (None: none), and what attested it (AttestedTee: its client, closed once it is forgotten)
+        self._tee: dict[tuple[str, str], tuple[float, dict, Callable | None, object]] = {}
+        # the NanoGPT key those attestations were made with: their clients look up each reply's signature with it,
+        # so another key read drops them all (_forget_tee), and its models are attested again with it
+        self._tee_key: str | None = None
         self._doubted: set[str] = set()                     # TEE models a reply of failed its check: attested again
         self._checks: set[asyncio.Task] = set()              # replies being checked, after they went on
         self._tee_lock = asyncio.Lock()
@@ -561,6 +585,7 @@ class Proxy:
     async def aclose(self) -> None:
         for task in list(self._checks):
             task.cancel()
+        self._forget_tee()
         if self._http is not None:
             await self._http.aclose()
         for client in self._plain.values():
@@ -611,30 +636,58 @@ class Proxy:
     async def _attest_tee(self, model: str) -> dict:
         """Nothing goes to a TEE model whose enclave hasn't attested (llm/tee.py); an attestation older
         than TEE_REATTEST_SECONDS, or one a reply failed its check against, is made again first (DA
-        Assistant's rule for a reply that fails, a50e414). Raises Refused when it doesn't hold."""
+        Assistant's rule for a reply that fails, a50e414), as is every one made with a NanoGPT key other
+        than the one stored now. Raises Refused when it doesn't hold, or isn't done in time."""
+        from .llm import tee
         async with self._tee_lock:
-            hit = self._tee.get(model)
+            key = self._read_key() or ""
+            if key != self._tee_key:
+                # the kept clients look up each reply's signature with the key they were made with: a new key
+                # went unused by the checks until the attestations aged out (DA Toolkit's review, Nov 2026)
+                self._forget_tee()
+                self._tee_key = key
+            kept = (self.base_url, model)
+            hit = self._tee.get(kept)
             doubted = model in self._doubted
             if hit and not doubted and since_boot() - hit[0] < TEE_REATTEST_SECONDS:
                 return hit[1]
-            key = self._read_key() or ""
             why = {"after": "a reply that failed its check"} if doubted else {}
+            # the client gives the whole attempt tee.ATTEMPT_SECONDS; one request's timeout after that it is given
+            # up here whatever it is doing (Intel's or NVIDIA's service answering a byte at a time), as a refusal:
+            # nothing waits on "attesting" longer (DA Toolkit's review, Nov 2026, as DA Vibe Manager's tee_guard)
+            limit = tee.ATTEMPT_SECONDS + tee.TIMEOUT_SECONDS
+            attempt = asyncio.ensure_future(asyncio.to_thread(self._tee_check, self.base_url, key, model))
             try:
-                attested = await asyncio.to_thread(self._tee_check, self.base_url, key, model)
+                try:
+                    attested = await asyncio.wait_for(asyncio.shield(attempt), limit)
+                except TimeoutError:
+                    attempt.add_done_callback(_close_when_done)     # its thread ends soon after: its client goes then
+                    raise tee.TeeRefused(f"the attestation wasn't done within {limit / 60:g} minutes, and was given "
+                                         "up; this may pass if tried again") from None
             except Exception as e:  # noqa: BLE001 - said as it is, and nothing sent
-                self._record("attested_tee", model=model, error=str(e)[:300], **why)
-                raise Refused(502, f"{model}'s enclave didn't attest, so nothing was sent to it: {e}", "api_error",
+                # logged and told Claude Code: on one line, short, without what can't be seen (relay_said), whoever
+                # wrote it (DA Toolkit's review, Nov 2026)
+                said = relay_said(scrubbed(e), 700)
+                self._record("attested_tee", model=model, error=said[:300], **why)
+                raise Refused(502, f"{model}'s enclave didn't attest, so nothing was sent to it: {said}", "api_error",
                               retry=_worth_retrying(e)) from e
             att = getattr(attested, "found", attested)
-            self._tee[model] = (since_boot(), att, getattr(attested, "check", None))
+            self._tee[kept] = (since_boot(), att, getattr(attested, "check", None), attested)
             self._doubted.discard(model)
             self._record("attested_tee", model=model, **why, **{k: att.get(k) for k in ATTESTED})
             return att
 
-    def _reply_check(self, model: str) -> Callable[[object], str] | None:
+    def _forget_tee(self) -> None:
+        """Drop, and close, every attested TEE client kept: they were made with the NanoGPT key as it was (DA
+        Vibe Manager's Models._forget_tee). Their models are attested again before anything more is sent."""
+        for kept in list(self._tee):
+            _close_attested(self._tee.pop(kept)[3])
+        self._doubted.clear()
+
+    def _reply_check(self, model: str) -> Callable | None:
         """How a reply of TEE `model` is checked, against the attestation in force now (_attest_tee made
         it just before the request); None when there is none to make."""
-        hit = self._tee.get(model)
+        hit = self._tee.get((self.base_url, model))
         return hit[2] if hit else None
 
     def _check_later(self, model: str, check, ended: dict, rec: dict) -> None:
@@ -651,15 +704,21 @@ class Proxy:
         def checked():
             # who ran its model too, where the user asked for it (the settings file, read afresh: a lookup on
             # api.redpill.ai, off by default; llm/tee.py served_by), never the mark's concern
-            if self._name_upstreams is not None and self._name_upstreams():
-                found = check(reply, name_upstream=True)
-                return found.mark, found.upstream
-            return check(reply), None
+            named = self._name_upstreams is not None and self._name_upstreams()
+            found = check(reply, name_upstream=True) if named else check(reply)
+            # a ReplyCheck (AttestedTee.check), or a bare mark from a check of another making
+            mark = getattr(found, "mark", found)
+            # whether its receipt was read under the attested keys and held: a model attested itself is verified
+            # by its own key's signature without one, and the window's tooltip says which (DA Toolkit's review,
+            # Nov 2026)
+            receipt = getattr(found, "receipt", None)
+            return str(mark), (getattr(found, "upstream", None) if named else None), \
+                (receipt if mark in ("verified", "signed") and isinstance(receipt, bool) else None)
 
         async def run():
-            upstream = None
+            upstream = receipt = None
             try:
-                (outcome, upstream), detail = await asyncio.to_thread(checked), ""
+                (outcome, upstream, receipt), detail = await asyncio.to_thread(checked), ""
             except Exception as e:  # noqa: BLE001 - a check that couldn't be made is "unchecked", never a failure
                 outcome, detail = "unchecked", str(e)[:300]
             if outcome == "failed":
@@ -667,6 +726,7 @@ class Proxy:
                 print(f"daprivatecoder: {model}'s reply didn't match the record its attested enclave signed: its "
                       "enclave is attested again before anything more is sent to it.", file=sys.stderr, flush=True)
             self._record("tee_reply", of=rec.get("ref"), model=model, reply=outcome, **({"detail": detail} if detail else {}),
+                         **({"receipt": receipt} if receipt is not None else {}),
                          **({"upstream": upstream_view(upstream)} if upstream is not None else {}))
         task = asyncio.get_running_loop().create_task(run())
         self._checks.add(task)

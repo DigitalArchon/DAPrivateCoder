@@ -113,7 +113,8 @@ records ([below](#intel-tee-models)). These are public records: nothing of yours
 When a TEE model is attested: Intel's public certificates, revocation lists and its ratings of the
 platform's firmware (api.trustedservices.intel.com, certificates.trustedservices.intel.com), to
 check the enclave's quote up to Intel's root. The request names the platform family the quote is
-from; nothing of yours goes, and no key.
+from; nothing of yours goes, and no key. What comes back is kept for an hour once it has been read
+and its signatures checked (an answer that isn't Intel's is asked for again the next time).
 
 ### NVIDIA (TEE models)
 
@@ -255,8 +256,9 @@ in a standard session is attested the same way.
 ### What is attested
 
 **Before anything is sent** to a TEE model, and again before a request once its attestation is 15
-minutes old (on a clock that counts while the computer sleeps), the app asks for the enclave's
-attestation, with a fresh random number of its own, and checks:
+minutes old (on a clock that counts while the computer sleeps), and again after a new NanoGPT key
+is saved (each reply's record is looked up with the key the attestation was made with), the app asks
+for the enclave's attestation, with a fresh random number of its own, and checks:
 
 - that the Intel TDX quote, read from its own signed bytes, binds the enclave's signing key to that
   number; where NanoGPT has it, RedPill's gateway's own report too, for another fresh number, whose
@@ -265,8 +267,9 @@ attestation, with a fresh random number of its own, and checks:
   it), isn't revoked or a debug enclave, and what Intel says of the platform's firmware;
 - that NVIDIA's signed verdict on the GPUs is for the app's number, and passes.
 
-Anything forged, revoked or made for another number is refused, and nothing is sent. What couldn't
-be checked, or isn't current, makes the attestation **partial**: requests still go. **Enclave
+Anything forged, revoked or made for another number is refused, and nothing is sent; so is evidence
+the app can't read, and an attestation not done within three minutes (it may pass if tried again).
+What couldn't be checked, or isn't current, makes the attestation **partial**: requests still go. **Enclave
 checks** in the window (and `daprivatecoder check --profile tee`) says what was attested, first
 what that leaves to someone's word, and each shortfall:
 
@@ -312,8 +315,10 @@ check found:
 - **TEE ⚠ reply check failed**: the reply doesn't match its record. The app attests the model
   again before anything more is sent to it.
 
-Hovering over a mark says what it means, what in it is the gateway's word, and that what was sent
-passed NanoGPT in the clear. The request itself is marked only as far as its reply shows: **Running
+Hovering over a mark says what it means, what in it is the gateway's word, whether the reply's receipt
+was read (a model attested by its own key is verified by that key's signature, with a receipt or
+without; without one, nothing says the machine running the model was verified), and that what was
+sent passed NanoGPT in the clear. The request itself is marked only as far as its reply shows: **Running
 now** says it was received by the attested TEE (its gateway, for a model RedPill serves) only when
 its reply is verified or signed. A request with no reply to check, because it was refused, stopped
 or cut short, is marked **TEE ⚠ not shown to reach the enclave**: it went while the model's

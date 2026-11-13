@@ -330,6 +330,8 @@ def _log(args) -> int:
         found = _reply_of(r, checks)
         reply, up = found.get("reply"), found.get("reply_upstream") or {}
         named = f" · run by {up.get('label') or up.get('name')}" if up.get("name") and reply in ("verified", "signed") else ""
+        if found.get("reply_receipt") is False and reply in ("verified", "signed"):
+            named += " (no receipt read)"          # checked against the attested signing key alone (sentChip's tooltip)
         extra = (f" {r['error']}" if r.get("error") else "") + (
             f" reply {'⚠ ' if reply in ('failed', 'unchecked') else ''}{reply}{named}" if reply else "")
         if _sent(r) == "tee" and not reply:
