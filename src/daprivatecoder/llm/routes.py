@@ -31,6 +31,7 @@ import httpx
 
 from ..netpolicy import check_url
 from .client import is_claude, tier_of
+from .secure_http import local_http_options
 
 PRIORITIES = {
     "nanogpt": ("auto", "speed", "latency", "throughput", "price", "host"),
@@ -201,7 +202,7 @@ def parse_openrouter_hosts(model: str, data: Mapping[str, Any]) -> dict:
 async def fetch_hosts(provider: str, base_url: str, model: str, http: httpx.AsyncClient | None = None) -> dict:
     """The provider's public listing: it needs no key, so none is sent, nor anything but the model's name."""
     url = check_url(hosts_url(provider, base_url, model), "The provider's list of hosts")
-    client = http or httpx.AsyncClient(timeout=30)
+    client = http or httpx.AsyncClient(timeout=30, **local_http_options(url))
     try:
         r = await client.get(url)          # never a redirect followed: httpx's default
         r.raise_for_status()

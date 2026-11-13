@@ -842,3 +842,70 @@ async def test_claude_code_is_told_of_an_answer_with_no_stream_in_it_not_given_a
     logged = [e for e in read(tmp_path / "requests.log") if e["kind"] == "request" and e.get("tier")]
     assert [e["status"] for e in logged] == [502, 502] and all("with no reply in it" in e["error"] for e in logged)
     assert "secret" not in (tmp_path / "requests.log").read_text() + told + whole.text
+
+
+# --- a stream cut off mid-answer is an error, not a reply (DA Toolkit's 87f270f, as DA Vibe Manager's 95940ce) ------
+
+def _chunk(delta=None, finish=None) -> str:
+    return json.dumps({"id": "c1", "object": "chat.completion.chunk", "created": 0, "model": "m",
+                       "choices": [{"index": 0, "delta": delta or {}, "finish_reason": finish}]})
+
+
+def _stream_of(*chunks, done=True) -> bytes:
+    return ("".join(f"data: {c}\n\n" for c in chunks) + ("data: [DONE]\n\n" if done else "")).encode()
+
+
+_HALF_CALL = _chunk({"tool_calls": [{"index": 0, "id": "call_1", "type": "function",
+                                     "function": {"name": "Bash", "arguments": '{"command": "rm -rf /tmp/bu'}}]})
+
+
+@pytest.mark.parametrize("body", [
+    _stream_of(_chunk({"content": "Run sudo rm -rf /var/lib/"}), done=False),           # cut in the text
+    _stream_of(_chunk({"content": "Let me look."}), _HALF_CALL, done=False),            # cut in a tool call
+    _stream_of(_chunk({"content": "one"}), _chunk({"content": " two"}), done=False),    # between chunks
+])
+@pytest.mark.parametrize("exact", [False, True])
+async def test_a_stream_that_ends_without_saying_it_is_done_is_an_error(body, exact):
+    """A stream that ended cleanly without saying it was done (a proxy's time limit, a server that crashed) was taken
+    for the whole reply, a tool call with half its arguments included."""
+    from daprivatecoder.llm.secure_http import ProviderError
+
+    client, seen = _answering(200, body, {"content-type": "text/event-stream"})
+    with pytest.raises(ProviderError, match="the reply stopped before it was finished") as info:
+        await _streamed(client, exact)
+    assert "https://example.test/v1/chat/completions never said the reply was complete" in str(info.value)
+    assert len(seen) == 1
+
+
+@pytest.mark.parametrize(("body", "finish"), [
+    (_stream_of(_chunk({"content": "whole"}, "stop"), done=False), "stop"),             # a reason, no [DONE]
+    (_stream_of(_chunk({"content": "whole"})), None),                                    # [DONE], no reason
+    (_stream_of(_chunk({"content": "as far as it goes"}, "length")), "length"),
+    (_stream_of(_chunk({"content": "filtered"}, "content_filter"), done=False), "content_filter"),
+])
+async def test_a_reply_the_provider_ended_is_a_reply_with_its_reason(body, finish):
+    client, _ = _answering(200, body, {"content-type": "text/event-stream"})
+    events = await _streamed(client)
+    assert events[-1][0] == "done" and events[-1][1].finish_reason == finish
+
+
+async def test_claude_code_gets_no_half_written_call_from_a_stream_cut_off(tmp_path):
+    """Through the proxy: streamed, an error event with no tool_use block and no stop reason; asked whole, a refusal."""
+    body = _stream_of(_chunk({"content": "Let me clean up."}), _HALF_CALL, done=False)
+    client, _ = _answering(200, body, {"content-type": "text/event-stream"})
+
+    class Plain:
+        def factory(self, url, key):
+            return client
+    log = UsageLog(tmp_path / "requests.log", "s1")
+    p, _ = make(NANO, plain=Plain(), log=log)
+    r = await call(p, "POST", "/v1/messages", message("z-ai/glm-5.3"))
+    whole = await call(p, "POST", "/v1/messages", message("z-ai/glm-5.3", stream=False))
+    events = parse(r.content)
+    assert not [d for n, d in events if n == "content_block_start" and d["content_block"]["type"] == "tool_use"]
+    assert not [d for n, d in events if n == "message_delta"], "no stop reason: the reply isn't ended as if whole"
+    said = [d for n, d in events if n == "error"][0]["error"]["message"]
+    assert "the reply stopped before it was finished" in said
+    assert whole.status_code >= 500 and "the reply stopped before it was finished" in whole.json()["error"]["message"]
+    logged = [e for e in read(tmp_path / "requests.log") if e["kind"] == "request" and e.get("tier")]
+    assert [e["status"] for e in logged] == [502, 502]

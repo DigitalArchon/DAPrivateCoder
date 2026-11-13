@@ -4,6 +4,8 @@ From DA Vibe Manager's tests/test_anthropic_bridge.py, with tests of what is new
 import asyncio
 import json
 
+import pytest
+
 from openai.types.chat import ChatCompletionChunk
 
 from daprivatecoder.llm import anthropic_bridge as bridge
@@ -296,3 +298,15 @@ async def test_thinking_claude_code_sends_back_goes_back_to_the_model_as_its_rea
     assistant = [m for m in messages if m["role"] == "assistant"]
     assert assistant[0]["reasoning_content"] == "I should run ls." and assistant[0]["tool_calls"]
     assert "reasoning_content" not in assistant[1]
+
+
+async def test_events_that_end_without_their_result_are_no_reply():
+    """The model's events ended without their result (a stream cut off): what came of it isn't handed over as a
+    finished reply, streamed or whole (DA Toolkit's 87f270f, as DA Vibe Manager's 95940ce)."""
+    async def events():
+        yield "open", None
+        yield "text", "half"
+    out = b"".join([c async for c in bridge.sse(events(), "m", 10)]).decode()
+    assert "event: error" in out and "stopped before it was finished" in out and "message_stop" not in out
+    with pytest.raises(RuntimeError, match="stopped before it was finished"):
+        await bridge.message(events(), "m", 10)

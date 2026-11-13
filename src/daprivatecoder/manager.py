@@ -461,9 +461,13 @@ class Manager:
     async def _listed(url: str, key: str | None) -> list[str]:
         """A provider of your own: the ids its /models lists (OpenAI's shape), with its key."""
         import httpx
+
+        from .llm.secure_http import local_http_options
         from .netpolicy import check_url
         check_url(url, "Your provider's base URL")
-        async with httpx.AsyncClient(timeout=30, follow_redirects=False) as client:
+        # a provider on this computer or its network is reached directly, never through a proxy the environment
+        # names: its key went to it (DA Toolkit's c6de017, as DA Vibe Manager's)
+        async with httpx.AsyncClient(timeout=30, follow_redirects=False, **local_http_options(url)) as client:
             r = await client.get(url.rstrip("/") + "/models", headers={"Authorization": f"Bearer {key}"} if key else {})
             if r.status_code >= 300:            # said without the address's password (httpx's own error quotes it)
                 raise UserError(f"{shown(url)} answered HTTP {r.status_code} when asked for its models.")

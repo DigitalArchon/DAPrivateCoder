@@ -453,7 +453,9 @@ class Proxy:
         self.token = token
         self.log = log
         self._key = key
-        self._http = http
+        self._http = http                                   # given (tests): every request goes by it
+        self._own_http: httpx.AsyncClient | None = None      # the proxy's own, for any address on the internet
+        self._local_http: httpx.AsyncClient | None = None    # and for one on this computer or its network
         self._private_client = private_client
         # a standard profile's models are its provider's; a private or TEE profile's, NanoGPT's
         self.provider = profile.provider if profile.kind == "standard" else "nanogpt"
@@ -473,11 +475,11 @@ class Proxy:
         self._checks: set[asyncio.Task] = set()              # replies being checked, after they went on
         self._tee_lock = asyncio.Lock()
         self._caps_loaders: dict[str, Callable[[], Awaitable[dict | None]]] = {
-            "nanogpt": capabilities_loader or (lambda: capabilities.fetch_nanogpt(self.base_url, self._client()))}
+            "nanogpt": capabilities_loader or (lambda: capabilities.fetch_nanogpt(self.base_url, self._client(self.base_url)))}
         if self.provider != "nanogpt":
             self._caps_loaders[self.provider] = provider_capabilities_loader or (
-                lambda: capabilities.fetch(self.provider, self.provider_url, self._client()))
-        self._list_private = private_lister or (lambda: list_private_models(self.base_url, self._client()))
+                lambda: capabilities.fetch(self.provider, self.provider_url, self._client(self.provider_url)))
+        self._list_private = private_lister or (lambda: list_private_models(self.base_url, self._client(self.base_url)))
         self._caps: dict[str, dict | None] = {}
         self._caps_failed: dict[str, float] = {}       # provider -> when its list last couldn't be read
         self._caps_lock = asyncio.Lock()
@@ -576,18 +578,33 @@ class Proxy:
             client = self._plain[(url, key or "")] = self._plain_client(url, key)
         return client
 
-    def _client(self) -> httpx.AsyncClient:
-        if self._http is None:
-            self._http = httpx.AsyncClient(timeout=httpx.Timeout(600, connect=30), follow_redirects=False,
-                                           event_hooks={"response": [refuse_insecure]})
-        return self._http
+    def _client(self, url: str) -> httpx.AsyncClient:
+        """The client for a request to `url`: the one the proxy was given (tests), else one of its own. A
+        provider on this computer or its network gets one that never goes through a proxy the environment
+        names (secure_http.local_http_options): the key and the conversation went to it, as they did to
+        any other address until Nov 2026 (DA Toolkit's c6de017, as DA Vibe Manager's gateway)."""
+        from .llm.secure_http import is_local, local_http_options
+
+        def make(**options) -> httpx.AsyncClient:
+            return httpx.AsyncClient(timeout=httpx.Timeout(600, connect=30), follow_redirects=False,
+                                     event_hooks={"response": [refuse_insecure]}, **options)
+        if self._http is not None:
+            return self._http
+        if is_local(url):
+            if self._local_http is None:
+                self._local_http = make(**local_http_options(url))
+            return self._local_http
+        if self._own_http is None:
+            self._own_http = make()
+        return self._own_http
 
     async def aclose(self) -> None:
         for task in list(self._checks):
             task.cancel()
         self._forget_tee()
-        if self._http is not None:
-            await self._http.aclose()
+        for http in (self._http, self._own_http, self._local_http):
+            if http is not None:
+                await http.aclose()
         for client in self._plain.values():
             close = getattr(client, "aclose", None)
             if close is not None:
@@ -1077,7 +1094,7 @@ class Proxy:
         headers = {k: v for k, v in request.headers.items() if k.lower() in PASS_HEADERS}
         headers["authorization"] = f"Bearer {key}"
         url = upstream_url(self.provider_url, path, request.url.query)
-        client = self._client()
+        client = self._client(url)
         started = time.monotonic()
         rec = {"path": path, "model": model, "asked_for": asked if asked and asked != model else "", "sealed": False,
                "tier": "standard", "provider": self.provider, "bytes_out": len(body)}

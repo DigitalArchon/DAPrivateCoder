@@ -16,13 +16,19 @@ from typing import AsyncIterator
 from urllib.parse import urlparse
 
 from ..netpolicy import check_key, check_url, shown
-from .secure_http import ProviderError
+from .secure_http import ProviderError, local_http_options
 
 # private: sealed on this computer to an attested enclave (NanoGPT Private Mode). tee: runs in an
 # enclave this app attests first, but the prompt passes NanoGPT's gateway in the clear (NanoGPT's
 # TEE/ models). standard: in the clear to the provider and the model's host
 TIERS = ("private", "tee", "standard")
 RANK = {"standard": 0, "tee": 1, "private": 2}
+
+# How long a model server gets to accept the connection, beside the minutes a reply may take to come. The
+# two were one number until Nov 2026, so a provider of your own that was switched off showed Claude Code
+# "thinking" for ten minutes and more (two attempts) before it failed (DA Toolkit's 2d1aa54, as DA Vibe
+# Manager's).
+CONNECT_TIMEOUT = 10
 
 
 def is_private_mode(model_id: str) -> bool:
@@ -79,18 +85,62 @@ class TurnResult:
     body_hash: str | None = None
 
 
+def only_what_it_was_given(sdk_client) -> None:
+    """OpenAI's SDK client, made to send only what this app gave it (DA Vibe Manager's).
+
+    The SDK reads OpenAI's environment variables whenever a client is built, whatever address it is
+    for: OPENAI_ORG_ID and OPENAI_PROJECT_ID become headers of every request, and OPENAI_CUSTOM_HEADERS
+    adds any header at all, an Authorization that replaces the provider's key among them. Those were
+    set for OpenAI's own service, by another tool or in the user's shell; a provider here is an address
+    and a key of this app's, so none of it goes to NanoGPT, OpenRouter or a server of your own (DA
+    Toolkit's 624a4be). (The key and the address are always passed, so the variables for those are never
+    read.) The SDK takes no argument that says so: what it read is cleared from the client as it is
+    built, by a subclass, so that a copy the SDK makes of it (`with_options`), built the same way, is
+    cleared too. This app passes no default header, so none is lost."""
+    for name in ("organization", "project"):
+        if hasattr(sdk_client, name):
+            setattr(sdk_client, name, None)
+    sdk_client._custom_headers = {}
+    if hasattr(sdk_client, "_ambient_authorizations"):      # the Authorization values OPENAI_CUSTOM_HEADERS held
+        sdk_client._ambient_authorizations = frozenset()
+
+
+_OpenAI = None
+
+
+def _sdk_client_class():
+    """OpenAI's client, sending only what it was given here (only_what_it_was_given): made on first use, so
+    the SDK is imported only when a plain client is."""
+    global _OpenAI
+    if _OpenAI is None:
+        from openai import AsyncOpenAI
+
+        class _Client(AsyncOpenAI):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                only_what_it_was_given(self)
+
+        _OpenAI = _Client
+    return _OpenAI
+
+
 class LLMClient:
     """A plain chat-completions client (NanoGPT, OpenRouter, any compatible endpoint): https, or
     http only to this computer or the local network; a redirect is never followed (the user's words
     would go wherever the provider points)."""
 
     def __init__(self, base_url: str, api_key: str | None, http_client=None):
-        from openai import AsyncOpenAI, DefaultAsyncHttpxClient
+        from openai import DefaultAsyncHttpxClient, Timeout
         check_url(base_url, "The provider's base URL")
         check_key(api_key, urlparse(base_url).hostname or "the provider")     # one no header can carry: nothing sent
-        # a local server often needs no key, but the SDK insists on a value
-        self._client = AsyncOpenAI(base_url=base_url, api_key=api_key or "not-needed", max_retries=1, timeout=600,
-                                   http_client=http_client or DefaultAsyncHttpxClient(follow_redirects=False))
+        # A local server often needs no key, but the SDK insists on a value. A server on this computer or its
+        # network is reached directly, whatever proxy the environment names (local_http_options). Nothing the
+        # environment holds for OpenAI's own service goes with it (only_what_it_was_given), and a server that
+        # takes no connection fails in seconds (CONNECT_TIMEOUT), not after the minutes a reply may take
+        self._client = _sdk_client_class()(
+            base_url=base_url, api_key=api_key or "not-needed", max_retries=1,
+            timeout=Timeout(600, connect=CONNECT_TIMEOUT),
+            http_client=http_client or DefaultAsyncHttpxClient(follow_redirects=False, **local_http_options(base_url)))
         self.last_usage: dict | None = None
 
     async def stream(self, model: str, messages: list[dict], tools: list[dict] | None = None,
@@ -123,8 +173,9 @@ class LLMClient:
         web page answering 200 where the API was expected, or an empty body, ended Claude Code's turn
         with an empty reply and no reason (SealedLore's e947938, as DA Vibe Manager's d6f1ca8). A body
         with data lines is read whatever its content type says, and one that says nothing but "[DONE]"
-        is the empty reply its endpoint sent. Stopped or cancelled, the connection is dropped, so the
-        provider stops generating."""
+        is the empty reply its endpoint sent. A stream that ends with neither a finish reason nor
+        "[DONE]" was cut off (`_cut_off`): what arrived is no reply. Stopped or cancelled, the
+        connection is dropped, so the provider stops generating."""
         from openai import APIError
         from openai.types.chat import ChatCompletionChunk
         digest = hashlib.sha256()
@@ -158,6 +209,9 @@ class LLMClient:
                     yield event
             if not seen:
                 raise _no_stream(response)
+            if not done and acc.result.finish_reason is None:
+                # it ended saying neither why nor that it had: the connection closed mid-answer
+                raise _cut_off(response)
         if exact:
             acc.result.body_hash = "sha256:" + digest.hexdigest()
 
@@ -197,6 +251,20 @@ def _no_stream(response) -> ProviderError:
         f"{shown(str(response.http_request.url))} answered HTTP {response.status_code} ({kind[:80]}) with no reply "
         "in it, not the stream a chat endpoint sends: a web page answers like this where the API was expected (an "
         "address without its /v1, say).",
+        status_code=response.status_code,
+    )
+
+
+def _cut_off(response) -> ProviderError:
+    """A stream that ended without the provider saying the reply was done (no finish reason and no "[DONE]"),
+    as the error to raise: the connection closed mid-answer, at a proxy's time limit or a server that crashed.
+    What had arrived was taken for the whole reply: a command cut short in the middle, a tool call with half
+    its arguments (DA Toolkit's 87f270f, as DA Vibe Manager's). A reply the provider ended itself ("length",
+    "content_filter") is not this: it is whole as far as it goes, and says why it stopped."""
+    return ProviderError(
+        "the reply stopped before it was finished: the connection closed mid-answer, and "
+        f"{shown(str(response.http_request.url))} never said the reply was complete. What arrived of it is not a "
+        "whole reply, so nothing in it was taken; asking again may work.",
         status_code=response.status_code,
     )
 

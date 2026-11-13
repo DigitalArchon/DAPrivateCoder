@@ -16,6 +16,7 @@ import re
 import httpx
 
 from ..netpolicy import check_url
+from .secure_http import local_http_options
 
 # NanoGPT's published Private Mode markup on its TEE/ counterpart's prices (Sept 2026)
 PRIVATE_MARKUP = 1.05
@@ -105,7 +106,8 @@ def _pricing(p) -> dict | None:
 
 async def fetch_nanogpt(base_url: str, http: httpx.AsyncClient | None = None) -> dict[str, dict]:
     check_url(base_url, "NanoGPT's base URL")
-    client = http or httpx.AsyncClient(timeout=30)
+    # as every client built for a provider's address: a local one is reached directly (secure_http.local_http_options)
+    client = http or httpx.AsyncClient(timeout=30, **local_http_options(base_url))
     try:
         r = await client.get(base_url.rstrip("/") + "/models", params={"detailed": "true"})
         r.raise_for_status()
@@ -122,7 +124,7 @@ async def fetch(provider: str, base_url: str, http: httpx.AsyncClient | None = N
     if provider != "openrouter":
         return None
     check_url(base_url, "OpenRouter's base URL")
-    client = http or httpx.AsyncClient(timeout=30)
+    client = http or httpx.AsyncClient(timeout=30, **local_http_options(base_url))
     try:
         r = await client.get(base_url.rstrip("/") + "/models")
         r.raise_for_status()
