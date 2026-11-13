@@ -21,6 +21,10 @@ PRIVATE = Profile("private", "private", "private/glm-5-3", "private/kimi-k3-1-pr
                   "private/deepseek-v4-1-flash", "low")
 NANO = Profile("nano", "standard", "z-ai/glm-5.3", "moonshotai/kimi-k3", "z-ai/glm-5.3-flash", "", "low")
 BIN = Path(sys.executable).parent
+# the claude-private command: the console script a venv has beside its Python, else as AppRun runs it (the
+# AppImage has no console scripts: packaging/appimage/build.sh; packaging/test-locked.sh runs the suite there)
+CLAUDE_PRIVATE = [str(BIN / "claude-private")] if (BIN / "claude-private").exists() else \
+    [sys.executable, "-I", "-m", "daprivatecoder", "claude-private"]
 
 
 def program(path: Path, text: str = "#!/bin/sh\n") -> Path:
@@ -206,7 +210,7 @@ def test_a_whole_session_with_a_stand_in_for_claude_code(tmp_path):
     result = tmp_path / "result.json"
     started = time.monotonic()
     with window_open(env):
-        done = subprocess.run([str(BIN / "claude-private"), str(stand_in), "--output-format", "stream-json"], env=env,
+        done = subprocess.run([*CLAUDE_PRIVATE, str(stand_in), "--output-format", "stream-json"], env=env,
                               capture_output=True, text=True, timeout=60)
     assert done.returncode == 0, done.stderr
     out = json.loads(result.read_text())
@@ -235,7 +239,7 @@ def test_nothing_is_sent_while_da_private_coder_is_closed(tmp_path):
     env = session_env(tmp_path)
     stand_in = program(tmp_path / "ext" / "resources" / "native-binary" / "claude", STAND_IN.format(python=sys.executable))
     started = time.monotonic()
-    done = subprocess.run([str(BIN / "claude-private"), str(stand_in)], env=env, capture_output=True, text=True,
+    done = subprocess.run([*CLAUDE_PRIVATE, str(stand_in)], env=env, capture_output=True, text=True,
                           timeout=60)
     assert done.returncode == 0, done.stderr
     out = json.loads((tmp_path / "result.json").read_text())
@@ -244,7 +248,7 @@ def test_nothing_is_sent_while_da_private_coder_is_closed(tmp_path):
     assert out["count"][0] == 403 and out["probe"] == 200
     session = next(r for r in read(tmp_path / "state" / "daprivatecoder" / "requests.log") if r["kind"] == "session")
     proxy_gone(session, started)
-    terminal = subprocess.run([str(BIN / "claude-private"), "-p", "hi"], env=env, capture_output=True, text=True,
+    terminal = subprocess.run([*CLAUDE_PRIVATE, "-p", "hi"], env=env, capture_output=True, text=True,
                               timeout=60)
     assert terminal.returncode != 0 and "DA Private Coder isn't open" in terminal.stderr
 
