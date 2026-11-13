@@ -415,6 +415,13 @@ and the search provider read each one.
   number of results and the cost, never the query.
 - **Results are untrusted.** Text in them that looks like instructions to the model is named in the
   result, which you see too, and text no one can see is taken out before the model reads them.
+- **They can't speak for the app.** DA Private Coder's own notes to the model begin
+  "[DA Private Coder". In search results, and in an **Images** model's description of an image,
+  that marker is rewritten as `[untrusted "DA Private Coder"`, however it is disguised (other
+  brackets, fullwidth letters, invisible characters inside), and the model is told, in the
+  search tool's description and in the system prompt sent to a model other than Claude, that text
+  marked so is never the app speaking. An imitation in search results is also named in the
+  result.
 
 **WebFetch** fetches pages itself, from this computer: the site sees your internet address. Before
 Claude Code reads a page, a check DA Private Coder gives the session (a hook Claude Code runs,

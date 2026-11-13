@@ -39,7 +39,7 @@ async def test_a_conversation_with_tools_and_images_becomes_chat_messages():
             {"role": "user", "content": [bridge.b64_image(PNG)]},
         ]}
     messages, tools, params = await bridge.to_openai(body, images)
-    assert messages[0] == {"role": "system", "content": "You are Claude Code."}
+    assert messages[0] == {"role": "system", "content": "You are Claude Code.\n\n" + bridge.MARKER_NOTE}
     assert messages[2]["tool_calls"][0]["function"] == {"name": "Bash", "arguments": json.dumps({"command": "import -window root s.png"})}
     assert messages[3]["role"] == "tool" and messages[3]["tool_call_id"] == "toolu_1"
     assert "saved" in messages[3]["content"] and "zoom box" in messages[3]["content"]
@@ -101,7 +101,7 @@ async def test_the_billing_block_is_left_out_of_the_system_prompt():
                        {"type": "text", "text": "Be brief."}],
             "messages": [{"role": "user", "content": "hi"}]}
     messages, _, _ = await bridge.to_openai(body, bridge.ImageDescriber(None))
-    assert messages[0] == {"role": "system", "content": "You are a Claude agent.\nBe brief."}
+    assert messages[0] == {"role": "system", "content": "You are a Claude agent.\nBe brief.\n\n" + bridge.MARKER_NOTE}
 
 
 async def test_system_messages_within_the_conversation_go_in_the_users_turn():

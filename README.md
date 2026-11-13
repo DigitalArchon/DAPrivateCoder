@@ -285,7 +285,9 @@ search provider reads it, without characters no one can see; and a session makes
 searches. With Best results, a provider that fails on NanoGPT's side is replaced by Valyu, and if
 your NanoGPT account requires zero data retention, by Linkup; the result tells the model which ran.
 Results are untrusted: text in them that looks like instructions to the model is named in the result
-(which you see too), and hidden text is taken out before the model reads them.
+(which you see too), and hidden text is taken out before the model reads them. Nor can they speak
+for the app: its marker, "[DA Private Coder", is rewritten in them (and in an image's description)
+as `[untrusted "DA Private Coder"`, which the model is told is never the app.
 
 The address of every page WebFetch reads is checked the same way before Claude Code fetches it, by
 a hook DA Private Coder gives the session: one that carries this computer's names, an e-mail, MAC or
