@@ -178,6 +178,14 @@ as usual (plain `claude`, or a folder not chosen for DA Private Coder) is Anthro
   provider says it's complete is an error, and nothing in it (a half-written command) is used. Nor
   is a reply read on past 32 MB without a line's end (a private model's included): it is an error,
   and nothing more of it is read.
+- **An answer is read only so far.** Every client that reads what a provider, NanoGPT's relay or an
+  attestation service sends (Claude's own requests through the proxy included) asks for gzip or
+  deflate compression alone (never br or zstd, which can unpack without bound) and refuses an answer
+  sent any other way, unread; a reply read whole, a model list or an attestation is read to 32 MB at
+  most, and an error's text to 64 KB, the rest left unread (both counted as unpacked). JSON nested
+  more than 200 levels deep is refused as unreadable, never left to crash what reads it: a reply,
+  Claude Code's requests to the proxy and to the search tool, the window's own requests, and the
+  event the WebFetch check is given (which then refuses the fetch).
 - **Its own servers** listen on 127.0.0.1 only: the window's, and one proxy for each session. Each
   does what it is asked only with its own random token ([below](#the-window)).
 

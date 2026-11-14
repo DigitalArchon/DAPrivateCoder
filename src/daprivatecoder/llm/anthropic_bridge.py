@@ -31,6 +31,7 @@ from contextlib import aclosing
 from typing import AsyncIterator, Awaitable, Callable
 
 from ..safety.inject import APP, DEFANGED, defang
+from .secure_http import loads
 
 VISION_PROMPT = """\
 You are the eyes of an AI coding assistant that cannot see images. It is working on software on \
@@ -320,14 +321,14 @@ def _calls_and_stop(result) -> tuple[list, str]:
 
 def _readable(raw: str) -> bool:
     try:
-        return isinstance(json.loads(raw or "{}"), dict)
+        return isinstance(loads(raw or "{}"), dict)
     except ValueError:
         return False
 
 
 def _arguments(raw: str) -> dict:
     try:
-        value = json.loads(raw or "{}")
+        value = loads(raw or "{}")
         return value if isinstance(value, dict) else {"value": value}
     except ValueError:
         return {}

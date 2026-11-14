@@ -147,7 +147,9 @@ def fetch_hook(stdin=None, stdout=None) -> int:
         event = json.load(stdin)
         url = event["tool_input"]["url"]
         found = check_url(url) if isinstance(url, str) else ["an address that isn't text"]
-    except (ValueError, KeyError, TypeError):
+    except (ValueError, KeyError, TypeError, RecursionError):
+        # nested past what the parser reads too: refused as unreadable, never a crash (a hook that fails lets
+        # Claude Code go on)
         found = ["a request the check couldn't read"]
     if found:
         reason = ("Not fetched: the address names this computer or its user, or holds a secret ("

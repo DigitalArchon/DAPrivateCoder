@@ -46,6 +46,7 @@ from .llm import capabilities, routes
 from .llm.dcap import since_boot
 from .llm.anthropic_bridge import VISION_PROMPT, ImageDescriber, estimate_tokens, has_images, message, sse, to_openai
 from .llm.client import RANK, LLMClient, is_claude, is_private_mode, is_tee, private_id, tier_of
+from .llm.secure_http import ACCEPT_ENCODING, loads
 from .llm.private_mode import (Attestation, Enclave, PrivateModeClient, list_private_models, offers_private_mode,
                                relay_said, relay_url)
 from .netpolicy import check_url, key_problem, scrubbed, shown
@@ -176,7 +177,7 @@ class UsageReader:
         for line in lines:
             if line.startswith(b"data:") and b'"usage"' in line:
                 try:
-                    data = json.loads(line[5:])
+                    data = loads(line[5:])
                 except ValueError:
                     continue
                 if not isinstance(data, dict):
@@ -283,7 +284,7 @@ async def answered(events):
 
 def _error_text(raw: bytes) -> str:
     try:
-        data = json.loads(raw)
+        data = loads(raw)
         err = data.get("error", data) if isinstance(data, dict) else data
         msg = err.get("message") if isinstance(err, dict) else err
         return str(msg or data)[:500]
@@ -414,6 +415,27 @@ def _close_when_done(attempt: asyncio.Future) -> None:
     """An attestation given up (Proxy._attest_tee): once its thread is done, what it made is closed, never kept."""
     if not attempt.cancelled() and attempt.exception() is None:
         _close_attested(attempt.result())
+
+
+async def read_capped(response: httpx.Response) -> None:
+    """The proxy's own client's other response hook: an answer read only so far (llm/client.py capped_lines: one
+    compressed in a way not asked for refused unread, an error's body to 64 KB, a whole one to 32 MB, a line to
+    32 MB), its refusals the HTTP errors the callers here take, as refuse_insecure's are."""
+    from .llm.client import capped_lines
+    from .llm.secure_http import ProviderError
+    try:
+        await capped_lines(response)
+    except ProviderError as e:
+        raise httpx.HTTPError(str(e)) from None
+    capped = response.aiter_bytes
+
+    async def aiter_bytes(chunk_size: int | None = None):
+        try:
+            async for chunk in capped(chunk_size):
+                yield chunk
+        except ProviderError as e:
+            raise httpx.HTTPError(str(e)) from None
+    response.aiter_bytes = aiter_bytes
 
 
 async def refuse_insecure(response: httpx.Response) -> None:
@@ -595,8 +617,11 @@ class Proxy:
         from .llm.secure_http import is_local, local_http_options
 
         def make(**options) -> httpx.AsyncClient:
+            # only gzip and deflate asked for, and every answer read only so far (read_capped), a pass-through
+            # stream held to its 32 MB line
             return httpx.AsyncClient(timeout=httpx.Timeout(600, connect=30), follow_redirects=False,
-                                     event_hooks={"response": [refuse_insecure]}, **options)
+                                     headers={"Accept-Encoding": ACCEPT_ENCODING},
+                                     event_hooks={"response": [refuse_insecure, read_capped]}, **options)
         if self._http is not None:
             return self._http
         if is_local(url):
@@ -947,7 +972,7 @@ class Proxy:
                 return JSONResponse(await self.model_list())
             body = await request.body()
             try:
-                data = json.loads(body)
+                data = loads(body)          # nested past 200 levels is refused as no JSON (secure_http.loads)
             except ValueError:
                 return self._error(Refused(400, "The request body isn't JSON.", "invalid_request_error"))
             if not isinstance(data, dict):
@@ -1142,7 +1167,7 @@ class Proxy:
                 await resp.aclose()
                 if whole:
                     try:
-                        usage.usage = anthropic_usage(json.loads(whole).get("usage"))
+                        usage.usage = anthropic_usage(loads(whole).get("usage"))
                     except (ValueError, AttributeError):
                         pass
                 self._record("request", **rec, status=resp.status_code, bytes_in=n,

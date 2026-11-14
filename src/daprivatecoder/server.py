@@ -9,7 +9,6 @@ page exchanges once for the token (POST /api/launch), as DA Vibe Manager's windo
 from __future__ import annotations
 
 import hmac
-import json
 import os
 import secrets
 import socket
@@ -27,6 +26,7 @@ from starlette.staticfiles import StaticFiles
 from . import creds
 from .config import ConfigError
 from .editor import EditorError
+from .llm.secure_http import loads
 from .manager import Manager, UserError, in_thread
 from .netpolicy import scrubbed
 
@@ -115,7 +115,8 @@ def create_app(token: str, manager: Manager, desktop=None, on_quit: Callable[[],
             if given is None or not hmac.compare_digest(given.encode("utf-8", "surrogateescape"), token.encode()):
                 return JSONResponse({"error": "This page isn't DA Private Coder's window."}, status_code=403, headers=HEADERS)
             try:
-                body = await request.json() if request.method == "POST" and await request.body() else {}
+                # JSON from outside: nested past 200 levels refused as no JSON (llm/secure_http.loads), never a crash
+                body = loads(await request.body()) if request.method == "POST" and await request.body() else {}
             except ValueError:
                 return JSONResponse({"error": "That wasn't JSON."}, status_code=400, headers=HEADERS)
             if not isinstance(body, dict):
@@ -232,7 +233,7 @@ def create_app(token: str, manager: Manager, desktop=None, on_quit: Callable[[],
             if len(body) > LAUNCH_BODY:
                 return JSONResponse({"error": "request too large"}, status_code=413, headers=HEADERS)
         try:
-            code = str(json.loads(body).get("code") or "")
+            code = str(loads(body).get("code") or "")
         except (ValueError, AttributeError):
             code = ""
         client = request.client

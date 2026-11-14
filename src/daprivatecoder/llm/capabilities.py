@@ -16,10 +16,17 @@ import re
 import httpx
 
 from ..netpolicy import check_url
-from .secure_http import local_http_options
+from .client import reading_options
+from .secure_http import loads
 
 # NanoGPT's published Private Mode markup on its TEE/ counterpart's prices (Sept 2026)
 PRIVATE_MARKUP = 1.05
+
+
+def _listed(response) -> list:
+    """A model listing's entries, its JSON read as JSON from outside is (secure_http.loads)."""
+    data = loads(response.content)
+    return (data.get("data") if isinstance(data, dict) else None) or []
 
 
 def norm_id(model_id: str) -> str:
@@ -106,12 +113,12 @@ def _pricing(p) -> dict | None:
 
 async def fetch_nanogpt(base_url: str, http: httpx.AsyncClient | None = None) -> dict[str, dict]:
     check_url(base_url, "NanoGPT's base URL")
-    # as every client built for a provider's address: a local one is reached directly (secure_http.local_http_options)
-    client = http or httpx.AsyncClient(timeout=30, **local_http_options(base_url))
+    # as every client built for a provider's address: a local one is reached directly (client.reading_options)
+    client = http or httpx.AsyncClient(timeout=30, **reading_options(base_url))
     try:
         r = await client.get(base_url.rstrip("/") + "/models", params={"detailed": "true"})
         r.raise_for_status()
-        return parse(r.json().get("data", []))
+        return parse(_listed(r))
     finally:
         if http is None:
             await client.aclose()
@@ -124,11 +131,11 @@ async def fetch(provider: str, base_url: str, http: httpx.AsyncClient | None = N
     if provider != "openrouter":
         return None
     check_url(base_url, "OpenRouter's base URL")
-    client = http or httpx.AsyncClient(timeout=30, **local_http_options(base_url))
+    client = http or httpx.AsyncClient(timeout=30, **reading_options(base_url))
     try:
         r = await client.get(base_url.rstrip("/") + "/models")
         r.raise_for_status()
-        return parse_openrouter(r.json().get("data", []))
+        return parse_openrouter(_listed(r))
     finally:
         if http is None:
             await client.aclose()

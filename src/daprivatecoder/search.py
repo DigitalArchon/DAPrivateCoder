@@ -34,6 +34,7 @@ import httpx
 
 from . import __version__, creds, identity
 from .llm import websearch
+from .llm.secure_http import loads
 from .safety.hidden import visible
 from .safety.inject import DEFANGED, defang, suspicious
 from .usagelog import UsageLog
@@ -244,7 +245,7 @@ async def serve_stdio(server: SearchServer) -> None:
         if not line.strip():
             continue
         try:
-            msg = json.loads(line)
+            msg = loads(line)
         except ValueError:
             await send(_error(None, -32700, "Not JSON."))
             continue
