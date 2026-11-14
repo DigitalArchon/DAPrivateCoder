@@ -120,7 +120,7 @@ async def test_sealed_request_protocol():
     client = relay.client()
     events = await collect(client)
     result = events[-1][1]
-    assert events[0] == ("open", None) and events[1] == ("text", "Checking.")   # "open": the sealed reply began
+    assert events[0] == ("text", "Checking.")       # "open" only when asked for (the proxy's OpenedPrivateClient)
     assert result.tool_calls[0].name == "Bash" and json.loads(result.tool_calls[0].arguments) == {"command": "df -h"}
     assert relay.verifies == 1 and relay.keys == [KEY]           # sealed to the attested key
     pre, auth = relay.preflights[0]
@@ -577,3 +577,19 @@ async def test_a_line_of_the_enclaves_stream_past_32_mb_is_refused():
     relay = Relay(replies=[(200, "data: " + "x" * (33 << 20))])
     with pytest.raises(ProviderError, match="more than 32 MB"):
         await collect(relay.client())
+
+
+async def test_the_proxys_sealing_client_says_when_the_sealed_reply_has_begun():
+    """The shared client (llm/private_mode.py, DA Toolkit's copy line for line) says ("open", None) only when
+    asked: the proxy's own (OpenedPrivateClient) asks every time, so Claude Code hears the provider's answer
+    as soon as the sealed reply has begun, as for its other models (proxy.answered)."""
+    from daprivatecoder.proxy import OpenedPrivateClient, Proxy
+    import inspect
+
+    relay = Relay()
+    client = OpenedPrivateClient(BASE, "sk-test", Enclave(RELAY, verifier=relay.verifier),
+                                 transport_factory=relay.transport,
+                                 plain_http=httpx.AsyncClient(transport=httpx.MockTransport(relay.preflight)))
+    kinds = [kind for kind, _ in await collect(client)]
+    assert kinds[0] == "open" and kinds.count("open") == 1 and kinds[1] == "text" and kinds[-1] == "done"
+    assert inspect.signature(Proxy).parameters["private_client"].default is OpenedPrivateClient

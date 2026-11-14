@@ -291,6 +291,17 @@ def _error_text(raw: bytes) -> str:
         return raw.decode("utf-8", errors="replace")[:500]
 
 
+class OpenedPrivateClient(PrivateModeClient):
+    """The sealing client as the proxy uses it: its stream says ("open", None) once the enclave's sealed reply
+    has begun, as LLMClient's says once a provider's has (`answered` tells Claude Code the provider's answer
+    then, before the first word). The shared client (llm/private_mode.py, DA Toolkit's copy line for line)
+    says so only when asked (`opened`), which this asks for every time."""
+
+    def stream(self, *args, **kwargs):
+        kwargs.setdefault("opened", True)
+        return super().stream(*args, **kwargs)
+
+
 PrivateClientFactory = Callable[[str, str, Enclave], object]   # (base_url, key, enclave) -> PrivateModeClient
 PlainClientFactory = Callable[[str, "str | None"], object]     # (base_url, key) -> LLMClient
 # (NanoGPT's base_url, key, model) -> the attestation (AttestedTee, or what it found: no reply is checked then)
@@ -343,11 +354,7 @@ def upstream_view(upstream) -> dict:
     """Who ran a TEE reply's model (llm/tee.py served_by), as its check's log line carries it: RedPill's record
     as read, the provider's name as the mark shows it ("Phala"), and what it means, for the mark's tooltip (DA
     Vibe Manager's models.upstream_view)."""
-    from dataclasses import asdict
-
-    from .llm import tee
-    return {**asdict(upstream), "label": tee.upstream_label(upstream) if upstream.name else "",
-            "words": tee.upstream_words(upstream)}
+    return upstream.to_dict()
 
 
 def as_sent(rec: dict, ended: dict) -> dict:
@@ -435,7 +442,7 @@ class Proxy:
     def __init__(self, profile: Profile, base_url: str, token: str,
                  key: Callable[[], str | None] | None = None, log: UsageLog | None = None,
                  http: httpx.AsyncClient | None = None,
-                 private_client: PrivateClientFactory = PrivateModeClient,
+                 private_client: PrivateClientFactory = OpenedPrivateClient,
                  capabilities_loader: Callable[[], Awaitable[dict]] | None = None,
                  private_lister: Callable[[], Awaitable[list[str]]] | None = None,
                  provider_url: str = "", provider_key: Callable[[], str | None] | None = None,

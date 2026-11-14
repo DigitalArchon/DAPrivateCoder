@@ -189,3 +189,13 @@ def check_key(key, name: str = "the provider"):
     if problem:
         raise UnusableKey(problem)
     return key
+
+
+# The names the shared TEE and Private Mode clients (llm/tee.py, llm/private_mode.py: DA Toolkit's
+# copies, line for line) call this module by, as DA Toolkit's llm/netguard.py has them.
+is_local = is_local_host
+
+
+def check(url: str | None) -> str:
+    """`url`, stripped, if DA Private Coder may use it, else InsecureURL saying why (check_url)."""
+    return check_url(url or "")

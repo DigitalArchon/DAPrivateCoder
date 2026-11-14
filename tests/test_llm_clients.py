@@ -245,12 +245,12 @@ async def test_a_model_server_that_never_answers_the_connection_fails_soon(monke
 # --- the lines of a stream: read in linear time, and none past 32 MB (SealedLore's streaming.read_lines) -----------
 
 async def _read_lines(pieces: list[bytes]) -> list[str]:
-    from daprivatecoder.llm.client import _lines
+    from daprivatecoder.llm.client import read_lines
 
     async def chunks():
         for piece in pieces:
             yield piece
-    return [line async for line in _lines(chunks())]
+    return [line async for line in read_lines(chunks())]
 
 
 async def test_a_streams_lines_end_where_an_event_streams_do_and_nowhere_else():
@@ -277,9 +277,9 @@ async def test_a_line_past_32_mb_is_an_error_and_nothing_more_is_read():
         while True:
             read.append(1)
             yield b"x" * (1 << 20)
-    from daprivatecoder.llm.client import _lines
+    from daprivatecoder.llm.client import read_lines
     with pytest.raises(ProviderError, match="more than 32 MB with no end"):
-        async for _ in _lines(endless()):
+        async for _ in read_lines(endless()):
             pass
     assert len(read) == 33
 
@@ -316,7 +316,7 @@ async def test_what_the_sdk_reads_itself_is_capped_under_it_too():
         return httpx2.Response(200, content=arriving(), headers={"content-type": "application/json"})
     client = LLMClient("https://nano-gpt.com/api/v1", "k",
                        sdk_http_client("https://nano-gpt.com/api/v1", transport=httpx2.MockTransport(answer)))
-    with pytest.raises(ProviderError, match="more than 32 MB with no end"):
+    with pytest.raises(ProviderError, match="sent more than 32 MB"):        # a whole reply, and its line
         await client.complete("z-ai/glm-5.3", USER)
     assert len(asked) == 1                      # said, in words, and not asked again
     # a reply of a usual size is read as before

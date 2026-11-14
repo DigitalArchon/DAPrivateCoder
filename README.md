@@ -174,7 +174,7 @@ GLM-5.3 Flash for quick tasks and images). Before anything is sent to one, its e
 and again every 15 minutes, the time the computer slept included: its Intel TDX quote is verified up
 to Intel's root (every certificate in its chain one allowed to issue it), with Intel's revocation
 lists and TCB ratings, and its GPUs' evidence by NVIDIA's attestation service, all bound to a nonce
-of this session's (DA Vibe Manager's verifier). An enclave that doesn't hold gets nothing, nor does one
+of this session's (DA Toolkit's verifier, which every DA app carries). An enclave that doesn't hold gets nothing, nor does one
 whose evidence can't be read or whose attestation isn't done within three minutes. A new NanoGPT key
 drops the attestations made with the old one: each model is attested again with it.
 

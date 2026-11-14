@@ -101,12 +101,12 @@ def test_check_says_what_a_tee_models_attestation_was_of(ring, monkeypatch, caps
     names what was attested now, and what that leaves to someone's word (SealedLore's, Nov 11 2026)."""
     from daprivatecoder import proxy
     from daprivatecoder.llm import capabilities
-    from daprivatecoder.llm.tee import GPUS_LOOSE, MODEL_ENCLAVE_UNCHECKED
+    from daprivatecoder.llm.tee import GPUS_LOOSE, OWN_ENCLAVE_UNCHECKED
 
     async def listed(*_a, **_k):
         return {}
-    gateway = {"level": "partial", "attested": "gateway", "shortfalls": [MODEL_ENCLAVE_UNCHECKED, GPUS_LOOSE],
-               "summary": f"partially verified: {MODEL_ENCLAVE_UNCHECKED}, {GPUS_LOOSE} (8 GPUs verified by NVIDIA)"}
+    gateway = {"level": "partial", "attested": "gateway", "shortfalls": [OWN_ENCLAVE_UNCHECKED, GPUS_LOOSE],
+               "summary": f"partially verified: {OWN_ENCLAVE_UNCHECKED}, {GPUS_LOOSE} (8 GPUs verified by NVIDIA)"}
     found = {"TEE/glm-5.3": gateway, "TEE/glm-5.3-flash": gateway,
              "TEE/kimi-k3": {"level": "full", "attested": "instances", "instances": 4,
                              "summary": "Intel TDX quote verified (4 instances, 32 GPUs verified by NVIDIA)"}}
