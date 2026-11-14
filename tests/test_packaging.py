@@ -319,6 +319,34 @@ def test_the_test_tools_are_pytests_alone_locked_and_installed_apart():
     assert "packaging/test-locked.sh" in README.split("## Releasing")[1]
 
 
+# The test the fake checkout's image is tested with: it must be the image's own daprivatecoder that is imported, from
+# wherever that Python keeps its packages (lib, or lib64 as Fedora's does: a venv of Fedora's Python imports it
+# through lib64, and the lab's Fedora VM failed this when only lib was taken, Nov 14 2026).
+SHIPPED_TEST = (
+    "import re\nimport sys\n\nimport daprivatecoder\n\n\n"
+    "def in_the_image(path):\n"
+    "    return re.search(r'/squashfs-root/usr/python/lib(64)?/python3', path) is not None\n\n\n"
+    "def test_it_is_the_image_that_is_tested():\n"
+    "    assert in_the_image(daprivatecoder.__file__) and sys.flags.isolated\n"
+    "    assert sys.path[-1].endswith('/test-tools') and sys.dont_write_bytecode\n")
+
+
+@pytest.mark.parametrize("path,image", [
+    ("/tmp/w/squashfs-root/usr/python/lib/python3.12/site-packages/daprivatecoder/__init__.py", True),
+    ("/tmp/w/squashfs-root/usr/python/lib64/python3.12/site-packages/daprivatecoder/__init__.py", True),
+    ("/home/u/daprivatecoder/src/daprivatecoder/__init__.py", False),
+    ("/tmp/w/squashfs-root/usr/python/library/daprivatecoder/__init__.py", False)])
+def test_the_shipped_test_finds_the_image_wherever_its_python_keeps_packages(path, image, monkeypatch):
+    import types
+
+    stand_in = types.ModuleType("daprivatecoder")
+    stand_in.__file__ = path
+    monkeypatch.setitem(sys.modules, "daprivatecoder", stand_in)
+    shipped: dict = {}
+    exec(SHIPPED_TEST, shipped)
+    assert shipped["in_the_image"](path) is image
+
+
 @pytest.fixture
 def locked_repo(tmp_path):
     """A checkout with test-locked.sh, two tests and a daprivatecoder of one file; an "AppImage" that
@@ -336,10 +364,7 @@ def locked_repo(tmp_path):
     (repo / "src" / "daprivatecoder" / "__init__.py").write_text('__version__ = "9.9"\n')
     (repo / "src" / "daprivatecoder" / "web" / "app.js").write_text("// the page\n")
     (repo / "tests").mkdir()
-    (repo / "tests" / "test_shipped.py").write_text(
-        "import sys\n\nimport daprivatecoder\n\n\ndef test_it_is_the_image_that_is_tested():\n"
-        "    assert '/squashfs-root/usr/python/lib/' in daprivatecoder.__file__ and sys.flags.isolated\n"
-        "    assert sys.path[-1].endswith('/test-tools') and sys.dont_write_bytecode\n")
+    (repo / "tests" / "test_shipped.py").write_text(SHIPPED_TEST)
     (repo / "tests" / "failing.py").write_text("def test_that_fails():\n    assert not 'what ships works'\n")
     (repo / ".gitignore").write_text("dist/\n")
     (repo / "packaging" / "appimage" / "test-requirements.lock").write_text(
