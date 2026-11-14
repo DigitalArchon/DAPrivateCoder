@@ -464,6 +464,11 @@ async def test_enclave_checks_say_what_was_attested_and_what_is_someones_word(wi
     assert "passes NanoGPT's servers in the clear" in glm["what"]
     assert rows["TEE/kimi-k3"]["attested_as"] == "TEE attested" and "each of the 4 instances" in rows["TEE/kimi-k3"]["what"]
     assert rows["TEE/old"]["attested_as"] == "TEE attested, only in part" and rows["TEE/old"]["what"] == ""
+    # what each shortfall costs, for its tooltip, an older entry's too (the cross-app standard, Nov 14 2026)
+    from daprivatecoder.llm.tee import SHORTFALL_COSTS
+    assert glm["costs"] == [SHORTFALL_COSTS[OWN_ENCLAVE_UNCHECKED], SHORTFALL_COSTS[GPUS_LOOSE]]
+    assert rows["TEE/old"]["costs"] == [SHORTFALL_COSTS["receipt keys not in the quote"]]
+    assert rows["TEE/kimi-k3"]["costs"] == []
     assert "attested_as" not in rows["TEE/qwen3.8-27b"] and rows["TEE/qwen3.8-27b"]["error"]
     from daprivatecoder.usagelog import read
     logged = [r for r in read(config.state_dir() / "requests.log") if r.get("model") == "TEE/glm-5.3"]

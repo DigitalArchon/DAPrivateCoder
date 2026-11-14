@@ -764,7 +764,8 @@ function verifySection(st) {
     h("div", {}, h("span", { class: `chip ${t.error ? "bad" : t.level === "full" ? "ok" : "tee"}` }, t.error ? "failed" : attestedAs(t)),
       " ", h("b", {}, t.model), t.error ? ` ${t.error}` : ""),
     t.what ? h("div", { class: "small" }, t.what) : null,
-    t.error ? null : h("div", { class: "small muted" }, t.summary),
+    // what each shortfall costs, as its tooltip (manager.tee_attestations: llm/tee.py SHORTFALL_COSTS)
+    t.error ? null : h("div", { class: "small muted", title: (t.costs || []).join("\n\n") || null }, t.summary),
     h("div", { class: "small muted" }, `Checked ${t.t ? t.t.slice(0, 16).replace("T", " ") : ""}.`)));
   return h("div", { class: "section" }, h("h3", {}, "Enclave checks"),
     h("div", { class: "small muted" }, "Private models"),

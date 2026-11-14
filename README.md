@@ -208,7 +208,8 @@ check (refused, stopped or cut short) is marked **TEE ⚠ not shown to reach the
 routes each request, and only a record the attested key signed shows the enclave received it.
 
 Most of NanoGPT's TEE models attest only in part, which **Enclave checks** in the window (and
-`daprivatecoder check --profile tee`) says, beginning with what was attested. For a model RedPill
+`daprivatecoder check --profile tee`) says, beginning with what was attested; hover over what was
+found for what each shortfall costs. For a model RedPill
 serves, that is RedPill's gateway (**TEE gateway attested**), which passes each request on to the
 machine that runs the model: that machine is the gateway's word, in each reply's receipt, and this app
 doesn't check it ("the model's own enclave unchecked"). The GPU evidence in NanoGPT's report is made

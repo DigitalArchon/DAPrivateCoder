@@ -224,13 +224,18 @@ class Manager:
         """Each TEE model's last attestation (the newest first): what was found, or why it didn't hold. One that
         held says what was attested ("TEE gateway attested" for RedPill's gateway) and, first in what it says of
         it, what that leaves to someone's word (proxy.attested_as, what_attested)."""
+        from .llm.tee import shortfall_cost
         from .proxy import attested_as, what_attested
         last: dict[str, dict] = {}
         for r in usagelog.read(config.state_dir() / "requests.log"):
             if r.get("kind") == "attested_tee" and r.get("model"):
                 found = {k: r.get(k) for k in ("t", "model", "level", "summary", "shortfalls", "attested", "error")}
                 if not r.get("error"):
-                    found.update(attested_as=attested_as(r), what=what_attested(r))
+                    # and what each shortfall costs, for its tooltip (llm/tee.py SHORTFALL_COSTS: the standard every
+                    # DA app keeps), read now, so an attestation logged before has its words too
+                    shortfalls = r.get("shortfalls") if isinstance(r.get("shortfalls"), list) else []
+                    found.update(attested_as=attested_as(r), what=what_attested(r),
+                                 costs=[shortfall_cost(str(w)) for w in shortfalls])
                 last[r["model"]] = found
         return sorted(last.values(), key=lambda a: str(a.get("t")), reverse=True)
 
