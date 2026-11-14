@@ -225,7 +225,9 @@ instances attested (**TEE attested**): Chutes signs no replies, so nothing shows
 answered, and theirs show as not verified, unless RedPill's gateway answered in its place. Where the
 gateway answers some of their requests (GLM 5.1 and 5.2, Kimi K2.6), it is attested too, and they are
 partly verified, like the gateway's own models; if NanoGPT couldn't give the gateway's report just
-then, **Enclave checks** says "RedPill's gateway unchecked". The Tinfoil-hosted `TEE/` models are
+then (an outage, a rate limit, an answer that can't be read), **Enclave checks** says "RedPill's
+gateway unchecked". Receipt keys that say no time they expire, or one that isn't a whole number, are
+left unused ("receipt keys expired"); only keys past the time they say are refused. The Tinfoil-hosted `TEE/` models are
 refused: NanoGPT can't attest them for a fresh nonce.
 
 What an attestation doesn't prove: which software the enclave runs (no measurement is compared with a
