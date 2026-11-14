@@ -495,9 +495,10 @@ place.
   settings name the script, and a copy of them from before is kept beside them
   (`*.daprivatecoder-backup`).
 - **Your keyring**: your API keys, and an address typed with a password.
-- **Public records the private models' checks fetched**: Tinfoil's software and Sigstore's library
-  keep them in their own cache folders (`~/.cache/tinfoil`, `~/.local/share/sigstore-python` and
-  `~/.cache/sigstore-python`).
+- **Public records the private models' checks fetched**: Sigstore's library keeps its public trust
+  root in its own folders (`~/.local/share/sigstore-python` and `~/.cache/sigstore-python`).
+  Tinfoil's software would cache what it fetches (a processor's certificate, which names the chip,
+  among them) in `~/.cache/tinfoil`; the app keeps it from writing anything there.
 - **Claude Code's own files**: Claude Code keeps its conversations, settings and history in
   `~/.claude`, as it always does, in the clear on this computer, whichever kind of session they
   were. DA Private Coder doesn't change that.
