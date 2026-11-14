@@ -46,15 +46,17 @@ def test_both_locks_pin_every_package_they_share_alike():
 
 def test_both_locks_meet_every_floor_pyproject_sets():
     """A floor added for an advisory (certifi's root, brotli's decoder, pyasn1's and dnspython's denials
-    of service) is only as good as the lock that follows it: nothing held them but the locks."""
+    of service), or to keep what the locks ship (cryptography, as in the other DA apps), is only as good as the
+    lock that follows it: nothing held them but the locks."""
     deps = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["dependencies"]
     floors = [re.fullmatch(r"([A-Za-z0-9_.-]+)>=([0-9.]+)", d).groups() for d in deps if ">=" in d]
     assert ("pyasn1", "0.6.5") in floors and ("dnspython", "2.9.0") in floors
+    assert ("cryptography", "50.0.2") in floors
     for pins in (lock_pins(), uv_pins()):
         for name, floor in floors:
             if _name(name) in pins:
                 assert _version(pins[_name(name)]) >= _version(floor), f"{name}=={pins[_name(name)]}"
-    assert {"pyasn1", "dnspython"} <= lock_pins().keys()
+    assert {"pyasn1", "dnspython", "cryptography"} <= lock_pins().keys()
 
 
 # ---------------------------------------------------------------------- what the build downloads

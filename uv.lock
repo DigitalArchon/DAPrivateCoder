@@ -489,6 +489,7 @@ source = { editable = "." }
 dependencies = [
     { name = "brotli" },
     { name = "certifi" },
+    { name = "cryptography" },
     { name = "dnspython" },
     { name = "httpx" },
     { name = "keyring" },
@@ -512,6 +513,7 @@ dev = [
 requires-dist = [
     { name = "brotli", specifier = ">=1.2.1" },
     { name = "certifi", specifier = ">=2026.10.19" },
+    { name = "cryptography", specifier = ">=50.0.2" },
     { name = "dnspython", specifier = ">=2.9.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "keyring", specifier = ">=25.7" },

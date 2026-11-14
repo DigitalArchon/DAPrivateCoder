@@ -39,6 +39,9 @@ dependencies = [
     # floors keep it so (as DA Assistant's private-mode.in does)
     "pyasn1>=0.6.5",
     "dnspython>=2.9.0",
+    # cryptography, which the TEE checks verify Intel's certificates and RedPill's receipts with and EHBP seals
+    # with: both locks ship 50.0.2, and the floor keeps it so, as in the other DA apps (Nov 2026)
+    "cryptography>=50.0.2",
     # The window (app.py), on the host's GTK and WebKitGTK through PyGObject (built from source into the
     # AppImage, packaging/appimage/sdists.lock; from source, the system's)
     "pywebview>=6.2",
