@@ -455,9 +455,9 @@ place.
 - **Settings**: `~/.config/daprivatecoder/config.toml`, with no key in it, and no password but one
   written into it by hand while the keyring couldn't take it ([above](#keys-and-passwords)); the
   folders chosen for your editor (`editor-folders.json`) and the window's own choices
-  (`window.json`) beside it.
+  (`window.json`) beside it, in a folder only you can open.
 - **The request log**: `~/.local/state/daprivatecoder/requests.log` (and one older file once it
-  passes 5 MB), readable only by you: each session's start (its profile, models, provider address
+  passes 5 MB), readable only by you, in a folder only you can open: each session's start (its profile, models, provider address
   without a password, folder and editor), each request (model, how it was sent, status, tokens,
   cost, seconds, and errors without an address's password), each enclave's attestation and what was
   attested, each TEE reply's check (and with the setting on, who ran its model, as RedPill's record

@@ -16,7 +16,7 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .config import config_dir
+from .config import config_dir, made
 
 
 class FoldersError(Exception):
@@ -58,7 +58,7 @@ def load() -> Folders:
 
 def save(f: Folders) -> None:
     p = path()
-    p.parent.mkdir(parents=True, exist_ok=True)
+    made(p.parent)
     fd, tmp = tempfile.mkstemp(dir=p.parent, prefix=p.name + ".")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as out:

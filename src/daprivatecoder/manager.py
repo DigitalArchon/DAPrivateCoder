@@ -111,7 +111,7 @@ class Manager:
     def _save_prefs(self, prefs: dict) -> None:
         import tempfile
         path = prefs_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
+        config.made(path.parent)
         fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".")
         with os.fdopen(fd, "w") as f:
             f.write(json.dumps(prefs, indent=1))

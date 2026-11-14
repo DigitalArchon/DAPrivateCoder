@@ -405,7 +405,7 @@ def _serve(args) -> int:
     settings, about = launcher.settings_file(os.getpid()), launcher.session_file(os.getpid())
     if args.fd is not None:
         # what the window's Sessions says of it: what it runs, where, started by what
-        about.parent.mkdir(parents=True, exist_ok=True)
+        config.made(about.parent)
         fd = os.open(about, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_CLOEXEC, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump({"session": log.session, "profile": profile.name, "kind": profile.kind, "folder": os.getcwd(),

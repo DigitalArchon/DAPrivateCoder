@@ -25,6 +25,7 @@ class UsageLog:
         self._lock = threading.Lock()
 
     def write(self, kind: str, **fields) -> None:
+        from .config import made
         from .netpolicy import scrubbed
         # an address in an error never with its password (httpx's errors name the URL they were for)
         fields = {k: scrubbed(v) if isinstance(v, str) else v for k, v in fields.items()}
@@ -32,7 +33,7 @@ class UsageLog:
         line = json.dumps(record, ensure_ascii=False, default=str) + "\n"
         with self._lock:
             try:
-                self.path.parent.mkdir(parents=True, exist_ok=True)
+                made(self.path.parent)     # the state folder readable by this user alone (config.made)
                 if self.path.exists() and self.path.stat().st_size > MAX_BYTES:
                     os.replace(self.path, self.path.with_name(self.path.name + ".1"))
                 fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)

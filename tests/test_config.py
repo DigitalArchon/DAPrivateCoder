@@ -237,3 +237,43 @@ def test_a_saved_model_is_kept_when_the_default_changes():
     config.save(cfg)                                    # saved again, from the window: still the user's choice
     assert config.load().profile("private").opus_model == "private/kimi-k3"
     assert 'opus_model = "private/kimi-k3"\n' in config.config_path().read_text()
+
+
+def test_the_settings_and_state_folders_are_this_users_alone(tmp_path, monkeypatch):
+    """The request log, each session's token and what it runs where, the window's lock and the settings were in folders
+    made as the umask said, which lets every user of the computer list them (0755): this user's alone now, made so
+    or set so if they were there already. A --config file's folder elsewhere is left as it is."""
+    import os
+    import stat
+
+    from daprivatecoder import gate, launcher
+    from daprivatecoder.usagelog import UsageLog
+
+    def mode(path) -> int:
+        return stat.S_IMODE(os.stat(path).st_mode)
+    old = os.umask(0o022)
+    try:
+        config.load()                                       # made now
+        assert mode(config.config_dir()) == 0o700
+        UsageLog(config.state_dir() / "requests.log", "s").write("session")
+        assert mode(config.state_dir()) == 0o700
+        # there already, as an earlier version made them
+        for folder in (config.config_dir(), config.state_dir()):
+            os.chmod(folder, 0o755)
+        config.load()
+        assert mode(config.config_dir()) == 0o700
+        monkeypatch.setattr(gate, "_held", None)
+        gate.hold()
+        assert mode(config.state_dir()) == 0o700
+        os.chmod(config.state_dir(), 0o755)
+        launcher.write_settings(["--settings", "{}"], 4242)
+        assert mode(config.state_dir()) == 0o700 and mode(launcher.sessions_dir()) == 0o700
+        # a settings file of the user's choosing elsewhere: its folder isn't the app's to change
+        elsewhere = tmp_path / "mine"
+        elsewhere.mkdir(mode=0o755)
+        config.load(elsewhere / "config.toml")
+        assert mode(elsewhere) == 0o755
+    finally:
+        os.umask(old)
+        if gate._held is not None:
+            os.close(gate._held)

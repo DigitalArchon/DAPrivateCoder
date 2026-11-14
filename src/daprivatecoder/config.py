@@ -63,6 +63,27 @@ def config_path() -> Path:
     return config_dir() / "config.toml"
 
 
+def made(folder: Path) -> Path:
+    """`folder`, made if it isn't there. Where it is the app's settings or state folder, or one inside them, that
+    folder and it are readable by this user alone (0700), made so or set so if they were there already: the request
+    log, each session's token and what it runs where, the window's lock and the settings are nobody else's to list or
+    read. They were made as the umask said, which lets every user of the computer list them (0755). A folder elsewhere
+    (a --config file's) is made as the umask says and left as it is."""
+    folder = Path(folder)
+    for own in (config_dir(), state_dir()):
+        if folder == own or own in folder.parents:
+            own.mkdir(parents=True, exist_ok=True, mode=0o700)
+            folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+            for each in {own, folder}:
+                try:
+                    os.chmod(each, 0o700)
+                except OSError:
+                    pass                    # not ours to change: used as it is
+            return folder
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder
+
+
 @dataclass(frozen=True)
 class Profile:
     name: str
@@ -431,8 +452,8 @@ def load(path: Path | None = None) -> Config:
     """The settings, from `path` (default: config_path()), written with the defaults if there are none;
     each address as it was typed (_as_typed)."""
     path = path or config_path()
+    made(path.parent)                       # readable by this user alone, if it is the settings folder
     if not path.exists():
-        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(DEFAULT_TEXT)
     try:
         text = path.read_text()
@@ -475,7 +496,7 @@ def save(cfg: Config, path: Path | None = None) -> Config:
                 pass                                # and never put back: it fits no address but its own
     text = render(on_file)
     saved = parse(text, path)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    made(path.parent)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:

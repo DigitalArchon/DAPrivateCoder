@@ -29,7 +29,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from .config import PROVIDERS, Config, Profile, state_dir
+from .config import PROVIDERS, Config, Profile, made, state_dir
 from .llm.client import RANK, tier_of
 
 # Claude Code's own model names that resolve through the tier variables set below
@@ -376,9 +376,7 @@ def live_sessions() -> list[tuple[int, Path]]:
 def write_settings(args: list[str], pid: int) -> list[str]:
     """`args` with the --settings JSON in a file of its own (settings_file), named in its place. Those
     of sessions that have ended without removing theirs go first."""
-    folder = sessions_dir()
-    folder.mkdir(parents=True, exist_ok=True)
-    os.chmod(folder, 0o700)
+    folder = made(sessions_dir())
     for old in list(folder.glob("settings-*.json")) + list(folder.glob("session-*.json")):
         if not proxy_alive(_pid_of(old)):
             old.unlink(missing_ok=True)
@@ -395,7 +393,7 @@ def write_settings(args: list[str], pid: int) -> list[str]:
 def start_proxy(profile: Profile, sock: socket.socket, token: str, config_path: Path | None,
                 editors: list[tuple[str, Path]] = ()) -> subprocess.Popen:
     errors = state_dir() / "proxy-errors.log"
-    errors.parent.mkdir(parents=True, exist_ok=True)
+    made(errors.parent)
     try:
         if errors.stat().st_size > 1 << 20:
             errors.unlink()

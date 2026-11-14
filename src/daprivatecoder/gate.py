@@ -13,7 +13,7 @@ import os
 import time
 from pathlib import Path
 
-from .config import state_dir
+from .config import made, state_dir
 
 LABELS = {"private": "Private", "tee": "TEE", "standard": "Standard"}
 
@@ -31,7 +31,7 @@ def hold() -> None:
     if _held is not None:
         return
     path = lock_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
+    made(path.parent)
     # close-on-exec: a terminal the window opens mustn't keep it open after the window is gone
     fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o600)
     fcntl.flock(fd, fcntl.LOCK_SH)
