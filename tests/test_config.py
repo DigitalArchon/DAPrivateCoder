@@ -6,7 +6,7 @@ import pytest
 
 from daprivatecoder import config
 from daprivatecoder.config import ConfigError, parse
-from daprivatecoder.netpolicy import InsecureURL, check_url, is_secure
+from daprivatecoder.netpolicy import InsecureURL, check_url, is_local_host, is_secure
 
 
 def test_the_defaults_are_written_on_first_use_and_read_back():
@@ -66,6 +66,25 @@ def test_the_https_rule():
         assert not is_secure(bad), bad
         with pytest.raises(InsecureURL):
             check_url(bad)
+
+
+def test_an_address_is_judged_as_it_will_be_sent():
+    """A space, a backslash or a control character, on which Python's parser and the HTTP library's don't agree where
+    a host ends, and a .local, .localhost or .onion name that a resolver wouldn't read as written, are refused (DA
+    Toolkit's and DA Assistant's netguard)."""
+    for bad in ("http://evil\\.local/v1", "http://evil.example\\@localhost/v1", "https://nano-gpt.com /api/v1",
+                "http://box\t.local/v1", "https://nano-gpt.com/api\x00/v1", "http://a\u2028b.local/", "http://a%2f.local/v1",
+                "http://a%2e.localhost/v1", "http://x%2fy.onion/", "http://evil.example%2f.local/v1"):
+        assert not is_secure(bad), bad
+        with pytest.raises(InsecureURL):
+            check_url(bad)
+    for host in ("a%2f.local", "evil\\.local", "x/y.local", "a b.localhost"):
+        assert not is_local_host(host), host
+    for good in ("http://box.local/v1", "http://my-box_2.local:8080/v1", "http://api.localhost/v1",
+                 "http://[fe80::1%25eth0]:8080/v1", "https://nano-gpt.com/api/v1"):
+        assert is_secure(good) and check_url(good) == good, good
+    with pytest.raises(ConfigError, match="a backslash or a control character"):
+        parse('base_url = "https://nano-gpt.com\\\\@127.0.0.1/api/v1"\n')
 
 
 def test_web_search_is_linkup_in_a_private_profile_unless_chosen_otherwise():

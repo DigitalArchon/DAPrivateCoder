@@ -7,6 +7,12 @@ fc00::/7), link-local, and `.local` names. An onion service is authenticated and
 end by Tor itself, so http to a `.onion` name counts as secure. A URL outside all that which isn't
 https is refused with an explanation, never used and never rewritten.
 
+An address is judged as it will be sent. One with a space, a backslash or a control character in it is
+refused outright: Python's parser and the HTTP library's don't agree on where its host ends
+(`http://evil.example\\@localhost`). And a `.local`, `.localhost` or `.onion` name must be a plain DNS
+name, which a resolver reads as written: "%" or "/" in one ("a%2f.local") reaches DNS as another
+name. (DA Toolkit's and DA Assistant's netguard, Nov 2026.)
+
 A user name and password written into an address (a provider of your own behind a password) are
 never said: every message and log names the address as shown() has it, and the settings file keeps it
 without them (config.py; the keyring has it as typed). And an API key goes only where a header can
@@ -26,8 +32,10 @@ _PRIVATE_NETS = tuple(ipaddress.ip_network(n) for n in (
 ))
 
 
-# What no API key has in it: a backslash, white space, a control character (DA Assistant's netguard)
+# What no API key and no address has in it: a backslash, white space, a control character (DA Assistant's netguard)
 _UNSAFE = re.compile(r"[\\\s\x00-\x1f\x7f]")
+# a name a resolver reads as written: "%", "/" and the like in a name could reach DNS as another (DA Toolkit's)
+_DNS_NAME = re.compile(r"[a-z0-9_-]+(\.[a-z0-9_-]+)*")
 # Everything of a text up to its last "@" before a query or a fragment, the scheme and "//" aside: where
 # an address that can't be read may have a user name and password (DA Assistant's netguard)
 _UP_TO_AT = re.compile(r"^((?:[^:/?#]+:)?//)?[^?#]*@")
@@ -49,8 +57,14 @@ def _ip(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
     return ip
 
 
+def is_dns_name(host: str | None) -> bool:
+    """Whether `host` is a plain DNS name, which a resolver reads as written."""
+    return bool(_DNS_NAME.fullmatch((host or "").strip().lower().rstrip(".")))
+
+
 def is_local_host(host: str | None) -> bool:
-    """localhost, loopback, private, link-local or `.local`. An empty host is not local."""
+    """localhost, loopback, private, link-local or `.local`. An empty host is not local, nor is a `.local`
+    or `localhost` name that isn't a plain DNS name ("a%2f.local")."""
     host = (host or "").lower()
     if host.endswith(".") and _ip(host.rstrip(".")) is not None:
         return False                    # 192.168.1.50. is a name to the resolver, not that address: DNS says where
@@ -58,7 +72,7 @@ def is_local_host(host: str | None) -> bool:
     if not host:
         return False
     if host == "localhost" or host.endswith(".localhost") or host.endswith(".local"):
-        return True
+        return is_dns_name(host)
     ip = _ip(host)
     return ip is not None and any(ip in net for net in _PRIVATE_NETS)
 
@@ -66,11 +80,14 @@ def is_local_host(host: str | None) -> bool:
 def is_onion(host: str | None) -> bool:
     """A Tor onion service's name (Tor encrypts and authenticates the whole way to it)."""
     host = (host or "").lower().rstrip(".")
-    return host.endswith(".onion") and len(host) > len(".onion")
+    return host.endswith(".onion") and len(host) > len(".onion") and is_dns_name(host)
 
 
 def is_secure(url: str) -> bool:
-    """https anywhere, or http to a local address or an onion service."""
+    """https anywhere, or http to a local address or an onion service; never an address with a space, a
+    backslash or a control character in it."""
+    if _UNSAFE.search(url or ""):
+        return False
     try:
         parsed = urlparse(url)
         host = parsed.hostname
@@ -84,6 +101,9 @@ def is_secure(url: str) -> bool:
 def check_url(url: str, what: str = "This address") -> str:
     """Return `url` unchanged if DA Private Coder may use it, else raise InsecureURL saying why."""
     url = (url or "").strip()
+    if _UNSAFE.search(url):
+        raise InsecureURL(f"{what} has a space, a backslash or a control character in it, which no address has, "
+                          f"so DA Private Coder won't use it: {shown(url)[:80]!r}")
     try:
         parsed = urlparse(url)
         host = parsed.hostname

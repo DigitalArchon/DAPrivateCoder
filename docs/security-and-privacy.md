@@ -156,7 +156,10 @@ as usual (plain `claude`, or a folder not chosen for DA Private Coder) is Anthro
   172.16.0.0/12, 192.168.0.0/16 and fc00::/7, link-local addresses and `.local` names) or a Tor
   onion service (`.onion`, which Tor itself encrypts and authenticates end to end), where plain
   `http://` is allowed. An address that is neither is refused, saying why, in the settings file and
-  in the window alike: it is never used, and never quietly rewritten.
+  in the window alike: it is never used, and never quietly rewritten. So is one with a space, a
+  backslash or a control character in it, which the libraries reading it may not agree on, and a
+  `.local` or `.onion` name that isn't a plain one (`a%2f.local`), which could reach the name
+  service as another.
 - **Redirects.** A provider's redirect is never followed, since the request, your words in it and
   the key would go wherever it points: the request fails, and Claude Code is told so. Nor is a
   redirect followed in a TEE model's checks, or for RedPill's record. Tinfoil's checks of a private
