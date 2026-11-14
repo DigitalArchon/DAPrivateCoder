@@ -372,10 +372,11 @@ class AttestedTee:
         (llm/tee.py check; blocking): a ReplyCheck of its mark ("verified", "signed" or "failed"), whether
         its receipt was read under the attested keys and held, and, with `name_upstream`, who ran its model
         (a lookup on api.redpill.ai, the user's choice: llm/tee.py served_by), which never changes the
-        mark. Raises when it can't be checked ("unchecked")."""
+        mark. Its receipt must have been served after its request went (`sent_at`, the client's): one served
+        before is another request's, handed back. Raises when it can't be checked ("unchecked")."""
         return self.client.check(getattr(reply, "id", None), receipt_id=getattr(reply, "receipt_id", None),
                                  body_hash=getattr(reply, "body_hash", None), route=getattr(reply, "tee_route", None),
-                                 name_upstream=name_upstream)
+                                 sent_at=getattr(reply, "sent_at", None), name_upstream=name_upstream)
 
     def close(self) -> None:
         self.client.close()

@@ -11,6 +11,7 @@ import codecs
 import hashlib
 import json
 import re
+import time
 from dataclasses import dataclass, field
 from typing import AsyncIterator
 from urllib.parse import urlparse
@@ -83,6 +84,9 @@ class TurnResult:
     receipt_id: str | None = None
     tee_route: str | None = None
     body_hash: str | None = None
+    # when the request went (time.time(), just before it was sent): a TEE reply's receipt must have been
+    # served after it, or it was another request's handed back (tee.check_reply; SealedLore's 1a61096)
+    sent_at: float | None = None
 
 
 def only_what_it_was_given(sdk_client) -> None:
@@ -179,6 +183,7 @@ class LLMClient:
         from openai import APIError
         from openai.types.chat import ChatCompletionChunk
         digest = hashlib.sha256()
+        acc.result.sent_at = time.time()
         async with self._client.chat.completions.with_streaming_response.create(**kwargs) as response:
             if exact:
                 headers = response.headers

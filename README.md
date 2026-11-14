@@ -180,8 +180,10 @@ drops the attestations made with the old one: each model is attested again with 
 
 Each reply is then checked against the record NanoGPT keeps of it, signed by an attested key: the
 record's hash of the reply must be that of the exact bytes that came, and where RedPill's gateway
-keeps a signed receipt, it must hold too, under the attested keys: the gateway's word that the
-machine the reply came from was verified. The check comes once the reply has reached Claude Code: it
+keeps a signed receipt, it must hold too, under the attested keys: for this reply, served after this
+request was sent (so not an earlier reply handed back), and the gateway's word that the machine the
+reply came from was verified. The receipt's time is held to this computer's clock, give or take five
+minutes, so a clock that is far out makes replies fail their check. The check comes once the reply has reached Claude Code: it
 never holds a reply up or changes it. A TEE **Images** model's description of an image (for a model
 that can't see) is a reply too, checked the same way. **Usage** and **Running now** mark each TEE
 request, and each image a TEE model described, with what it found; hovering over a mark says what in
@@ -196,7 +198,8 @@ in the clear:
   keeps none), so nothing shows it came from the attested enclave. A model attested through the
   gateway alone has its own enclave only as the gateway's word: a reply of it with no receipt that
   holds is marked so too;
-- **⚠ reply check failed**: the reply doesn't match its record. The enclave is attested again before
+- **⚠ reply check failed**: the reply doesn't match its record, or its receipt doesn't hold (another
+  key, another reply, one served before this request was sent). The enclave is attested again before
   anything more is sent to that model.
 
 A request is shown to have reached the attested enclave only by its reply: **Running now** says it

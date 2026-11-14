@@ -305,8 +305,10 @@ sent to, and said.
 **After each reply**, once it has reached Claude Code (it is never held up or changed), the app
 fetches the record NanoGPT keeps of it, signed by an attested key, and checks it against the exact
 bytes that came back; and where the gateway kept a signed receipt for the reply, that too, under
-the attested keys: for the same exchange, saying the machine the reply came from was verified,
-which is the gateway's word. A TEE **Images** model's description of an image is a reply too,
+the attested keys: for the same exchange, served after this request was sent (so not an earlier reply
+handed back by whoever relays it), saying the machine the reply came from was verified, which is the
+gateway's word. The receipt's time is held to this computer's clock, give or take five minutes, so a
+clock that is far out makes replies fail their check. A TEE **Images** model's description of an image is a reply too,
 checked the same way. **Usage** and **Running now** mark each TEE request with what its reply's
 check found:
 
@@ -318,7 +320,8 @@ check found:
   check couldn't be made), so nothing shows it came from the attested enclave. A model attested
   through the gateway alone has its own enclave only as the gateway's word, so a reply of it with
   no receipt that holds is marked so too.
-- **TEE ⚠ reply check failed**: the reply doesn't match its record. The app attests the model
+- **TEE ⚠ reply check failed**: the reply doesn't match its record, or its receipt doesn't hold
+  (another key, another reply, one served before this request was sent). The app attests the model
   again before anything more is sent to it.
 
 Hovering over a mark says what it means, what in it is the gateway's word, whether the reply's receipt
