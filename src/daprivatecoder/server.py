@@ -139,6 +139,11 @@ def create_app(token: str, manager: Manager, desktop=None, on_quit: Callable[[],
         provider = str(body.get("provider") or "nanogpt")
         if body.get("from") == "vibe-manager":
             await in_thread(manager.import_key)
+        elif "in_the_clear" in body:
+            # only a JSON true sends the key unencrypted: anything else is No, or Ask again (null)
+            answer = body["in_the_clear"]
+            await in_thread(manager.answer_in_the_clear, provider, True if answer is True else None if answer is None
+                            else False)
         elif body.get("clear"):
             await in_thread(manager.clear_key, provider)
         else:

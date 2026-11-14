@@ -97,9 +97,12 @@ def _key(args) -> int:
         name = f"the provider at {shown(base_url)}"
     flag = "" if provider == "nanogpt" else f" --provider {provider}"
     if args.action == "status":
-        key = creds.get_key(provider, base_url)
+        key = creds.get_key(provider, base_url, sending=False) if provider == "custom" else creds.get_key(provider, base_url)
         print(f"A key for {name} is stored in your keyring (ending {key[-4:]})." if key
               else f"No key for {name} is stored. Store one with: daprivatecoder key set{flag}")
+        if key and creds.in_the_clear_state(provider, base_url) in ("ask", "declined"):
+            print(f"It isn't sent there: it would go unencrypted, over plain http. Store it again with: daprivatecoder "
+                  f"key set{flag} in a terminal, and answer y, or use the server's https:// address.")
         return 0
     if args.action == "clear":
         creds.delete_key(provider, base_url)
@@ -124,6 +127,15 @@ def _key(args) -> int:
                        "picked up where it was copied from, perhaps): nothing was stored.")
     creds.set_key(key, provider, base_url)
     print(f"The key for {name} is stored in your keyring.")
+    if creds.in_the_clear_state(provider, base_url) in ("ask", "declined"):
+        # plain http to another machine on your network: anyone on it can read what goes, the key included
+        asked = (f"It would go unencrypted, over plain http, to {shown(base_url)}, where anyone on your network can "
+                 "read it. Send it there? [y/N] ")
+        yes = sys.stdin.isatty() and input(asked).strip().lower() in ("y", "yes")
+        creds.answer_in_the_clear(provider, base_url, yes)
+        print("It is sent there unencrypted from now on." if yes else
+              "It isn't sent there: use the server's https:// address, or store the key again in a terminal and "
+              "answer y.")
     return 0
 
 

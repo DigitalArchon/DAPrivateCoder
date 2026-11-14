@@ -199,3 +199,31 @@ is_local = is_local_host
 def check(url: str | None) -> str:
     """`url`, stripped, if DA Private Coder may use it, else InsecureURL saying why (check_url)."""
     return check_url(url or "")
+
+
+def is_loopback_host(host: str | None) -> bool:
+    """`host` is this computer itself (127.0.0.0/8, ::1, a localhost name), as written: what goes there over plain
+    http never leaves it. Any other local host is another machine (nothing is looked up), and plain http to it can
+    be read by anyone on the network between, a café's or a hotel's Wi-Fi included. (SealedLore's
+    models/config.is_loopback_host.)"""
+    host = (host or "").lower()
+    if host.endswith(".") and _ip(host.rstrip(".")) is not None:
+        return False                    # a name to the resolver, not that address
+    host = host.rstrip(".")
+    if host == "localhost" or host.endswith(".localhost"):
+        return is_dns_name(host)
+    ip = _ip(host)
+    return ip is not None and ip.is_loopback
+
+
+def in_the_clear(url: str | None) -> bool:
+    """Whether what is sent to `url` crosses a network unencrypted: plain http to another machine on the local network
+    (allowed, is_secure, but anyone on that network can read it), not to this computer itself, nor to an onion
+    service, which Tor encrypts. A key is sent there only once the user has said so (creds.get_key; the cross-app
+    standard, as SealedLore's keys_in_the_clear)."""
+    try:
+        parsed = urlparse((url or "").strip())
+        host = parsed.hostname
+    except ValueError:
+        return False
+    return parsed.scheme == "http" and is_local_host(host) and not is_loopback_host(host)

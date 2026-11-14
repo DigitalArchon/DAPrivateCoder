@@ -574,8 +574,8 @@ class Proxy:
     def _read_key(self, provider: str = "nanogpt") -> str | None:
         try:
             key = self._key() if provider == "nanogpt" else self._provider_key()
-        except (creds.KeyUnusable, creds.KeyElsewhere) as e:
-            raise Refused(403, str(e)) from None
+        except (creds.KeyUnusable, creds.KeyElsewhere, creds.KeyInTheClear) as e:
+            raise Refused(403, str(e)) from None            # said, and nothing sent: never sent without it instead
         except creds.KeyringUnavailable as e:
             if provider == "custom":
                 return None                                  # a server of your own may need none: it says if it does

@@ -18,7 +18,15 @@ port) it was stored for, and a key is read for an address only when that address
 provider of your own's from https to http, gets no key, and says why and what to do (KeyElsewhere). A
 key stored before origins were kept takes the origin of the address it is first read for, with no
 question. No key is ever deleted for it. (A provider of your own's key was already its server's own,
-by host and port: `account`.)"""
+by host and port: `account`.)
+
+Nor does a key cross a network unencrypted without the user's say (the cross-app standard, Nov 2026, as
+SealedLore's keys_in_the_clear): to plain http on another machine of the local network (netpolicy.in_the_clear),
+where anyone on it can read it, a key goes only once the user has agreed for that origin (`answer_in_the_clear`:
+the window asks, No the default, and a No is kept for that origin, not asked again; `daprivatecoder key set`
+asks in a terminal). Without that it is refused, in words naming the address and the ways out (KeyInTheClear).
+A key already going there when this version first reads it (stored before origins were kept) is taken as agreed,
+once, with no question, as its origin is."""
 
 from __future__ import annotations
 
@@ -39,6 +47,11 @@ class KeyringUnavailable(Exception):
 class KeyElsewhere(KeyringUnavailable):
     """The key stored was stored for another address than the one it would be sent to now: nothing is sent. A
     KeyringUnavailable, so whatever says why there is no key to send says this too."""
+
+
+class KeyInTheClear(KeyringUnavailable):
+    """The key would go over plain http to another machine on the local network, which the user hasn't agreed to
+    for that address: nothing is sent. A KeyringUnavailable, so whatever says why there is no key says this too."""
 
 
 class KeyUnusable(KeyringUnavailable):
@@ -104,6 +117,10 @@ def account(provider: str = "nanogpt", base_url: str = "") -> str:
 
 # the keyring entry of the origin a key was stored for, beside the key's own (its account's name)
 ORIGIN = "{}_origin"
+# the origin the user agreed the key may go to over plain http (another machine on the local network), and the one
+# they said no for (kept so that the window doesn't ask again: answer_in_the_clear)
+CLEAR = "{}_in_the_clear"
+CLEAR_NO = "{}_in_the_clear_no"
 
 
 def origin(url: str) -> str:
@@ -138,6 +155,8 @@ def _held_to(user: str, provider: str, base_url: str) -> None:
     if kept is None and here:
         try:
             _keep(ORIGIN.format(user), here)
+            if in_the_clear(base_url):
+                _keep(CLEAR.format(user), here)     # already going there, unencrypted: as before, with no question
         except KeyringUnavailable:
             pass                                    # used as before, and its origin kept the next time it can be
         return
@@ -175,16 +194,72 @@ def _drop(user: str) -> None:
     _known.pop((SERVICE, user), None)
 
 
-def get_key(provider: str = "nanogpt", base_url: str = "") -> str | None:
+def in_the_clear(base_url: str) -> bool:
+    from .netpolicy import in_the_clear as crosses
+    return crosses(base_url)
+
+
+def get_key(provider: str = "nanogpt", base_url: str = "", *, sending: bool = True) -> str | None:
     """The provider's key (NanoGPT's when not said), or None if none is stored. With `base_url`, the address it is
-    to go to: KeyElsewhere if the key was stored for another origin (none is sent). Raises KeyUnusable for one no
-    header can carry (stored before this was checked, or by another program)."""
+    to go to: KeyElsewhere if the key was stored for another origin, KeyInTheClear if it would go there over plain
+    http to another machine without the user's say (`sending`: the window's look at what is stored asks neither).
+    None is sent then. Raises KeyUnusable for one no header can carry (stored before this was checked, or by another
+    program)."""
     user = account(provider, base_url)
     key = _get(SERVICE, user)
     _usable(key, provider)
     if key and base_url:
         _held_to(user, provider, base_url)
+    # the key, or a password written into the address (sent beside it as a login), over plain http to another
+    # machine of the network: only once the user has said so for that address
+    if sending and base_url and (key or has_password(base_url)) and in_the_clear(base_url) \
+            and _get(SERVICE, CLEAR.format(user)) != origin(base_url):
+        from .netpolicy import shown
+        what = "key" if key else "password in its address"
+        raise KeyInTheClear(
+            f"The {what} for {NAMES.get(provider, provider)} would go unencrypted, over plain http, to "
+            f"{shown(base_url)}, another machine on your network, where anyone on it can read it, so nothing was "
+            "sent. Use the server's https:// address, or say Yes where DA Private Coder's window asks (Models, "
+            "Standard, API key), or store the key again with `daprivatecoder key set --provider custom` in a "
+            "terminal, which asks.")
     return key
+
+
+def has_password(url: str) -> bool:
+    from urllib.parse import urlparse
+    try:
+        parsed = urlparse(url)
+        return parsed.username is not None or parsed.password is not None
+    except ValueError:
+        return False
+
+
+def in_the_clear_state(provider: str, base_url: str) -> str:
+    """What the user said of the key going over plain http to `base_url`: "" (it doesn't: https, or this computer),
+    "allowed", "declined" (asked, and No: not asked again for that origin), or "ask"."""
+    if not in_the_clear(base_url):
+        return ""
+    user, here = account(provider, base_url), origin(base_url)
+    if _get(SERVICE, CLEAR.format(user)) == here:
+        return "allowed"
+    return "declined" if _get(SERVICE, CLEAR_NO.format(user)) == here else "ask"
+
+
+def answer_in_the_clear(provider: str, base_url: str, allow: bool | None) -> None:
+    """The user's answer for the key going over plain http to `base_url`'s origin: True sends it there from now on,
+    False keeps it from there and isn't asked again for that origin, None asks again (the window's Ask again)."""
+    user, here = account(provider, base_url), origin(base_url)
+    if allow is True:
+        _keep(CLEAR.format(user), here)
+        _drop(CLEAR_NO.format(user))
+    elif allow is False:
+        _keep(CLEAR_NO.format(user), here)
+        if _get(SERVICE, CLEAR.format(user)) == here:
+            _drop(CLEAR.format(user))
+    else:
+        _drop(CLEAR_NO.format(user))
+        if _get(SERVICE, CLEAR.format(user)) == here:
+            _drop(CLEAR.format(user))
 
 
 def set_key(value: str, provider: str = "nanogpt", base_url: str = "") -> None:
@@ -204,6 +279,8 @@ def delete_key(provider: str = "nanogpt", base_url: str = "") -> None:
     user = account(provider, base_url)
     _drop(user)
     _drop(ORIGIN.format(user))
+    _drop(CLEAR.format(user))
+    _drop(CLEAR_NO.format(user))
 
 
 # the keyring entry of an address typed with a user name and password (`setting`: config.py's name for

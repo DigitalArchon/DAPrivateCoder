@@ -217,10 +217,15 @@ as usual (plain `claude`, or a folder not chosen for DA Private Coder) is Anthro
   random, made for each run, and never on a command line, which anyone logged in to the computer can
   read. A session's token is in a settings file only you can read, gone with the session.
 
-The app doesn't warn before a key would go over plain `http://` to another machine on your network:
-a provider of your own may have such an address, and its key, and a password written into its
-address, then go unencrypted to it. Anyone on that network could read them. Use the server's
-`https://` address where it has one.
+- **Nothing secret goes over plain `http://` to another machine on your network without your
+  say.** A provider of your own may have such an address; its key, and a password written into its
+  address, would then go unencrypted, where anyone on that network (a café's or a hotel's Wi-Fi too)
+  can read them. The window asks first, where its address and key are (Models, Standard), No the
+  default: until you say yes nothing is sent there, and a No is kept for that address, not asked
+  again (Ask me again takes it back); `daprivatecoder key set --provider custom` asks in a terminal.
+  A key that was already going there before this version goes on as it did. To this computer
+  (`localhost`, `127.0.0.1`), or to an onion service, nothing is asked: it doesn't cross a network
+  in the clear. Use the server's `https://` address where it has one.
 
 ## How a session runs: the proxy
 
@@ -525,8 +530,8 @@ own; what the app starts for you, the web browser it opens included, still gets 
   model, its searches and the addresses WebFetch reads. A page WebFetch reads sees your internet
   address, and text in a page or a file can try to steer the model: read what Claude Code asks to
   run before you allow it.
-- **A key over plain http** to another machine on your network is readable by anyone on that
-  network ([above](#keys-and-passwords)).
+- **A key over plain http** to another machine on your network, once you have said yes, is readable
+  by anyone on that network ([above](#keys-and-passwords)).
 - **Your computer itself.** Anyone, or anything, that already controls your account or your
   computer can read what the app and Claude Code keep there.
 

@@ -451,8 +451,40 @@ function providerRows(st, tab, p, save) {
       h("div", { class: "row" }, keys.stored ? h("span", { class: "small muted" }, `Stored (ending ${pk.ending})`) : null,
         ...keys.controls),
       keys.extra, !keys.stored && p.provider === "custom" ? h("div", { class: "small muted" }, "Only if the provider needs one.") : null)));
+    const clear = inTheClear(pk, p.provider);
+    if (clear) rows.push(h("div", { class: "model-row" }, h("span", {}), clear));
+    // a saved key held to the address it was stored for, not this one (creds.KeyElsewhere): it says which, and the
+    // field above takes a key for this one
+    if (pk.error) rows.push(h("div", { class: "model-row" }, h("span", {}), h("div", { class: "warnbox" }, pk.error)));
   }
   return rows;
+}
+
+// A key that would go over plain http to another machine on your network (creds.py, the cross-app standard): asked
+// once for that address, No the first button and the one focused, and a No kept, so it isn't asked at every save;
+// "Ask me again" takes it back. Until you say Yes the key isn't sent there.
+function inTheClear(pk, provider) {
+  const answer = (value, said) => act("POST", "/api/key", { provider, in_the_clear: value }, said);
+  const where = pk.clear_host || "that address";
+  if (pk.in_the_clear === "ask") {
+    const no = h("button", { class: "small primary", onclick: () => answer(false, "The key isn't sent there.") }, "No, don't send it");
+    setTimeout(() => no.focus(), 0);
+    return h("div", { class: "warnbox" },
+      h("div", {}, `Send the API key unencrypted to ${where}? It goes over plain http to another machine on your network, `
+        + "where anyone on that network can read it (a café's or a hotel's Wi-Fi too). Until you say yes it isn't sent there; "
+        + "the server's https:// address needs no question."),
+      h("div", { class: "row" }, no, h("button", { class: "small standard", onclick: () => answer(true,
+        "The key is sent there unencrypted from now on.") }, "Send it unencrypted")));
+  }
+  if (pk.in_the_clear === "declined") {
+    return h("div", { class: "small muted" }, `The saved key isn't sent to ${where} over plain http (you said no). `,
+      h("button", { class: "small ghost", onclick: () => answer(null) }, "Ask me again"));
+  }
+  if (pk.in_the_clear === "allowed") {
+    return h("div", { class: "small muted" }, `The key goes unencrypted to ${where}, as you said. `,
+      h("button", { class: "small ghost", onclick: () => answer(null) }, "Ask me again"));
+  }
+  return null;
 }
 
 function modelsSection(st) {

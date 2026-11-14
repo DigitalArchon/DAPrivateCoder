@@ -75,10 +75,16 @@ def _reply_of(record: dict, checks: dict[tuple, dict]) -> dict:
 
 
 def _key_state(provider: str = "nanogpt", base_url: str = "") -> dict:
-    out = {"provider": provider, "stored": False, "ending": "", "error": ""}
+    """What the window shows of a provider's key: whether one is stored, and, for one that would go over plain http
+    to another machine on your network, what you said of that (creds.in_the_clear_state: "ask" until you answer;
+    `clear_host` the machine's address as shown)."""
+    out = {"provider": provider, "stored": False, "ending": "", "error": "", "in_the_clear": "", "clear_host": ""}
     try:
-        stored = creds.get_key(provider, base_url)
+        stored = creds.get_key(provider, base_url, sending=False)
         out.update(stored=bool(stored), ending=stored[-4:] if stored else "")
+        if (stored or creds.has_password(base_url)) and base_url:
+            out["in_the_clear"] = creds.in_the_clear_state(provider, base_url)
+            out["clear_host"] = shown(base_url) if out["in_the_clear"] else ""
     except creds.KeyringUnavailable as e:
         out["error"] = str(e)
     return out
@@ -254,6 +260,13 @@ class Manager:
                             "has, picked up where it was copied from, perhaps. Nothing was stored: copy it again and "
                             "paste it here.")
         creds.set_key(key, *self._provider_of(provider))
+
+    def answer_in_the_clear(self, provider: str, allow) -> None:
+        """Your answer for a provider's key going over plain http to another machine on your network (the window's
+        question): True sends it, False doesn't and isn't asked again for that address, None asks again."""
+        if allow not in (True, False, None):
+            raise UserError("The answer must be yes, no, or ask again.")
+        creds.answer_in_the_clear(*self._provider_of(provider), allow)
 
     def import_key(self) -> None:
         key = creds.vibe_manager_key()
