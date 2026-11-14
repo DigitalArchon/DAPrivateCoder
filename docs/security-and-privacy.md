@@ -164,8 +164,9 @@ as usual (plain `claude`, or a folder not chosen for DA Private Coder) is Anthro
   your network, Sigstore's trust root included, which Sigstore's own library fetches for them: a
   redirect it may not follow fails the check, and nothing is sent.
 - **Proxies.** The app has no proxy setting of its own: its requests use your system's proxy
-  settings (`HTTPS_PROXY` and the like), as most programs do, except a request to a model server
-  on this computer or your network (a provider of your own), which never goes through a proxy. It
+  settings (`HTTPS_PROXY` and the like, with `NO_PROXY` honoured), as most programs do, a private
+  model's encrypted request included, except a request to a model server on this computer or your
+  network (a provider of your own), which never goes through a proxy. It
   doesn't run Tor or send anything through it itself.
 - **Nothing else from your environment.** A model provider gets the key you gave the app and
   nothing that OpenAI's library would take from your environment (`OPENAI_ORG_ID`,

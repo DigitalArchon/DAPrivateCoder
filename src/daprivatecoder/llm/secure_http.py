@@ -63,6 +63,32 @@ def local_http_options(base_url: str) -> dict:
             "mounts": {"all://": None, "http://": None, "https://": None}}
 
 
+def environment_proxy(url: str) -> str | None:
+    """The proxy the environment names for `url` (HTTPS_PROXY, HTTP_PROXY or ALL_PROXY, in either case), as
+    httpx's own clients read it, or None: none named, NO_PROXY exempts its host, or it is on this computer or
+    the local network, which is never handed to a proxy (local_http_options).
+
+    For a client given a transport of its own: httpx takes no proxy from the environment for one (the sealed
+    Private Mode request, llm/private_mode.py), which then went direct, from this computer's own address,
+    beside a preflight and an attestation that had gone through the proxy (DA Assistant's proxy.for_url)."""
+    import urllib.request
+
+    if is_local(url):
+        return None
+    try:
+        parsed = urlparse(url)
+        host = parsed.hostname or ""
+    except ValueError:
+        return None
+    if not host or urllib.request.proxy_bypass_environment(host):
+        return None
+    found = urllib.request.getproxies_environment()
+    chosen = found.get(parsed.scheme.lower()) or found.get("all")
+    if not chosen:
+        return None
+    return chosen if "://" in chosen else f"http://{chosen}"
+
+
 def refuse_insecure_redirect(response: httpx.Response) -> None:
     """A response hook: a redirect to anywhere the app wouldn't send to directly, or from a server
     out on the internet into this computer or the local network (a router's admin page)."""
