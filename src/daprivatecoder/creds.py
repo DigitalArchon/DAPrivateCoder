@@ -149,14 +149,13 @@ def _said(kept: str) -> str:
 
 def _held_to(user: str, provider: str, base_url: str) -> None:
     """Raise KeyElsewhere unless the key `user` names was stored for `base_url`'s origin. A key with no origin kept
-    (stored before they were) takes this one's."""
+    (stored before they were) takes this one's; one going there over plain http to another machine is not taken as
+    agreed to (the author, Nov 14 2026: nothing is grandfathered), and is held back until the user says Yes."""
     here = origin(base_url)
     kept = _get(SERVICE, ORIGIN.format(user))
     if kept is None and here:
         try:
             _keep(ORIGIN.format(user), here)
-            if in_the_clear(base_url):
-                _keep(CLEAR.format(user), here)     # already going there, unencrypted: as before, with no question
         except KeyringUnavailable:
             pass                                    # used as before, and its origin kept the next time it can be
         return

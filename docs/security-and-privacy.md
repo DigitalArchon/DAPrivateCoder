@@ -225,7 +225,7 @@ as usual (plain `claude`, or a folder not chosen for DA Private Coder) is Anthro
   can read them. The window asks first, where its address and key are (Models, Standard), No the
   default: until you say yes nothing is sent there, and a No is kept for that address, not asked
   again (Ask me again takes it back); `daprivatecoder key set --provider custom` asks in a terminal.
-  A key that was already going there before this version goes on as it did. To this computer
+  A key that was already going there before this version is held back too, until you say yes. To this computer
   (`localhost`, `127.0.0.1`), or to an onion service, nothing is asked: it doesn't cross a network
   in the clear. Use the server's `https://` address where it has one.
 

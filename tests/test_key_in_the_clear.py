@@ -54,12 +54,17 @@ def test_https_and_this_computer_need_no_question(ring):
     assert creds.in_the_clear_state("custom", "http://localhost:11434/v1") == ""
 
 
-def test_a_key_already_going_there_before_this_version_goes_on_with_no_question(ring):
+def test_a_key_already_going_there_before_this_version_is_held_back_until_you_say_yes(ring):
     """Stored before origins were kept: it takes the address it is first read for, and one that was going there in
-    the clear is taken as agreed, once, as its origin is (flagged: the author's call to make stricter)."""
+    the clear is not taken as agreed (the author, Nov 14 2026: nothing is grandfathered): refused in words naming the
+    address and where to say Yes, and the window asks (state "ask"), No first."""
     ring.store[("daprivatecoder", "custom:192.168.1.5:8080")] = "sk-before"
+    with pytest.raises(creds.KeyInTheClear, match="192.168.1.5:8080.*say Yes where DA Private Coder's window asks"):
+        creds.get_key("custom", BOX)
+    assert creds.in_the_clear_state("custom", BOX) == "ask"
+    assert creds.get_key("custom", BOX, sending=False) == "sk-before", "kept, never deleted"
+    creds.answer_in_the_clear("custom", BOX, True)
     assert creds.get_key("custom", BOX) == "sk-before"
-    assert creds.in_the_clear_state("custom", BOX) == "allowed"
 
 
 def test_the_proxy_refuses_it_before_anything_is_sent(ring):
