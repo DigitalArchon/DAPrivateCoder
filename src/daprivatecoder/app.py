@@ -16,7 +16,7 @@ import threading
 import time
 from pathlib import Path
 
-from .hostenv import HOST_TYPELIB_DIRS, set_for_self
+from .hostenv import HOST_TYPELIB_DIRS, open_url, set_for_self
 
 NAME = "DA Private Coder"
 DESKTOP_ID = "daprivatecoder"
@@ -195,8 +195,8 @@ def browser_opener(port: int, launches):
     since what a browser is opened with is on its command line, which every user of this computer can read.
     As DA Vibe Manager's does (41f957d); it says whether a browser could be started."""
     def open_in_browser() -> bool:
-        import webbrowser
-        return webbrowser.open(f"http://127.0.0.1:{port}/#c={launches.new()}") is not False
+        # the browser gets the environment as it was (hostenv.open_url): not this process's GTK_USE_PORTAL=0
+        return open_url(f"http://127.0.0.1:{port}/#c={launches.new()}") is not False
     return open_in_browser
 
 

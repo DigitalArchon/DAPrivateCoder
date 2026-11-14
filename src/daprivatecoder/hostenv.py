@@ -7,6 +7,7 @@ Vibe Manager's hostenv.py."""
 from __future__ import annotations
 
 import os
+import threading
 
 # where the system keeps its GObject introspection typelibs (Fedora, Debian/Ubuntu, Arch)
 HOST_TYPELIB_DIRS = ("/usr/lib64/girepository-1.0", "/usr/lib/x86_64-linux-gnu/girepository-1.0",
@@ -35,3 +36,31 @@ def host_env(**extra: str) -> dict[str, str]:
             env[name] = value
     env.update(extra)
     return env
+
+
+_ENVIRON = threading.Lock()
+
+
+def _set(values: dict[str, str | None]) -> None:
+    for name, value in values.items():
+        if value is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = value
+
+
+def open_url(url: str) -> bool:
+    """webbrowser.open(`url`), the browser it starts given what set_for_self changed as it was (GTK_USE_PORTAL
+    above all: this process's 0, which the portal's refusal of an undumpable process needs, would have the
+    browser's own file dialogs skip the portal the desktop asks for). webbrowser takes no environment of its
+    own: the variables are put back for the call, under a lock, and set again after it. The cross-app
+    standard, Nov 2026."""
+    import webbrowser
+
+    with _ENVIRON:
+        mine = {name: os.environ.get(name) for name in ORIGINAL}
+        _set(ORIGINAL)
+        try:
+            return webbrowser.open(url)
+        finally:
+            _set(mine)

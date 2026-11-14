@@ -499,11 +499,13 @@ RedPill's session records.
 
 A crash writes none of it to disk: each of the app's own processes (the window, the commands, a
 session's proxy and search server, and the check of the pages Claude Code reads) turns core dumps off
-as it starts. Claude Code, which `claude-private` starts, and what the window opens for you (your
-editor, a terminal) begin with core dumps off too, and may turn them on again (`ulimit -c`).
+as it starts: the system may not take a core of it, the core size limit is 1 (which the kernel
+refuses outright, where a limit of 0 is ignored by systemd's crash collector), and the core's memory
+filter is empty. Claude Code, which `claude-private` starts, and what the window opens for you (your
+editor, a terminal) begin with that limit and filter too, and may raise the limit again (`ulimit -c`).
 The desktop's file-dialog service (xdg-desktop-portal) won't serve a process set this way, so
 where your desktop asks programs for its dialogs (`GTK_USE_PORTAL=1`), the folder chooser is GTK's
-own; what the app starts for you still gets your desktop's choice.
+own; what the app starts for you, the web browser it opens included, still gets your desktop's choice.
 
 ## What the app can't protect you from
 

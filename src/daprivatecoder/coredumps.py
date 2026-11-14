@@ -1,17 +1,22 @@
 """No core dumps: a crash must not write a process's memory to disk. The proxy holds every
 session's requests and replies in the clear (a private model's too, once opened from what the enclave
-sealed), the window and the commands the NanoGPT key, a search the user's query. As SealedLore's
-gui/app.py _no_core_dumps (Nov 2026), called first by every entry point the app has: the window, every
-command (cli.main), claude-private, the session's proxy (serve) and search server (search-server), and
-WebFetch's check (identity.py).
+sealed), the window and the commands the NanoGPT key, a search the user's query. Called first by every
+entry point the app has: the window, every command (cli.main), claude-private, the session's proxy
+(serve) and search server (search-server), and WebFetch's check (identity.py). The same three steps as
+every DA app (the cross-app standard, Nov 2026; DA Privacy Kit's coredump_filter):
 
-Not dumpable (PR_SET_DUMPABLE 0) stops the kernel writing a core of the process, and so the system's
-collector (systemd-coredump reads the flag, not the limit), and, as a side effect, a debugger attaching
-from another process. The core size's soft limit 0 stops a core file too. Its hard limit is left as it
-was: Claude Code (which claude-private becomes), the editor and the terminals the window opens inherit
-the limit, and a hard 0 would keep the programs the user runs in them from ever having a core dump of
-their own, `ulimit -c` included. Not dumpable isn't inherited past a program's start (exec). Linux
-only; anything that fails is let go."""
+- not dumpable (PR_SET_DUMPABLE 0): the kernel writes no core of the process, and so neither does the
+  system's collector (systemd-coredump reads the flag, not the limit), and, as a side effect, no
+  debugger attaches from another process;
+- the core size's soft limit 1: the kernel aborts the core of a process whose limit is exactly 1, even
+  of a dumpable one ("RLIMIT_CORE is set to 1, aborting core"), where a limit of 0 alone is ignored by
+  systemd-coredump's pipe (measured on MintDev, Nov 14 2026). The hard limit is left as it was: Claude
+  Code (which claude-private becomes), the editor and the terminals the window opens inherit the soft
+  limit, and may raise it again (`ulimit -c`), as a hard 0 would never let them;
+- /proc/self/coredump_filter 0: whatever core is written anyway holds none of the process's memory.
+
+Not dumpable isn't inherited past a program's start (exec); the limit and the filter are. Linux only;
+anything that fails is let go."""
 
 from __future__ import annotations
 
@@ -21,15 +26,22 @@ PR_SET_DUMPABLE = 4
 
 
 def no_core_dumps() -> None:
+    if not sys.platform.startswith("linux"):
+        return
+    try:
+        # first: once not dumpable, the process's own /proc files are root's, this one included
+        with open("/proc/self/coredump_filter", "w", encoding="ascii") as f:
+            f.write("0")
+    except OSError:
+        pass
     try:
         import resource
 
         _soft, hard = resource.getrlimit(resource.RLIMIT_CORE)
-        resource.setrlimit(resource.RLIMIT_CORE, (0, hard))
+        soft = 1 if hard == resource.RLIM_INFINITY else min(1, hard)
+        resource.setrlimit(resource.RLIMIT_CORE, (soft, hard))
     except (ImportError, ValueError, OSError):
         pass
-    if not sys.platform.startswith("linux"):
-        return
     try:
         import ctypes
 

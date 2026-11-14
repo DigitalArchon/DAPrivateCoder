@@ -239,7 +239,10 @@ _, hard = resource.getrlimit(resource.RLIMIT_CORE)
 resource.setrlimit(resource.RLIMIT_CORE, (hard, hard))      # cores allowed, as a shell may start it
 assert libc.prctl(3, 0, 0, 0, 0) == 1                        # PR_GET_DUMPABLE: dumpable to begin with
 {run}
-print("\\n" + str(libc.prctl(3, 0, 0, 0, 0)), resource.getrlimit(resource.RLIMIT_CORE) == (0, hard), flush=True)
+with open("/proc/self/coredump_filter") as f:
+    kept = int(f.read(), 16)
+soft = 1 if hard == resource.RLIM_INFINITY else min(1, hard)
+print("\\n" + str(libc.prctl(3, 0, 0, 0, 0)), resource.getrlimit(resource.RLIMIT_CORE) == (soft, hard), kept, flush=True)
 """
 
 
@@ -254,11 +257,12 @@ print("\\n" + str(libc.prctl(3, 0, 0, 0, 0)), resource.getrlimit(resource.RLIMIT
 ])
 def test_every_entry_point_writes_no_core_dump(run, tmp_path):
     """A crash must not write the process's memory to disk (the proxy holds every session's words in the clear):
-    not dumpable, and a core size of 0, its hard limit left for the programs the user runs."""
+    not dumpable, a core size of 1 (the kernel aborts such a core, where 0 alone is ignored by systemd-coredump's
+    pipe), its hard limit left for the programs the user runs, and a coredump_filter of 0."""
     import subprocess
 
     env = {**os.environ, "XDG_CONFIG_HOME": str(tmp_path / "config"), "XDG_STATE_HOME": str(tmp_path / "state")}
     done = subprocess.run([sys.executable, "-c", _DUMP_STATE.format(run=run)], capture_output=True, text=True,
                           env=env, timeout=60, check=False)
     assert done.returncode == 0, done.stderr
-    assert done.stdout.splitlines()[-1] == "0 True"
+    assert done.stdout.splitlines()[-1] == "0 True 0"
