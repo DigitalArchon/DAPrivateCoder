@@ -445,7 +445,7 @@ function providerRows(st, tab, p, save) {
   }
   const pk = st.provider_key;
   if (pk && !S.customUrl) {
-    const label = p.provider === "openrouter" ? "OpenRouter" : "your provider's";
+    const label = p.provider === "openrouter" ? "OpenRouter" : "provider's";     // after "Paste your"
     const keys = keyControls(`provider:${p.provider}`, pk, p.provider, label, "The key is stored in your keyring.");
     rows.push(h("div", { class: "model-row" }, h("label", {}, "API key"), h("div", { class: "col" },
       h("div", { class: "row" }, keys.stored ? h("span", { class: "small muted" }, `Stored (ending ${pk.ending})`) : null,

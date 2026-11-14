@@ -159,3 +159,21 @@ def test_a_checkbox_keeps_its_size_whatever_the_systems_theme_draws():
     assert rule, "no rule sizes a checkbox"
     for wanted in ("width: 15px", "height: 15px", "flex: none"):
         assert wanted in rule.group(2), wanted
+
+
+def test_the_key_fields_ask_for_the_key_in_plain_words():
+    """Each key field's placeholder, the words keyControls puts after "Paste your" (another provider's read "Paste your
+    your provider's API key", seen on the lab VMs, Nov 14 2026)."""
+    text = APP_JS.read_text(encoding="utf-8")
+    label = re.search(r'^    const label = (p\.provider === "openrouter" \? .*?);', text, re.M)
+    assert label and 'keyControls("nanogpt", k, "nanogpt", "NanoGPT",' in text
+    code = script("keyControls") + f"""
+const h = (tag, attrs, ...children) => ({{ tag, attrs, children }});
+const S = {{ drafts: {{}}, replacing: "" }};
+const test = (provider) => {{
+  const p = {{ provider }};
+  const label = provider === "nanogpt" ? "NanoGPT" : {label.group(1)};
+  return keyControls("x", {{ stored: false }}, provider, label, "").controls[0].attrs.placeholder;
+}};"""
+    assert run(code, ["nanogpt", "openrouter", "custom"]) == [
+        "Paste your NanoGPT API key", "Paste your OpenRouter API key", "Paste your provider's API key"]
