@@ -85,6 +85,10 @@ class Attester:
                 else ["the model's own enclave unchecked (RedPill's gateway)"], "gpus": 8, "tcb_status": "UpToDate"}
 
 
+# make(key=FROM_KEYRING): the proxy reads NanoGPT's key from the keyring, as a session does
+FROM_KEYRING = object()
+
+
 def make(profile=PRIVATE, fake=None, handler=None, key="sk-nano", listed=LISTED, log=None, base=BASE, plain=None,
          attester=None, provider_url="", provider_key=None, provider_caps=None):
     fake = fake or FakePrivate()
@@ -103,7 +107,7 @@ def make(profile=PRIVATE, fake=None, handler=None, key="sk-nano", listed=LISTED,
     async def no_plain_caps():
         return provider_caps
 
-    p = Proxy(profile, base, TOKEN, key=lambda: key, log=log,
+    p = Proxy(profile, base, TOKEN, key=None if key is FROM_KEYRING else (lambda: key), log=log,
               http=httpx.AsyncClient(transport=httpx.MockTransport(handler or nothing_in_the_clear)),
               private_client=fake.factory, capabilities_loader=load_caps, private_lister=lister,
               plain_client=(plain or FakePlain()).factory if plain is not False else None,
@@ -260,6 +264,22 @@ async def test_a_key_no_header_can_carry_is_never_sent(profile, model):
     r = await call(p, "POST", "/v1/messages", message(model))
     assert r.status_code == 403 and "no API key has" in r.json()["error"]["message"] and "abc" not in r.text
     assert fake.calls == [] and plain.calls == [] and plain.made == []
+
+
+async def test_nanogpts_key_isnt_sent_to_an_address_edited_since_it_was_stored(ring):
+    """NanoGPT's base_url edited in the settings file (to another of its hosts, here): the key stored for nano-gpt.com
+    isn't sent there, and Claude Code is told why and what to do (creds.KeyElsewhere)."""
+    from daprivatecoder import creds
+
+    creds.set_key("sk-nano-123456", "nanogpt", BASE)
+    p, fake = make(key=FROM_KEYRING)
+    r = await call(p, "POST", "/v1/messages", message("private/glm-5-3", stream=False))
+    assert r.status_code == 200 and fake.calls                                # where it was stored for: sent
+    p, fake = make(key=FROM_KEYRING, base="https://api.nano-gpt.com/api/v1")
+    r = await call(p, "POST", "/v1/messages", message("private/glm-5-3"))
+    said = r.json()["error"]["message"]
+    assert r.status_code == 403 and "stored for https://nano-gpt.com," in said and "api.nano-gpt.com" in said
+    assert "123456" not in r.text and not fake.calls
 
 
 async def test_a_private_model_needs_nanogpt():

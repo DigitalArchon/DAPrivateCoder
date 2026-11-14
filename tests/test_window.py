@@ -245,6 +245,25 @@ async def test_a_key_no_header_can_carry_is_refused_and_never_said(window, ring)
     assert not st["key"]["stored"] and "no API key has" in st["key"]["error"] and "abc" not in st["key"]["error"]
 
 
+async def test_a_key_stored_in_the_window_is_kept_for_its_address_and_said_when_that_changes(window, ring):
+    from dataclasses import replace
+
+    from daprivatecoder import config
+
+    app, *_ = window
+    st = (await call(app, "POST", "/api/key", {"key": "sk-nano-123456"}))[1]
+    assert st["key"]["stored"] and ring.store[("daprivatecoder", "nanogpt_origin")] == "https://nano-gpt.com:443"
+    ring.store[("davibemanager", "provider:NanoGPT")] = "sk-dvm"
+    await call(app, "POST", "/api/key", {"from": "vibe-manager"})
+    assert ring.store[("daprivatecoder", "nanogpt_origin")] == "https://nano-gpt.com:443"
+    # NanoGPT's base_url edited by hand in the settings file: Setup says why the key isn't used, and asks for it
+    config.save(replace(config.load(), base_url="https://other.example/api/v1"))
+    st = (await call(app, "GET", "/api/state"))[1]
+    assert not st["key"]["stored"] and "stored for https://nano-gpt.com," in st["key"]["error"]
+    st = (await call(app, "POST", "/api/key", {"key": "sk-nano-123456"}))[1]
+    assert st["key"]["stored"] and ring.store[("daprivatecoder", "nanogpt_origin")] == "https://other.example:443"
+
+
 async def test_the_private_profile_is_changed_from_the_window_and_never_made_unprivate(window):
     app, *_ = window
     st = (await call(app, "POST", "/api/profile", {"profile": "private", "fields": {"model": "private/kimi-k3",

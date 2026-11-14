@@ -250,7 +250,9 @@ runs the model:
 
 - **NanoGPT** (with your NanoGPT key), **OpenRouter** (with an OpenRouter key), or **another
   provider** with an OpenAI-compatible API (its address: https, or http only on this computer or
-  your network; a key if it needs one). Each key is in your keyring, set in the window. A user name
+  your network; a key if it needs one). Each key is in your keyring, set in the window, and goes only
+  to the address it was set for: change the address to another server, or from https to http, and
+  the key is asked for again. A user name
   and password written into the address (`https://user:password@host/v1`) are kept in your keyring
   too, not in the settings file, and nothing the app shows or logs names them.
 - **Runs on** (per model, NanoGPT and OpenRouter): the provider's own choice of host (on NanoGPT,

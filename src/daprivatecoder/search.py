@@ -90,14 +90,15 @@ def description(mode: str) -> str:
 class SearchServer:
     """The web_search tool, for one session."""
 
-    def __init__(self, mode: str, base_url: str, key: Callable[[], str | None] = creds.get_key,
+    def __init__(self, mode: str, base_url: str, key: Callable[[], str | None] | None = None,
                  log: UsageLog | None = None, http: httpx.AsyncClient | None = None,
                  names: list[str] | None = None, gate: Callable[[], str] | None = None):
         """`gate` says why nothing may be sent now ("": it may), as the session's proxy has it (gate.py)."""
         self._gate = gate
         self.mode = mode
         self.base_url = base_url
-        self._key = key
+        # NanoGPT's key, read for the address the search goes to: one stored for another isn't sent (creds.py)
+        self._key = key or (lambda: creds.get_key("nanogpt", base_url))
         self.log = log
         self.http = http
         self.names = names

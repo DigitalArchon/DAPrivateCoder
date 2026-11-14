@@ -188,7 +188,13 @@ as usual (plain `claude`, or a folder not chosen for DA Private Coder) is Anthro
   keyring the app keeps no key at all, rather than one in a plain file, and says what to install.
   Once read, a key is kept in memory while that part of the app runs, so that a keyring that locks
   itself again doesn't stop a session. A key goes only to its own provider, with your requests:
-  the session's proxy adds it on the way out, and Claude Code never has it. It isn't in any log,
+  the session's proxy adds it on the way out, and Claude Code never has it. And only to the address
+  it was stored for: beside each key the keyring keeps the scheme, host and port it was stored for,
+  and an address edited since to another (NanoGPT's `base_url` changed in the settings file, a
+  provider of your own's moved from `https://` to `http://`) gets no key; the window, the commands
+  and Claude Code are told why, and to store the key again for the new address if that is where it
+  should go. A key stored before this rule takes the address it is first used with. No key is
+  deleted for it. It isn't in any log,
   message or error. A key with a space, a line break or a character no key has in it is refused
   when it is stored and whenever it is read, without being repeated back.
 - **A password written into an address** (`https://user:password@host/v1`, for a provider of your

@@ -433,7 +433,7 @@ class Proxy:
     """One session's proxy: `profile` says which models it uses, and how their requests travel."""
 
     def __init__(self, profile: Profile, base_url: str, token: str,
-                 key: Callable[[], str | None] = creds.get_key, log: UsageLog | None = None,
+                 key: Callable[[], str | None] | None = None, log: UsageLog | None = None,
                  http: httpx.AsyncClient | None = None,
                  private_client: PrivateClientFactory = PrivateModeClient,
                  capabilities_loader: Callable[[], Awaitable[dict]] | None = None,
@@ -453,7 +453,8 @@ class Proxy:
         self.base_url = check_url(base_url, "NanoGPT's base URL").rstrip("/")
         self.token = token
         self.log = log
-        self._key = key
+        # NanoGPT's key, read for its base_url: one stored for another address isn't sent (creds.KeyElsewhere)
+        self._key = key or (lambda: creds.get_key("nanogpt", self.base_url))
         self._http = http                                   # given (tests): every request goes by it
         self._own_http: httpx.AsyncClient | None = None      # the proxy's own, for any address on the internet
         self._local_http: httpx.AsyncClient | None = None    # and for one on this computer or its network
@@ -461,7 +462,7 @@ class Proxy:
         # a standard profile's models are its provider's; a private or TEE profile's, NanoGPT's
         self.provider = profile.provider if profile.kind == "standard" else "nanogpt"
         self.provider_url = check_url(provider_url or self.base_url, f"{NAMES[self.provider]}'s base URL").rstrip("/")
-        self._provider_key = provider_key or (key if self.provider == "nanogpt"
+        self._provider_key = provider_key or (self._key if self.provider == "nanogpt"
                                               else lambda: creds.get_key(self.provider, self.provider_url))
         self._plain_client = plain_client or LLMClient
         self._plain: dict[tuple[str, str], object] = {}
@@ -544,7 +545,7 @@ class Proxy:
     def _read_key(self, provider: str = "nanogpt") -> str | None:
         try:
             key = self._key() if provider == "nanogpt" else self._provider_key()
-        except creds.KeyUnusable as e:
+        except (creds.KeyUnusable, creds.KeyElsewhere) as e:
             raise Refused(403, str(e)) from None
         except creds.KeyringUnavailable as e:
             if provider == "custom":

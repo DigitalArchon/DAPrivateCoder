@@ -5,6 +5,7 @@ import json
 import os
 import sys
 
+import httpx
 import pytest
 
 from daprivatecoder import cli, creds, editor
@@ -148,6 +149,73 @@ def test_a_key_found_missing_is_asked_for_again_and_each_custom_server_has_its_o
     assert creds.account("custom", "http://localhost:8443/v1") == "custom:localhost:8443"
     assert creds.account("custom", "http://localhost:9000/v1") == "custom:localhost:9000"
     assert creds.account("custom", "https://api.example.com/v1") == "custom:api.example.com"
+
+
+# --- a key never follows an edited address (DA Private Coder's creds.py by host and port; the DA apps' rule) -----
+
+NANOGPT = "https://nano-gpt.com/api/v1"
+
+
+def test_a_key_goes_only_to_the_address_it_was_stored_for(ring, monkeypatch, capsys):
+    """NanoGPT's key was the keyring's "nanogpt", whatever base_url said: edited in the settings file to another
+    server, it went there. Its origin is kept beside it now, and it goes nowhere else; it is never deleted for it."""
+    from daprivatecoder import config
+
+    monkeypatch.setattr("sys.stdin", Stdin("sk-nano-123456\n"))
+    assert cli.main(["key", "set"]) == 0
+    assert ring.store[("daprivatecoder", "nanogpt_origin")] == "https://nano-gpt.com:443"
+    assert creds.get_key("nanogpt", NANOGPT) == "sk-nano-123456"
+    assert creds.get_key("nanogpt", "https://NANO-GPT.com:443/api/v2") == "sk-nano-123456"     # the same origin
+    # base_url edited by hand to another server
+    config.config_path().write_text('base_url = "https://evil.example/api/v1"\n')
+    with pytest.raises(creds.KeyElsewhere) as refused:
+        creds.get_key("nanogpt", "https://evil.example/api/v1")
+    said = str(refused.value)
+    assert "stored for https://nano-gpt.com," in said and "evil.example" in said and "123456" not in said
+    assert "key set" in said and isinstance(refused.value, creds.KeyringUnavailable)
+    assert cli.main(["status"]) == 0 and "NanoGPT key: The NanoGPT API key in your keyring was stored for" in \
+        capsys.readouterr().out
+    assert ring.store[("daprivatecoder", "nanogpt")] == "sk-nano-123456"                   # never deleted
+    # stored again, for the address it should go to now: there, and no longer to the old one
+    monkeypatch.setattr("sys.stdin", Stdin("sk-nano-123456\n"))
+    assert cli.main(["key", "set"]) == 0
+    assert creds.get_key("nanogpt", "https://evil.example/api/v1") == "sk-nano-123456"
+    with pytest.raises(creds.KeyElsewhere):
+        creds.get_key("nanogpt", NANOGPT)
+    assert cli.main(["key", "clear"]) == 0 and ("daprivatecoder", "nanogpt_origin") not in ring.store
+
+
+def test_a_key_stored_before_origins_were_kept_takes_the_first_address_it_is_read_for(ring):
+    ring.store[("daprivatecoder", "nanogpt")] = "sk-before"
+    assert creds.get_key("nanogpt", NANOGPT) == "sk-before"                 # no question asked
+    assert ring.store[("daprivatecoder", "nanogpt_origin")] == "https://nano-gpt.com:443"
+    with pytest.raises(creds.KeyElsewhere):
+        creds.get_key("nanogpt", "https://api.nano-gpt.com/api/v1")
+    assert creds.get_key() == "sk-before"                                    # what is stored, said where nothing is sent
+
+
+def test_a_servers_key_of_your_own_doesnt_follow_its_address_from_https_to_http(ring):
+    """It was already its server's own by host and port (account), but https and http to the same host shared one:
+    the key would have crossed the network in the clear."""
+    creds.set_key("sk-box", "custom", "https://192.168.1.5/v1")
+    assert creds.get_key("custom", "https://192.168.1.5/v1") == "sk-box"
+    with pytest.raises(creds.KeyElsewhere, match="stored for https://192.168.1.5,"):
+        creds.get_key("custom", "http://192.168.1.5/v1")
+    assert creds.get_key("custom", "https://192.168.1.6/v1") is None        # another server: none of its own
+
+
+def test_nanogpts_key_reaches_no_search_at_an_address_edited_since_it_was_stored(ring):
+    import asyncio
+
+    from daprivatecoder import search
+
+    creds.set_key("sk-nano-123456", "nanogpt", NANOGPT)
+    asked = []
+    http = httpx.AsyncClient(transport=httpx.MockTransport(lambda r: asked.append(r) or httpx.Response(500)))
+    said, failed = asyncio.run(search.SearchServer("zero-retention", "https://search.example/api/v1", http=http).search(
+        {"query": "python asyncio timeout"}))
+    assert failed and said.startswith("Not searched: The NanoGPT API key") and "stored for https://nano-gpt.com" in said
+    assert asked == []
 
 
 def test_a_settings_file_that_is_a_link_stays_one(tmp_path):

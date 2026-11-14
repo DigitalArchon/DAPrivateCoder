@@ -133,7 +133,7 @@ class Manager:
             out["config_error"] = ""
         except ConfigError as e:
             cfg, out["config"], out["config_error"] = None, None, str(e)
-        key = {**_key_state(), "vibe_manager": False}
+        key = {**_key_state("nanogpt", cfg.base_url if cfg else ""), "vibe_manager": False}
         if not key["stored"] and not key["error"]:
             try:
                 key["vibe_manager"] = bool(creds.vibe_manager_key())
@@ -235,12 +235,15 @@ class Manager:
     # ------------------------------------------------------------------ the keys
 
     def _provider_of(self, provider: str) -> tuple[str, str]:
-        """(provider, its base URL) for a key: a custom one's is the standard profile's endpoint."""
+        """(provider, its base URL) for a key: the address it goes to, whose origin is kept beside it (creds.py).
+        NanoGPT's is the settings' base_url, OpenRouter's its own, a custom one's the standard profile's endpoint."""
         if provider not in config.PROVIDERS:
             raise UserError(f"There's no provider called {provider!r}.")
-        if provider != "custom":
-            return provider, ""
+        if provider == "openrouter":
+            return provider, config.OPENROUTER_BASE_URL
         cfg = config.load()
+        if provider == "nanogpt":
+            return provider, cfg.base_url
         return provider, cfg.provider_url(cfg.profile("standard"))
 
     def set_key(self, key: str, provider: str = "nanogpt") -> None:
@@ -260,7 +263,7 @@ class Manager:
         key = creds.vibe_manager_key()
         if not key:
             raise UserError("DA Vibe Manager has no NanoGPT key in your keyring.")
-        creds.set_key(key)
+        creds.set_key(key, *self._provider_of("nanogpt"))
 
     def clear_key(self, provider: str = "nanogpt") -> None:
         creds.delete_key(*self._provider_of(provider))
@@ -508,7 +511,10 @@ class Manager:
         from .proxy import ATTESTED, attest_tee
         if not is_tee(model):
             raise UserError(f"{model} isn't one of NanoGPT's TEE models.")
-        key = await in_thread(creds.get_key)
+        try:
+            key = await in_thread(creds.get_key, "nanogpt", cfg.base_url)
+        except creds.KeyringUnavailable as e:
+            raise UserError(str(e)) from None
         if not key:
             raise UserError("NanoGPT shows a TEE model's attestation only with your API key: store it first (Setup).")
         try:

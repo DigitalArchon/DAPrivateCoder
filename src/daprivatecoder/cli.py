@@ -81,6 +81,14 @@ def _key(args) -> int:
     from . import creds
     provider, base_url = args.provider, ""
     name = config.PROVIDERS[provider]
+    # the address the key goes to, whose origin is kept beside it (creds.py): NanoGPT's base_url, OpenRouter's own
+    if provider == "openrouter":
+        base_url = config.OPENROUTER_BASE_URL
+    elif provider == "nanogpt":
+        try:
+            base_url = config.load().base_url
+        except ConfigError:
+            base_url = ""                   # stored without one: it takes the address it is first read for
     if provider == "custom":
         cfg = config.load()
         base_url = cfg.provider_url(cfg.profile("standard"))
@@ -210,7 +218,7 @@ def _status(args) -> int:
     except launcher.LaunchError as e:
         print(f"Claude Code: {e}")
     try:
-        key = creds.get_key()
+        key = creds.get_key("nanogpt", cfg.base_url)
         print("NanoGPT key: stored in your keyring" if key else "NanoGPT key: none (daprivatecoder key set)")
     except creds.KeyringUnavailable as e:
         print(f"NanoGPT key: {e}")
@@ -264,7 +272,7 @@ def _check(args) -> int:
               "encrypted: NanoGPT's gateway reads what is sent to them.")
         for m in sorted(m for m in caps if is_tee(m)):
             print(line(m, caps[m]))
-        key = creds.get_key()
+        key = creds.get_key("nanogpt", cfg.base_url)
         if not key:
             raise CliError("NanoGPT shows a TEE model's attestation only with your API key: daprivatecoder key set")
         failed = 0

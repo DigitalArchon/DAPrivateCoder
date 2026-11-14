@@ -10,7 +10,15 @@ memory for the rest of the run: every model request needs the key, and a keyring
 itself again (KWallet's timeout) would otherwise stop the session on its password prompt.
 
 A key no HTTP header can carry (a line break, a zero-width space from a web page) is refused when it
-is stored and whenever it is read, saying so and nothing of the key (netpolicy.key_problem)."""
+is stored and whenever it is read, saying so and nothing of the key (netpolicy.key_problem).
+
+A key never follows an edited address. Beside each key the keyring keeps the origin (scheme, host and
+port) it was stored for, and a key is read for an address only when that address has the same origin
+(`get_key` with its base URL): NanoGPT's base_url edited in the settings file to another server, or a
+provider of your own's from https to http, gets no key, and says why and what to do (KeyElsewhere). A
+key stored before origins were kept takes the origin of the address it is first read for, with no
+question. No key is ever deleted for it. (A provider of your own's key was already its server's own,
+by host and port: `account`.)"""
 
 from __future__ import annotations
 
@@ -26,6 +34,11 @@ VIBE_MANAGER = ("davibemanager", "provider:NanoGPT")
 
 class KeyringUnavailable(Exception):
     """The keyring couldn't be read or written: not running yet, locked, or none at all."""
+
+
+class KeyElsewhere(KeyringUnavailable):
+    """The key stored was stored for another address than the one it would be sent to now: nothing is sent. A
+    KeyringUnavailable, so whatever says why there is no key to send says this too."""
 
 
 class KeyUnusable(KeyringUnavailable):
@@ -89,17 +102,58 @@ def account(provider: str = "nanogpt", base_url: str = "") -> str:
     return provider if provider == "openrouter" else USER
 
 
-def get_key(provider: str = "nanogpt", base_url: str = "") -> str | None:
-    """The provider's key (NanoGPT's when not said), or None if none is stored. Raises KeyUnusable for
-    one no header can carry (stored before this was checked, or by another program)."""
-    key = _get(SERVICE, account(provider, base_url))
-    _usable(key, provider)
-    return key
+# the keyring entry of the origin a key was stored for, beside the key's own (its account's name)
+ORIGIN = "{}_origin"
 
 
-def set_key(value: str, provider: str = "nanogpt", base_url: str = "") -> None:
-    _usable(value, provider)
-    user = account(provider, base_url)
+def origin(url: str) -> str:
+    """`url`'s origin as a key is held to it: scheme://host:port, in lower case, the port its scheme's when none
+    is written. "" for what has no scheme or host."""
+    from urllib.parse import urlparse
+    try:
+        u = urlparse((url or "").strip())
+        port = u.port
+    except ValueError:
+        return ""
+    scheme, host = (u.scheme or "").lower(), (u.hostname or "").lower()
+    if not scheme or not host:
+        return ""
+    port = port or {"https": 443, "http": 80}.get(scheme, 0)
+    return f"{scheme}://{f'[{host}]' if ':' in host else host}:{port}"
+
+
+def _said(kept: str) -> str:
+    """An origin as said to the user: without its scheme's own port."""
+    for scheme, port in (("https", 443), ("http", 80)):
+        if kept.startswith(f"{scheme}://") and kept.endswith(f":{port}"):
+            return kept[: -len(f":{port}")]
+    return kept
+
+
+def _held_to(user: str, provider: str, base_url: str) -> None:
+    """Raise KeyElsewhere unless the key `user` names was stored for `base_url`'s origin. A key with no origin kept
+    (stored before they were) takes this one's."""
+    here = origin(base_url)
+    kept = _get(SERVICE, ORIGIN.format(user))
+    if kept is None and here:
+        try:
+            _keep(ORIGIN.format(user), here)
+        except KeyringUnavailable:
+            pass                                    # used as before, and its origin kept the next time it can be
+        return
+    if kept == here:
+        return
+    from .netpolicy import shown
+    name = NAMES.get(provider, provider)
+    where = shown(base_url) or "an address that can't be read"
+    raise KeyElsewhere(
+        f"The {name} API key in your keyring was stored for {_said(kept or '') or 'another address'}, and would "
+        f"go to {where} now, so it wasn't sent: a key goes only to the address it was stored for. If that is where "
+        "it should go, store the key again for it (in DA Private Coder's window, or with daprivatecoder key set); "
+        "otherwise put the address back as it was.")
+
+
+def _keep(user: str, value: str) -> None:
     try:
         _backend().set_password(SERVICE, user, value)
     except KeyringUnavailable:
@@ -109,8 +163,7 @@ def set_key(value: str, provider: str = "nanogpt", base_url: str = "") -> None:
     _known[(SERVICE, user)] = value
 
 
-def delete_key(provider: str = "nanogpt", base_url: str = "") -> None:
-    user = account(provider, base_url)
+def _drop(user: str) -> None:
     try:
         _backend().delete_password(SERVICE, user)
     except PasswordDeleteError:
@@ -120,6 +173,37 @@ def delete_key(provider: str = "nanogpt", base_url: str = "") -> None:
     except Exception as e:  # noqa: BLE001 - locked, say: said to the user as it is
         raise KeyringUnavailable(f"Your keyring couldn't remove the key: {e}") from e
     _known.pop((SERVICE, user), None)
+
+
+def get_key(provider: str = "nanogpt", base_url: str = "") -> str | None:
+    """The provider's key (NanoGPT's when not said), or None if none is stored. With `base_url`, the address it is
+    to go to: KeyElsewhere if the key was stored for another origin (none is sent). Raises KeyUnusable for one no
+    header can carry (stored before this was checked, or by another program)."""
+    user = account(provider, base_url)
+    key = _get(SERVICE, user)
+    _usable(key, provider)
+    if key and base_url:
+        _held_to(user, provider, base_url)
+    return key
+
+
+def set_key(value: str, provider: str = "nanogpt", base_url: str = "") -> None:
+    """Store `value` as the provider's key, for `base_url` (the address it is to go to: its origin is kept beside
+    it). Stored without one, it takes the origin of the address it is first read for."""
+    _usable(value, provider)
+    user = account(provider, base_url)
+    _keep(user, value)
+    here = origin(base_url)
+    if here:
+        _keep(ORIGIN.format(user), here)
+    else:
+        _drop(ORIGIN.format(user))
+
+
+def delete_key(provider: str = "nanogpt", base_url: str = "") -> None:
+    user = account(provider, base_url)
+    _drop(user)
+    _drop(ORIGIN.format(user))
 
 
 # the keyring entry of an address typed with a user name and password (`setting`: config.py's name for
