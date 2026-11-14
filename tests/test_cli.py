@@ -249,8 +249,8 @@ print("\\n" + str(libc.prctl(3, 0, 0, 0, 0)), resource.getrlimit(resource.RLIMIT
     # claude-private, before anything is started
     "from daprivatecoder import cli\ncli._launch = lambda *a: 0\ntry:\n    cli.claude_private()\nexcept SystemExit:\n    pass",
     # WebFetch's check, which Claude Code runs as python -m daprivatecoder.identity
-    "import io, runpy\nsys.stdin = io.StringIO('{}')\ntry:\n    runpy.run_module('daprivatecoder.identity', run_name='__main__')\n"
-    "except SystemExit:\n    pass",
+    ("import io, runpy\nsys.stdin = io.StringIO('{}')\ntry:\n    runpy.run_module('daprivatecoder.identity', run_name='__main__')\n"
+     "except SystemExit:\n    pass"),
 ])
 def test_every_entry_point_writes_no_core_dump(run, tmp_path):
     """A crash must not write the process's memory to disk (the proxy holds every session's words in the clear):
@@ -259,6 +259,6 @@ def test_every_entry_point_writes_no_core_dump(run, tmp_path):
 
     env = {**os.environ, "XDG_CONFIG_HOME": str(tmp_path / "config"), "XDG_STATE_HOME": str(tmp_path / "state")}
     done = subprocess.run([sys.executable, "-c", _DUMP_STATE.format(run=run)], capture_output=True, text=True,
-                          env=env, timeout=60)
+                          env=env, timeout=60, check=False)
     assert done.returncode == 0, done.stderr
     assert done.stdout.splitlines()[-1] == "0 True"
