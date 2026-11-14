@@ -14,7 +14,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import tempfile
 from pathlib import Path
 
 KEY = "claudeCode.claudeProcessWrapper"
@@ -266,18 +265,11 @@ def current(path: Path) -> str | None:
 
 
 def _write(path: Path, text: str) -> None:
+    """The editor's settings, written whole or not at all (config.write_private), keeping the mode they had."""
+    from . import config
     path = Path(os.path.realpath(path))          # through a link (stow, chezmoi, home-manager): it stays one
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(text)
-        if path.exists():
-            os.chmod(tmp, path.stat().st_mode & 0o777)
-        os.replace(tmp, path)
-    except BaseException:
-        os.unlink(tmp)
-        raise
+    config.write_private(path, text, mode=path.stat().st_mode & 0o777 if path.exists() else 0o600)
 
 
 def switch(path: Path, wrapper: str | None) -> bool:
@@ -308,6 +300,6 @@ def switch(path: Path, wrapper: str | None) -> bool:
                           f"Set {KEY} in the editor's Settings instead.")
     if text:
         backup = path.with_name(path.name + ".daprivatecoder-backup")
-        backup.write_text(text, encoding="utf-8")
+        _write(backup, text)
     _write(path, new)
     return True

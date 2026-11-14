@@ -108,13 +108,13 @@ def write_editor_script() -> Path:
 
 
 def _write(path: Path, text: str) -> None:
+    """A command, written whole or not at all and runnable (config.write_private): a link where it stood is
+    replaced, never followed. The fixed temporary name it was written under before was any other copy's too."""
+    from . import config
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.is_symlink():
         path.unlink()
-    tmp = path.with_name(f".{path.name}.tmp")
-    tmp.write_text(text)
-    tmp.chmod(0o755)
-    os.replace(tmp, path)
+    config.write_private(path, text, mode=0o755)
 
 
 def _text(path: Path) -> str:

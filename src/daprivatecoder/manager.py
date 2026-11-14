@@ -109,13 +109,9 @@ class Manager:
                 "start": data.get("start") if data.get("start") in SESSIONS else "private"}
 
     def _save_prefs(self, prefs: dict) -> None:
-        import tempfile
         path = prefs_path()
         config.made(path.parent)
-        fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".")
-        with os.fdopen(fd, "w") as f:
-            f.write(json.dumps(prefs, indent=1))
-        os.replace(tmp, path)
+        config.write_private(path, json.dumps(prefs, indent=1))
 
     def state(self) -> dict:
         """Everything the window shows (blocking: the keyring is asked)."""

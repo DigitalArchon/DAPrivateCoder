@@ -29,6 +29,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from . import config
 from .config import PROVIDERS, Config, Profile, made, state_dir
 from .llm.client import RANK, tier_of
 
@@ -383,9 +384,7 @@ def write_settings(args: list[str], pid: int) -> list[str]:
     out = list(args)
     at = out.index("--settings") + 1
     path = settings_file(pid)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_CLOEXEC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        f.write(out[at])
+    config.write_private(path, out[at])          # whole or not at all, 0600 from the start
     out[at] = str(path)
     return out
 

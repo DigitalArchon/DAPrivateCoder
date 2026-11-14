@@ -414,10 +414,9 @@ def _serve(args) -> int:
     if args.fd is not None:
         # what the window's Sessions says of it: what it runs, where, started by what
         config.made(about.parent)
-        fd = os.open(about, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_CLOEXEC, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump({"session": log.session, "profile": profile.name, "kind": profile.kind, "folder": os.getcwd(),
-                       "editors": [[name, str(path)] for name, path in editors], "started": time.time()}, f)
+        config.write_private(about, json.dumps({
+            "session": log.session, "profile": profile.name, "kind": profile.kind, "folder": os.getcwd(),
+            "editors": [[name, str(path)] for name, path in editors], "started": time.time()}))
 
     def gone() -> None:
         settings.unlink(missing_ok=True)

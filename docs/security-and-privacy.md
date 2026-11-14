@@ -469,7 +469,10 @@ place.
 - **Settings**: `~/.config/daprivatecoder/config.toml`, with no key in it, and no password but one
   written into it by hand while the keyring couldn't take it ([above](#keys-and-passwords)); the
   folders chosen for your editor (`editor-folders.json`) and the window's own choices
-  (`window.json`) beside it, in a folder only you can open.
+  (`window.json`) beside it, in a folder only you can open. These files, a session's, the
+  commands the app installs and an editor's settings it changes are each written whole or not at
+  all (a file of its own, readable only by you from the start, put in place once it is on the
+  disk), so a crash or a full disk never leaves half of one.
 - **The request log**: `~/.local/state/daprivatecoder/requests.log` (and one older file once it
   passes 5 MB), readable only by you, in a folder only you can open: each session's start (its profile, models, provider address
   without a password, folder and editor), each request (model, how it was sent, status, tokens,

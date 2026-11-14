@@ -12,10 +12,10 @@ from __future__ import annotations
 
 import json
 import os
-import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import config
 from .config import config_dir, made
 
 
@@ -59,15 +59,7 @@ def load() -> Folders:
 def save(f: Folders) -> None:
     p = path()
     made(p.parent)
-    fd, tmp = tempfile.mkstemp(dir=p.parent, prefix=p.name + ".")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as out:
-            json.dump({"folders": dict(sorted(f.folders.items())), "other": f.other}, out, indent=2)
-            out.write("\n")
-        os.replace(tmp, p)
-    except BaseException:
-        os.unlink(tmp)
-        raise
+    config.write_private(p, json.dumps({"folders": dict(sorted(f.folders.items())), "other": f.other}, indent=2) + "\n")
 
 
 def choice(f: Folders, cwd: str) -> tuple[str, str]:

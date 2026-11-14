@@ -63,6 +63,43 @@ def config_path() -> Path:
     return config_dir() / "config.toml"
 
 
+def write_private(path: Path, data: bytes | str, mode: int = 0o600) -> None:
+    """`data` as `path`'s whole content, or the file as it was: written to a file of its own in the same folder
+    (unique, and 0600 from the start: mkstemp; `mode` once it is written, for a script or a file that keeps its
+    own), flushed to the disk, put in place in one step (os.replace), and the folder flushed too, so that a crash
+    or a full disk never leaves half a file, nor a rename the disk never saw. Every write of a file that matters
+    goes through it (the cross-app standard, Nov 2026, as DA Vibe Manager's config.write_private): the settings,
+    the folders' choices, the window's preferences, an editor's settings, the commands it installs, a session's
+    --settings and its record. The folder is the caller's to make (`made`)."""
+    path = Path(path)
+    body = data.encode("utf-8") if isinstance(data, str) else data
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(body)
+            if mode != 0o600:
+                os.fchmod(f.fileno(), mode)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    try:
+        folder = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+    except OSError:
+        return
+    try:
+        os.fsync(folder)
+    except OSError:
+        pass
+    finally:
+        os.close(folder)
+
+
 def made(folder: Path) -> Path:
     """`folder`, made if it isn't there. Where it is the app's settings or state folder, or one inside them, that
     folder and it are readable by this user alone (0700), made so or set so if they were there already: the request
@@ -454,7 +491,7 @@ def load(path: Path | None = None) -> Config:
     path = path or config_path()
     made(path.parent)                       # readable by this user alone, if it is the settings folder
     if not path.exists():
-        path.write_text(DEFAULT_TEXT)
+        write_private(path, DEFAULT_TEXT)
     try:
         text = path.read_text()
     except OSError as e:
@@ -497,14 +534,7 @@ def save(cfg: Config, path: Path | None = None) -> Config:
     text = render(on_file)
     saved = parse(text, path)
     made(path.parent)
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(text)
-        os.replace(tmp, path)
-    except BaseException:
-        os.unlink(tmp)
-        raise
+    write_private(path, text)
     for setting, written in _addresses(saved):
         if setting in typed and without_password(typed[setting]) == without_password(written):
             saved = _with_address(saved, setting, typed[setting])
