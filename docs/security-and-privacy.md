@@ -172,7 +172,9 @@ as usual (plain `claude`, or a folder not chosen for DA Private Coder) is Anthro
   nothing that OpenAI's library would take from your environment (`OPENAI_ORG_ID`,
   `OPENAI_PROJECT_ID`, `OPENAI_CUSTOM_HEADERS`). A model server that takes no connection fails in
   ten seconds, not after the minutes a reply may take; a reply whose stream stops before the
-  provider says it's complete is an error, and nothing in it (a half-written command) is used.
+  provider says it's complete is an error, and nothing in it (a half-written command) is used. Nor
+  is a reply read on past 32 MB without a line's end (a private model's included): it is an error,
+  and nothing more of it is read.
 - **Its own servers** listen on 127.0.0.1 only: the window's, and one proxy for each session. Each
   does what it is asked only with its own random token ([below](#the-window)).
 

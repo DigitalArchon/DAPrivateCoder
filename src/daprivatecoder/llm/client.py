@@ -25,6 +25,12 @@ from .secure_http import ProviderError, local_http_options
 TIERS = ("private", "tee", "standard")
 RANK = {"standard": 0, "tee": 1, "private": 2}
 
+# Read from a provider no further than this without a line's end (SealedLore's streaming.MAX_LINE_CHARS): an event of a
+# stream is a few kilobytes, a picture sent inline a few megabytes; a longer one is no reply, and reading on would hold
+# memory for as long as the provider sent.
+MAX_LINE = 32 * 1024 * 1024
+_NEWLINE = re.compile(r"\r\n|\r|\n")
+
 # How long a model server gets to accept the connection, beside the minutes a reply may take to come. The
 # two were one number until Nov 2026, so a provider of your own that was switched off showed Claude Code
 # "thinking" for ten minutes and more (two attempts) before it failed (DA Toolkit's 2d1aa54, as DA Vibe
@@ -128,13 +134,22 @@ def _sdk_client_class():
     return _OpenAI
 
 
+def sdk_http_client(base_url: str, **options):
+    """The SDK's HTTP client for `base_url`: no redirect followed, a local server reached directly whatever proxy the
+    environment names (local_http_options), and nothing read past MAX_LINE without a line's end (`_cap`). `options`
+    go to it as they are (a transport, in tests)."""
+    from openai import DefaultAsyncHttpxClient
+    return DefaultAsyncHttpxClient(follow_redirects=False, event_hooks={"response": [_cap]},
+                                   **{**local_http_options(base_url), **options})
+
+
 class LLMClient:
     """A plain chat-completions client (NanoGPT, OpenRouter, any compatible endpoint): https, or
     http only to this computer or the local network; a redirect is never followed (the user's words
     would go wherever the provider points)."""
 
     def __init__(self, base_url: str, api_key: str | None, http_client=None):
-        from openai import DefaultAsyncHttpxClient, Timeout
+        from openai import Timeout
         check_url(base_url, "The provider's base URL")
         check_key(api_key, urlparse(base_url).hostname or "the provider")     # one no header can carry: nothing sent
         # A local server often needs no key, but the SDK insists on a value. A server on this computer or its
@@ -144,7 +159,7 @@ class LLMClient:
         self._client = _sdk_client_class()(
             base_url=base_url, api_key=api_key or "not-needed", max_retries=1,
             timeout=Timeout(600, connect=CONNECT_TIMEOUT),
-            http_client=http_client or DefaultAsyncHttpxClient(follow_redirects=False, **local_http_options(base_url)))
+            http_client=http_client or sdk_http_client(base_url))
         self.last_usage: dict | None = None
 
     async def stream(self, model: str, messages: list[dict], tools: list[dict] | None = None,
@@ -274,20 +289,93 @@ def _cut_off(response) -> ProviderError:
     )
 
 
-async def _lines(chunks, digest) -> AsyncIterator[str]:
-    """The stream's lines, each byte also fed to `digest` as it arrives, decoded of any content
-    encoding (the bytes the receipt's hash is of: SealedLore's openai_compat._lines)."""
+async def _lines(chunks, digest=None) -> AsyncIterator[str]:
+    """The stream's lines (ended by CRLF, CR or LF, as an event stream's are, and nothing else), each byte also fed to
+    `digest` as it arrives, decoded of any content encoding (the bytes the receipt's hash is of: SealedLore's
+    openai_compat._lines). Each piece is split once, so a long line costs its length and no more: it was split again,
+    whole, with every piece that came, and a line of tens of megabytes took minutes on the proxy's one event loop. A
+    line past MAX_LINE is a ProviderError, nothing more read (SealedLore's streaming.read_lines)."""
     decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
-    pending = ""
+    line: list[str] = []            # the line not yet ended, in the pieces it came in
+    length = 0
+    held_cr = False                 # a CR at a piece's end may be the first half of a CRLF
+
+    def ended(text: str, final: bool) -> list[str]:
+        nonlocal length, held_cr
+        if held_cr:
+            text = "\r" + text
+        held_cr = not final and text.endswith("\r")
+        if held_cr:
+            text = text[:-1]
+        out = []
+        parts = _NEWLINE.split(text)
+        for index, part in enumerate(parts):
+            length += len(part)
+            if length > MAX_LINE:
+                raise _too_long()
+            line.append(part)
+            if index < len(parts) - 1:
+                out.append("".join(line))
+                line.clear()
+                length = 0
+        return out
+
     async for chunk in chunks:
-        digest.update(chunk)
-        pending += decoder.decode(chunk)
-        *complete, pending = re.split(r"\r\n|\r|\n", pending)
-        for line in complete:
-            yield line
-    pending += decoder.decode(b"", final=True)
-    if pending:
-        yield pending
+        if digest is not None:
+            digest.update(chunk)
+        for done in ended(decoder.decode(chunk), final=False):
+            yield done
+    for done in ended(decoder.decode(b"", final=True), final=True):
+        yield done
+    if line and length:
+        yield "".join(line)
+
+
+def _too_long() -> ProviderError:
+    return ProviderError(f"the provider sent a line of more than {MAX_LINE // (1024 * 1024)} MB with no end; not read")
+
+
+class _Capped:
+    """A reply's bytes as they arrive, refused once more than MAX_LINE of them come without a line's end (CR or LF).
+    Made a stream of the response's own library (`_capped`): the SDK's default client is httpx2's, not httpx's."""
+
+    def __init__(self, stream) -> None:
+        self._stream = stream
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        run = 0
+        async for chunk in self._stream:
+            end = max(chunk.rfind(b"\n"), chunk.rfind(b"\r"))
+            run = len(chunk) - end - 1 if end >= 0 else run + len(chunk)
+            if run > MAX_LINE:
+                raise _too_long()
+            yield chunk
+
+    async def aclose(self) -> None:
+        await self._stream.aclose()
+
+
+_CAPPED_KINDS: dict[type, type] = {}
+
+
+def _capped(stream):
+    """`stream` read through _Capped, as an AsyncByteStream of the library it is one of (httpx's or httpx2's), whose
+    responses read only one of their own."""
+    base = next((c for c in type(stream).__mro__ if c.__name__ == "AsyncByteStream"), None)
+    if base is None:
+        return stream                   # not an async stream: read as it is (a stream of this client's is capped in _lines)
+    kind = _CAPPED_KINDS.get(base)
+    if kind is None:
+        kind = _CAPPED_KINDS[base] = type("CappedStream", (_Capped, base), {})
+    return kind(stream)
+
+
+async def _cap(response) -> None:
+    """The SDK's client's response hook: whatever the SDK reads itself (a reply not streamed, read whole: the vision
+    helper's on a standard model) is read no further than MAX_LINE without a line's end, as the streams this client
+    reads are (`_lines`). The SDK reads it once it has a reply, so a refusal here goes to the caller as it is, in its
+    words, and nothing is asked again."""
+    response.stream = _capped(response.stream)
 
 
 # provider extensions sent in the request body, whatever the SDK version knows about: reasoning_effort,

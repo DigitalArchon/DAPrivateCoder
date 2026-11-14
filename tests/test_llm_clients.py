@@ -240,3 +240,88 @@ async def test_a_model_server_that_never_answers_the_connection_fails_soon(monke
     finally:
         for s in held + [listener]:
             s.close()
+
+
+# --- the lines of a stream: read in linear time, and none past 32 MB (SealedLore's streaming.read_lines) -----------
+
+async def _read_lines(pieces: list[bytes]) -> list[str]:
+    from daprivatecoder.llm.client import _lines
+
+    async def chunks():
+        for piece in pieces:
+            yield piece
+    return [line async for line in _lines(chunks())]
+
+
+async def test_a_streams_lines_end_where_an_event_streams_do_and_nowhere_else():
+    assert await _read_lines([b"a\r", b"\nb\rc\n", b"d\xe2\x80", b"\xa8e\r"]) == ["a", "b", "c", "d e"]
+    assert await _read_lines([b"tail"]) == ["tail"]
+
+
+async def test_a_long_line_costs_its_length_and_no_more():
+    """Every piece was split again with all the line had so far: a line of a few megabytes in small pieces took
+    minutes on the proxy's one event loop."""
+    import time
+
+    started = time.monotonic()
+    (line,) = await _read_lines([b"x" * 1024] * 6 * 1024 + [b"\n"])
+    assert len(line) == 6 * 1024 * 1024 and time.monotonic() - started < 5
+
+
+async def test_a_line_past_32_mb_is_an_error_and_nothing_more_is_read():
+    from daprivatecoder.llm.secure_http import ProviderError
+
+    read = []
+
+    async def endless():
+        while True:
+            read.append(1)
+            yield b"x" * (1 << 20)
+    from daprivatecoder.llm.client import _lines
+    with pytest.raises(ProviderError, match="more than 32 MB with no end"):
+        async for _ in _lines(endless()):
+            pass
+    assert len(read) == 33
+
+
+async def test_a_providers_stream_with_a_line_past_32_mb_is_refused():
+    from daprivatecoder.llm.secure_http import ProviderError
+
+    body = b"data: " + b"x" * (33 << 20)
+    http = httpx.AsyncClient(transport=httpx.MockTransport(
+        lambda r: httpx.Response(200, content=body, headers={"content-type": "text/event-stream"})))
+    with pytest.raises(ProviderError, match="more than 32 MB"):
+        async for _ in LLMClient("https://nano-gpt.com/api/v1", "k", http).stream("z-ai/glm-5.3", USER):
+            pass
+
+
+async def test_what_the_sdk_reads_itself_is_capped_under_it_too():
+    """A reply not streamed (the vision helper's, on a standard model) is read by the SDK, whole: its client reads no
+    further than 32 MB without a line's end either."""
+    import httpx2
+
+    from daprivatecoder.llm.client import sdk_http_client
+    from daprivatecoder.llm.secure_http import ProviderError
+
+    asked = []
+    whole = json.dumps({"id": "x", "object": "chat.completion", "created": 0, "model": "m", "choices": [
+        {"index": 0, "message": {"role": "assistant", "content": "x" * (33 << 20)}, "finish_reason": "stop"}]}).encode()
+
+    async def arriving():                           # as a reply arrives, a piece at a time (not read in advance)
+        for at in range(0, len(whole), 1 << 20):
+            yield whole[at:at + (1 << 20)]
+
+    def answer(request):
+        asked.append(request)
+        return httpx2.Response(200, content=arriving(), headers={"content-type": "application/json"})
+    client = LLMClient("https://nano-gpt.com/api/v1", "k",
+                       sdk_http_client("https://nano-gpt.com/api/v1", transport=httpx2.MockTransport(answer)))
+    with pytest.raises(ProviderError, match="more than 32 MB with no end"):
+        await client.complete("z-ai/glm-5.3", USER)
+    assert len(asked) == 1                      # said, in words, and not asked again
+    # a reply of a usual size is read as before
+    small = json.dumps({"id": "x", "object": "chat.completion", "created": 0, "model": "m", "choices": [
+        {"index": 0, "message": {"role": "assistant", "content": "fine"}, "finish_reason": "stop"}]}).encode()
+    client = LLMClient("https://nano-gpt.com/api/v1", "k", sdk_http_client(
+        "https://nano-gpt.com/api/v1", transport=httpx2.MockTransport(lambda r: httpx2.Response(200, content=small))))
+    assert await client.complete("z-ai/glm-5.3", USER) == "fine"

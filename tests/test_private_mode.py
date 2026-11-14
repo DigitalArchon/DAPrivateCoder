@@ -553,3 +553,24 @@ async def test_the_sealing_transport_goes_through_the_proxy_and_still_refuses_wh
     with pytest.raises(PrivateModeError, match="unsealed"):
         await guard.handle_async_request(httpx.Request("POST", RELAY + "/v1/chat/completions", content=b"{}"))
     assert len(asked) == 1
+
+
+# --- the enclave's stream, read by an event stream's line ends, and none past 32 MB (llm/client.py _lines) -------
+
+async def test_a_line_of_the_enclaves_stream_ends_only_where_an_event_streams_lines_do():
+    """httpx's aiter_lines split at U+2028 (and the rest of str.splitlines' line ends), which JSON may hold as it is:
+    the piece of the reply in that chunk was dropped without a word."""
+    said = "data: " + json.dumps({"id": "x", "object": "chat.completion.chunk", "created": 0, "model": "m", "choices": [
+        {"index": 0, "delta": {"role": "assistant", "content": "one two\x85three"}, "finish_reason": None}]},
+        ensure_ascii=False) + "\r\n\r\n"
+    relay = Relay(replies=[(200, said + chunk({}, "stop") + "data: [DONE]\n\n")])
+    events = await collect(relay.client())
+    assert events[-1][1].content == "one two\x85three"
+
+
+async def test_a_line_of_the_enclaves_stream_past_32_mb_is_refused():
+    from daprivatecoder.llm.secure_http import ProviderError
+
+    relay = Relay(replies=[(200, "data: " + "x" * (33 << 20))])
+    with pytest.raises(ProviderError, match="more than 32 MB"):
+        await collect(relay.client())
