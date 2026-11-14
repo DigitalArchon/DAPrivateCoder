@@ -108,6 +108,9 @@ def test_detection():
     assert offers_private_mode(BASE) and offers_private_mode("https://api.nano-gpt.com/api/v1")
     assert not offers_private_mode("https://api.openai.com/v1")
     assert relay_url(BASE) == RELAY
+    # a user name and password written into NanoGPT's address go nowhere near the relay (DA Toolkit's)
+    assert relay_url("https://alice:s3cret@nano-gpt.com/api/v1") == RELAY
+    assert relay_url("https://alice@api.nano-gpt.com:443/api/v1") == "https://api.nano-gpt.com:443/api/v1/private/tinfoil"
     assert is_private_mode("private/glm-5-3") and is_private_mode(" Private/GLM-5-3")
     assert not is_private_mode("TEE/glm-5.3") and not is_private_mode("z-ai/glm-5.3")
 

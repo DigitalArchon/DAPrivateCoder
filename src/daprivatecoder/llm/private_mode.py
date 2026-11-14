@@ -59,7 +59,7 @@ from urllib.parse import urlparse
 import httpx
 from openai.types.chat import ChatCompletionChunk
 
-from ..netpolicy import check_key, check_url, is_local_host
+from ..netpolicy import check_key, check_url, is_local_host, without_password
 from . import sdk_guard
 from .capabilities import norm_id
 from .client import StreamAccumulator, _lines, is_private_mode
@@ -141,7 +141,10 @@ def offers_private_mode(base_url: str) -> bool:
 
 
 def relay_url(base_url: str) -> str:
-    parsed = urlparse(base_url)
+    """The relay's address, without a user name and password written into the provider's: NanoGPT's relay takes the
+    API key, never those, and httpx (and the SDK's requests) would send them as a login of their own, beside the
+    key (DA Toolkit's)."""
+    parsed = urlparse(without_password(base_url))
     return f"{parsed.scheme}://{parsed.netloc}{RELAY_PATH}"
 
 
