@@ -219,6 +219,17 @@ def window_problem() -> str | None:
     return None
 
 
+def own_dialogs() -> None:
+    """GTK's own folder chooser, never the desktop portal's, where the environment asks GTK for the
+    portal's (GTK_USE_PORTAL=1, which some KDE desktops set). DA Private Coder isn't dumpable
+    (no_core_dumps), and xdg-desktop-portal refuses every request of a process that isn't ("Unable to
+    open /proc/PID/root", measured with 1.20.0), so choosing the folder to work in would never open.
+    Set for this process only: the terminals and programs it starts get the value it was (hostenv).
+    As DA Vibe Manager's and DA Toolkit's own_dialogs."""
+    if os.environ.get("GTK_USE_PORTAL", "").startswith("1"):
+        set_for_self("GTK_USE_PORTAL", "0")
+
+
 def main(argv: list[str] | None = None) -> None:
     import uvicorn
 
@@ -233,6 +244,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--no-open", action="store_true", help="with the browser: only print the URL")
     ap.add_argument("--port", type=int, default=0, help="port to listen on (default: random)")
     args = ap.parse_args(argv)
+    own_dialogs()                    # before GTK's first dialog, which reads it once
 
     # one copy at a time: a second launch (the menu, while this one is in the tray) brings this one up
     from . import tray as tray_mod
