@@ -24,6 +24,7 @@ from pathlib import Path
 
 from . import __version__, config
 from .config import ConfigError, state_dir
+from .coredumps import no_core_dumps
 from .netpolicy import shown
 
 PRIVATE = "private"
@@ -54,6 +55,7 @@ def _launch(prog: str, profile: str, args: list[str]) -> int:
 
 def claude_private() -> None:
     """claude-private: every argument is Claude Code's."""
+    no_core_dumps()                                      # first: nothing of a session may reach a core file
     sys.exit(_launch("claude-private", PRIVATE, sys.argv[1:]))
 
 
@@ -472,6 +474,7 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    no_core_dumps()                                      # first: the window, every command, the proxy, the search server
     argv = sys.argv[1:] if argv is None else argv
     if not argv or argv[0] in WINDOW_OPTIONS:
         from . import app

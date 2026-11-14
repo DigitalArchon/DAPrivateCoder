@@ -478,6 +478,11 @@ from the keyring, the window's token, the private sessions' cache keys, the encl
 themselves (the log keeps what was found), Intel's records and NVIDIA's keys the checks fetched, and
 RedPill's session records.
 
+A crash writes none of it to disk: each of the app's own processes (the window, the commands, a
+session's proxy and search server, and the check of the pages Claude Code reads) turns core dumps off
+as it starts. Claude Code, which `claude-private` starts, and what the window opens for you (your
+editor, a terminal) begin with core dumps off too, and may turn them on again (`ulimit -c`).
+
 ## What the app can't protect you from
 
 - **What isn't sealed is read.** NanoGPT reads everything sent to a TEE model, and NanoGPT or your

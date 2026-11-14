@@ -159,4 +159,7 @@ def fetch_hook(stdin=None, stdout=None) -> int:
 
 
 if __name__ == "__main__":
+    from .coredumps import no_core_dumps
+
+    no_core_dumps()
     sys.exit(fetch_hook())

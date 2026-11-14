@@ -2,6 +2,8 @@
 
 import io
 import json
+import os
+import sys
 
 import pytest
 
@@ -158,3 +160,37 @@ def test_a_settings_file_that_is_a_link_stays_one(tmp_path):
     link.symlink_to(real)
     assert editor.switch(link, "/x/claude-editor")
     assert link.is_symlink() and editor.current(real) == "/x/claude-editor"
+
+
+# --- no core dumps (SealedLore's gui/app.py _no_core_dumps) ----------------------------------------------
+
+_DUMP_STATE = """
+import ctypes, resource, sys
+libc = ctypes.CDLL(None, use_errno=True)
+_, hard = resource.getrlimit(resource.RLIMIT_CORE)
+resource.setrlimit(resource.RLIMIT_CORE, (hard, hard))      # cores allowed, as a shell may start it
+assert libc.prctl(3, 0, 0, 0, 0) == 1                        # PR_GET_DUMPABLE: dumpable to begin with
+{run}
+print("\\n" + str(libc.prctl(3, 0, 0, 0, 0)), resource.getrlimit(resource.RLIMIT_CORE) == (0, hard), flush=True)
+"""
+
+
+@pytest.mark.parametrize("run", [
+    # every command, the window, the proxy (serve) and the search server go through cli.main
+    "from daprivatecoder import cli\ncli.main(['log', '-n', '1'])",
+    # claude-private, before anything is started
+    "from daprivatecoder import cli\ncli._launch = lambda *a: 0\ntry:\n    cli.claude_private()\nexcept SystemExit:\n    pass",
+    # WebFetch's check, which Claude Code runs as python -m daprivatecoder.identity
+    "import io, runpy\nsys.stdin = io.StringIO('{}')\ntry:\n    runpy.run_module('daprivatecoder.identity', run_name='__main__')\n"
+    "except SystemExit:\n    pass",
+])
+def test_every_entry_point_writes_no_core_dump(run, tmp_path):
+    """A crash must not write the process's memory to disk (the proxy holds every session's words in the clear):
+    not dumpable, and a core size of 0, its hard limit left for the programs the user runs."""
+    import subprocess
+
+    env = {**os.environ, "XDG_CONFIG_HOME": str(tmp_path / "config"), "XDG_STATE_HOME": str(tmp_path / "state")}
+    done = subprocess.run([sys.executable, "-c", _DUMP_STATE.format(run=run)], capture_output=True, text=True,
+                          env=env, timeout=60)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.splitlines()[-1] == "0 True"
