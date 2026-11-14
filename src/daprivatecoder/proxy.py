@@ -46,6 +46,7 @@ from .llm import capabilities, routes
 from .llm.dcap import since_boot
 from .llm.anthropic_bridge import VISION_PROMPT, ImageDescriber, estimate_tokens, has_images, message, sse, to_openai
 from .llm.client import RANK, LLMClient, is_claude, is_private_mode, is_tee, private_id, tier_of
+from .llm.errors import error_words, shown_error
 from .llm.secure_http import ACCEPT_ENCODING, loads
 from .llm.private_mode import (Attestation, Enclave, PrivateModeClient, list_private_models, offers_private_mode,
                                relay_said, relay_url)
@@ -239,15 +240,16 @@ def upstream_refusal(model: str, e: BaseException, provider: str, answering: boo
     status = getattr(e, "status_code", None)
     status = status if isinstance(status, int) else None
     name = NAMES.get(provider, provider)
-    said = f"{model}: {e}"
+    words = shown_error(e)              # the provider's own words labelled, on one line, cut short
+    said = f"{model}: {words}"
     if isinstance(e, ModelRetired):
         return Refused(400, said, "invalid_request_error")
     if status == 402:
         return Refused(402, f"{model}: your {name} balance is too low for this request, so it wasn't run. Top it up, "
-                            f"then try again. ({name} said: {e})", "billing_error")
+                            f"then try again. ({name} said: {words})", "billing_error")
     if status in (401, 403):
         # never a 401 to Claude Code: it would take its own login for the one refused
-        return Refused(403, f"{model}: {name} refused the request (HTTP {status}): {e}")
+        return Refused(403, f"{model}: {name} refused the request (HTTP {status}): {words}")
     if status == 429:
         return Refused(429, said, "rate_limit_error", retry=True)
     if status is not None and 400 <= status < 500:
@@ -816,11 +818,12 @@ class Proxy:
         remember them, and the one to send instead ("": none; None: not that kind of refusal)."""
         if not sent:
             return None
-        takes = efforts_named(str(error), sent)
+        words = error_words(error)         # the body too: openai 3.38 and later leave it out of str(error)
+        takes = efforts_named(words, sent)
         if takes:
             self._efforts[model] = takes
             return effort_for(sent, takes)
-        if effort_unsupported(str(error)):
+        if effort_unsupported(words):
             self._efforts[model] = ()
             return ""
         return None
@@ -847,7 +850,7 @@ class Proxy:
                 except Exception as e:
                     if started or attempt == 2:
                         raise
-                    if "reasoning_content" in str(e).lower() and handed_back(msgs):
+                    if "reasoning_content" in error_words(e).lower() and handed_back(msgs):
                         self._no_reasoning_back.add(where)
                         msgs = without_reasoning(msgs)
                         rec["reasoning_back"] = False          # in the log: the provider wouldn't take it
@@ -910,7 +913,7 @@ class Proxy:
                     raise
                 text = await asked(with_effort({}, instead))
         except Exception as e:
-            self._record("vision", model=model, tier=tier, status=502, error=str(e)[:300])
+            self._record("vision", model=model, tier=tier, status=502, error=shown_error(e)[:300])
             raise
         usage = getattr(client, "last_usage", None)
         self._record("vision", **as_sent(rec, ended), sealed=tier == "private", status=200,

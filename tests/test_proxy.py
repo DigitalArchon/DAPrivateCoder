@@ -929,3 +929,54 @@ async def test_claude_code_gets_no_half_written_call_from_a_stream_cut_off(tmp_p
     assert whole.status_code >= 500 and "the reply stopped before it was finished" in whole.json()["error"]["message"]
     logged = [e for e in read(tmp_path / "requests.log") if e["kind"] == "request" and e.get("tier")]
     assert [e["status"] for e in logged] == [502, 502]
+
+
+async def _provider_errors(*answers):
+    """The errors the real client raises for each of `answers` (httpx.Response), as the openai installed words
+    them, each with its twin as 3.37 and earlier word it: the whole body in the text, uncut."""
+    import openai
+
+    from daprivatecoder.llm.client import LLMClient
+
+    out = []
+    for answer in answers:
+        client = LLMClient("https://fake.example/v1", "sk-test",
+                           httpx.AsyncClient(transport=httpx.MockTransport(lambda r, a=answer: a)))
+        with pytest.raises(openai.APIStatusError) as caught:
+            await client.complete("m", [{"role": "user", "content": "hi"}])
+        error = caught.value
+        whole = error.response.text.strip()
+        try:
+            earlier = f"Error code: {error.status_code} - {json.loads(whole)}"
+        except ValueError:
+            earlier = whole or f"Error code: {error.status_code}"
+        out.append((error, type(error)(earlier, response=error.response, body=error.body)))
+    return out
+
+
+async def test_claude_code_is_told_what_the_provider_answered_labelled_short_whichever_openai_wrote_it():
+    """llm/errors.py (DA Toolkit's): the lock's openai (3.46, as every release since 3.38) writes only the body's
+    message into an error's text, nothing of a body that isn't JSON, so Claude Code was told "glm: Error code: 400"
+    and no more; 3.37 and earlier wrote the whole body in, uncut. Either way it is told the status, the provider's
+    message and the rest labelled as the provider's, on one line and cut short; a refused effort is found in the
+    body too."""
+    from types import SimpleNamespace
+
+    from daprivatecoder.llm.errors import SHOWN_WORDS, shown_error
+    from daprivatecoder.proxy import Proxy, upstream_refusal
+
+    (plain, plain_earlier), (coded, coded_earlier), (long, long_earlier), (effort, effort_earlier) = \
+        await _provider_errors(
+            httpx.Response(400, text="the upstream said no:\nquota exceeded for this key"),
+            httpx.Response(400, json={"error": {"message": "This request is too long.", "code": "context_length_exceeded"}}),
+            httpx.Response(400, text="x" * 70_000),
+            httpx.Response(400, text="reasoning_effort must be one of low, high, max"))
+    for error in (plain, plain_earlier):
+        assert str(upstream_refusal("glm", error, "nanogpt")) == \
+            "glm: Error code: 400 (the provider said: the upstream said no: quota exceeded for this key)"
+    assert shown_error(coded) == shown_error(coded_earlier) == \
+        'Error code: 400 - This request is too long. (the provider said: {"code": "context_length_exceeded"})'
+    assert shown_error(long) == shown_error(long_earlier) == f"Error code: 400 (the provider said: {'x' * SHOWN_WORDS})"
+    for error in (effort, effort_earlier):
+        proxy = SimpleNamespace(_efforts={})
+        assert Proxy._learned(proxy, "kimi", error, "medium") and proxy._efforts["kimi"] == ("low", "high", "max")
