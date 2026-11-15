@@ -522,9 +522,10 @@ own; what the app starts for you, the web browser it opens included, still gets 
 The folder chooser leaves your recent files list as it was: GTK's chooser adds the folder you choose
 to the desktop's recent files list (`~/.local/share/recently-used.xbel`) and rewrites the whole list
 as it does, dropping entries older than 30 days, then again as the app quits, and the app puts the
-list back as it was, byte for byte, after each of those writes. A change another program makes to the
-list in the quarter of a second after you choose, or as the app quits, is lost, as GTK's own write
-would lose it.
+list back as it was, byte for byte, after each of those writes, and after one that comes before your
+choice reaches the app (as a place typed into its location bar can). A change another program makes
+to the list in the quarter of a second around your choice, or as the app quits, is lost, as GTK's own
+write would lose it.
 
 ## What the app can't protect you from
 
