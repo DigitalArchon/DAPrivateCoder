@@ -642,3 +642,411 @@ def test_without_the_guard_gtk_changes_the_list_as_it_writes_and_as_the_loop_end
     for written in (seen["after_write"], seen["after_loop"]):
         assert written != seed and "report-from-august" not in written and "agenda.txt" in written
     assert seen["mode"] == 0o600
+
+
+# ---------------------------------------------------------------------- choosers fit the screen
+# GTK sizes a chooser from the font and the size it saved last: on a 640x480 screen one was 1096x822, its
+# top left off the screen, and on the lab's 1280x800 desktops and under Hyprland its header bar (Cancel,
+# Open, the location bar) was off it. recentguard (DA Assistant's copy) fits every chooser realized while
+# one of the app's is open to its monitor's work area. As DA Assistant's FittingTheScreen and
+# AChooserFitsTheScreen, for this app's chooser (Desktop.choose_folder) and the window's two other paths.
+
+
+def test_the_room_is_the_work_area_less_a_margin_on_each_side():
+    assert recentguard.fit_room(1280, 800) == (1152, 720)
+    assert recentguard.fit_room(640, 480) == (576, 432)
+    assert recentguard.fit_room(1920, 1080) == (1728, 972)
+    assert recentguard.fit_room(200, 100) == (168, 68)                 # 16 px at least
+    assert recentguard.fit_room(20, 20) == (1, 1)
+
+
+def test_a_window_off_the_area_is_moved_in_as_little_as_it_takes():
+    area = (0, 26, 1280, 774)                                           # a bar of 26 px at the top
+    assert recentguard.placed(100, 100, 600, 400, area) == (100, 100)
+    assert recentguard.placed(-228, -171, 600, 400, area) == (0, 26)
+    assert recentguard.placed(1000, 600, 600, 400, area) == (680, 400)
+    assert recentguard.placed(-50, -50, 2000, 1000, area) == (0, 26)    # larger: its top left on the area
+    assert recentguard.placed(10, 30, 600, 400, (1280, 0, 1920, 1080)) == (1280, 30)   # a second monitor
+
+
+def test_on_hyprland_the_room_is_what_stays_on_the_area_centred_on_the_parent():
+    """Hyprland centres a dialog on its parent and keeps neither on the screen: a parent tiled to the
+    right half of 1280x800 leaves 614 px across, one in the middle the whole room."""
+    room, area = (1152, 720), (0, 0, 1280, 800)
+    assert recentguard.around_centre(room, (646, 38, 622, 750), area) == (614, 720)
+    assert recentguard.around_centre(room, (12, 38, 1256, 750), area) == (1152, 720)
+    assert recentguard.around_centre(room, (1100, 600, 180, 200), area) == (148, 168)   # what is free there, however little
+    assert recentguard.within_parent(room, (874, 700)) == (874, 700)
+    assert recentguard.within_parent(room, (300, 200)) == (480, 360)
+    assert recentguard.within_parent(room, (2000, 900)) == (1152, 720)
+
+
+@pytest.mark.parametrize("kind, env, centres", [
+    ("GdkWaylandDisplay", {"XDG_CURRENT_DESKTOP": "Hyprland"}, True),
+    ("GdkWaylandDisplay", {"HYPRLAND_INSTANCE_SIGNATURE": "a_1"}, True),
+    ("GdkWaylandDisplay", {"XDG_CURRENT_DESKTOP": "GNOME"}, False),
+    ("GdkWaylandDisplay", {"XDG_CURRENT_DESKTOP": "KDE"}, False),
+    ("GdkX11Display", {"XDG_CURRENT_DESKTOP": "Hyprland"}, False)])
+def test_only_a_hyprland_session_on_wayland_centres_on_the_parent(kind, env, centres):
+    window = mock.Mock()
+    window.get_display.return_value.__gtype__ = mock.Mock()
+    window.get_display.return_value.__gtype__.name = kind
+    with mock.patch.dict(os.environ, env, clear=True):
+        assert recentguard._centres_on_parent(window) == centres
+
+
+def test_hyprlands_answer_names_the_parents_place_and_nothing_else():
+    import socket
+    import tempfile
+    import threading
+    runtime = tempfile.mkdtemp(dir="/tmp")             # a socket's path must be short
+    try:
+        os.makedirs(os.path.join(runtime, "hypr", "abc_1"))
+        path = os.path.join(runtime, "hypr", "abc_1", ".socket.sock")
+        answers = []
+
+        def serve(listening):
+            while answers:
+                connection, _ = listening.accept()
+                with connection:
+                    assert connection.recv(100) == b"j/clients"
+                    connection.sendall(answers.pop(0))
+
+        def place(answer, title="Settings"):
+            answers.append(answer)
+            listening = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            if os.path.exists(path):
+                os.unlink(path)
+            listening.bind(path)
+            listening.listen(1)
+            server = threading.Thread(target=serve, args=(listening,))
+            server.start()
+            parent = mock.Mock()
+            parent.get_title.return_value = title
+            env = {"XDG_RUNTIME_DIR": runtime, "HYPRLAND_INSTANCE_SIGNATURE": "abc_1"}
+            try:
+                with mock.patch.dict(os.environ, env):
+                    return recentguard._hyprland_place(parent)
+            finally:
+                server.join(5)
+                listening.close()
+
+        ours = {"pid": os.getpid(), "title": "Settings", "at": [646, 38], "size": [622, 750]}
+        others = [{"pid": 1, "title": "Settings", "at": [0, 0], "size": [10, 10]},
+                  {"pid": os.getpid(), "title": "Ask anything", "at": [12, 38], "size": [622, 750]}]
+        assert place(json.dumps(others + [ours]).encode()) == (646, 38, 622, 750)
+        assert place(json.dumps(others).encode()) is None
+        assert place(json.dumps([dict(ours, hidden=True)]).encode()) is None
+        assert place(json.dumps([dict(ours, at=["1", 2])]).encode()) is None
+        assert place(json.dumps([dict(ours, at=[True, 2])]).encode()) is None
+        assert place(b"[" * 40 + b"]" * 40) is None             # nested past any answer's
+        assert place(b"not json") is None
+        assert place(json.dumps({"error": "no"}).encode()) is None
+        with mock.patch.dict(os.environ, {"XDG_RUNTIME_DIR": runtime, "HYPRLAND_INSTANCE_SIGNATURE": "gone_2"}):
+            assert recentguard._hyprland_place(mock.Mock()) is None             # no socket
+        for instance in ("../x", "", ".."):
+            with mock.patch.dict(os.environ, {"XDG_RUNTIME_DIR": runtime, "HYPRLAND_INSTANCE_SIGNATURE": instance}):
+                assert recentguard._hyprland_place(mock.Mock()) is None
+        assert recentguard._deepest('{"a": "[[[", "b": [[1], {"c": "\\""}]}') == 3
+    finally:
+        shutil.rmtree(runtime, True)
+
+
+def test_fit_on_hyprland_holds_the_chooser_to_the_room_around_its_parent():
+    window = mock.Mock()
+    window.get_default_size.return_value = (-1, -1)
+    window.get_transient_for.return_value.get_size.return_value = (874, 750)
+    with mock.patch.object(recentguard, "_area", return_value=(0, 0, 1280, 800)), \
+            mock.patch.object(recentguard, "_centres_on_parent", return_value=True), \
+            mock.patch.object(recentguard, "_hyprland_place", return_value=(646, 38, 622, 750)):
+        recentguard.fit(window)
+    hints = window.set_geometry_hints.call_args[0][1]
+    assert (hints.max_width, hints.max_height) == (614, 720)
+    with mock.patch.object(recentguard, "_area", return_value=(0, 0, 1280, 800)), \
+            mock.patch.object(recentguard, "_centres_on_parent", return_value=True), \
+            mock.patch.object(recentguard, "_hyprland_place", return_value=None):
+        recentguard.fit(window)                 # the place not known: the parent's size
+    hints = window.set_geometry_hints.call_args[0][1]
+    assert (hints.max_width, hints.max_height) == (874, 720)
+
+
+def test_a_save_chooser_too_wide_for_its_room_has_its_name_entry_narrowed():
+    """The real dialog, with a header bar as GNOME and Omarchy have it: a Save chooser's name, 45 characters,
+    makes it wider than a folder chooser. Given a room between the two (around a parent tiled to half a 1280 px
+    screen, on Omarchy), its name entry is narrowed until it fits; the folder chooser, this app's, which has no
+    name entry and fits, is left as it is."""
+    if importlib.util.find_spec("gi") is None:
+        pytest.skip("needs PyGObject")
+    Gtk = recentguard._gtk()[1]
+    if not Gtk.init_check()[0]:
+        pytest.skip("needs a display")
+    parent = Gtk.Window()
+    made = []
+
+    def dialog_for(action):
+        dialog = Gtk.FileChooserDialog(title="x", transient_for=parent, action=action, use_header_bar=True)
+        dialog.add_buttons("_Cancel", Gtk.ResponseType.CANCEL, "_Save", Gtk.ResponseType.ACCEPT)
+        made.append(dialog)
+        return dialog
+    try:
+        save, folder = dialog_for(Gtk.FileChooserAction.SAVE), dialog_for(Gtk.FileChooserAction.SELECT_FOLDER)
+        wide, narrow = recentguard._least(save)[0], recentguard._least(folder)[0]
+        assert wide > narrow + 20
+        names = recentguard._name_entries(save)
+        assert [entry.get_width_chars() for entry in names] == [45]
+        assert recentguard._name_entries(folder) == []
+        room = (wide + narrow) // 2
+        free = room + 2 * recentguard.FIT_MARGIN_MIN
+        tile = (int(1280 - free / 2 - 300), 38, 600, 750)          # centred `free` from the edge
+        for dialog in (save, folder):
+            with mock.patch.object(recentguard, "_area", return_value=(0, 0, 1280, 800)), \
+                    mock.patch.object(recentguard, "_centres_on_parent", return_value=True), \
+                    mock.patch.object(recentguard, "_hyprland_place", return_value=tile):
+                recentguard.fit(dialog)
+            assert recentguard._least(dialog)[0] <= room
+            assert dialog.get_transient_for() is parent
+        assert recentguard.NAME_CHARS_LEAST <= names[0].get_width_chars() < 45
+        assert recentguard._least(folder)[0] == narrow
+    finally:
+        for dialog in made:
+            dialog.destroy()
+        parent.destroy()
+
+
+def test_the_name_is_narrowed_no_further_than_it_takes_nor_than_its_least():
+    class Entry:
+        def __init__(self, chars):
+            self.chars = chars
+
+        def get_width_chars(self):
+            return self.chars
+
+        def set_width_chars(self, chars):
+            self.chars = chars
+
+        def get_preferred_width(self):
+            return self.chars * 8, self.chars * 8
+
+    window, entry = mock.Mock(), Entry(45)
+
+    def least(_window):
+        return 300 + entry.chars * 8, 400
+    with mock.patch.object(recentguard, "_least", side_effect=least), \
+            mock.patch.object(recentguard, "_name_entries", return_value=[entry]):
+        recentguard._narrow_name(window, 700)           # wide enough: untouched
+        assert entry.chars == 45
+        recentguard._narrow_name(window, 600)           # 60 px too wide: 8 characters
+        assert entry.chars == 37
+        recentguard._narrow_name(window, 100)           # no room at all: as narrow as it goes
+        assert entry.chars == recentguard.NAME_CHARS_LEAST
+
+
+def test_run_fits_choosers_while_it_runs_and_stops_after():
+    calls = []
+    chooser = mock.Mock(spec=["run", "connect"])
+    chooser.run.side_effect = lambda: calls.append("run") or -6
+
+    def fitting():
+        calls.append("fit")
+        return lambda: calls.append("unfit")
+    with mock.patch.object(recentguard, "keeper", return_value=mock.Mock()), \
+            mock.patch.object(recentguard, "_fitting", side_effect=fitting):
+        recentguard.run(chooser)
+        assert calls == ["fit", "run", "unfit"]
+        calls.clear()
+        chooser.run.side_effect = RuntimeError("gone")
+        with pytest.raises(RuntimeError):
+            recentguard.run(chooser)
+        assert calls == ["fit", "unfit"]
+    calls.clear()
+    chooser.run.side_effect = lambda: calls.append("run") or -6
+    with mock.patch.object(recentguard, "keeper", return_value=None), \
+            mock.patch.object(recentguard, "_fitting", side_effect=fitting):
+        recentguard.run(chooser)                    # the list not kept: still fitted
+    assert calls == ["fit", "run", "unfit"]
+
+
+def test_a_hook_that_cannot_be_had_never_stops_the_chooser():
+    with mock.patch.object(recentguard, "_fit_choosers", side_effect=RuntimeError("no")), \
+            mock.patch.object(recentguard, "_say") as said:
+        unfit = recentguard._fitting()
+    unfit()
+    said.assert_called_once()
+
+
+def test_fit_holds_the_window_to_the_room_and_keeps_it_on_the_area():
+    """fit(): geometry hints of the room, a default size no larger, and a map-event handler that keeps it
+    on the area; anything failing is said, never raised."""
+    if importlib.util.find_spec("gi") is None:
+        pytest.skip("needs PyGObject")
+    import gi
+    gi.require_version("Gdk", "3.0")
+    from gi.repository import Gdk
+    window = mock.Mock()
+    window.get_default_size.return_value = (1096, 822)
+    with mock.patch.object(recentguard, "_area", return_value=(0, 0, 640, 480)), \
+            mock.patch.object(recentguard, "_centres_on_parent", return_value=False):
+        recentguard.fit(window)
+    hints, flags = window.set_geometry_hints.call_args[0][1:]
+    assert (hints.max_width, hints.max_height) == (576, 432)
+    assert flags == Gdk.WindowHints.MAX_SIZE
+    window.set_default_size.assert_called_once_with(576, 432)
+    window.connect.assert_called_once_with("map-event", recentguard._keep_on)
+    window = mock.Mock()
+    window.get_default_size.return_value = (-1, -1)                     # GTK's own: left to the hints
+    with mock.patch.object(recentguard, "_area", return_value=(0, 0, 640, 480)), \
+            mock.patch.object(recentguard, "_centres_on_parent", return_value=False):
+        recentguard.fit(window)
+    window.set_default_size.assert_not_called()
+    with mock.patch.object(recentguard, "_area", side_effect=RuntimeError("no screen")), \
+            mock.patch.object(recentguard, "_say") as said:
+        recentguard.fit(mock.Mock())
+    said.assert_called_once()
+
+
+def test_a_pages_file_input_and_pywebviews_dialog_are_fitted_until_they_answer():
+    calls = []
+
+    def fitting():
+        calls.append("fit")
+        return lambda: calls.append("unfit")
+    made = []
+
+    class Native:
+        def __init__(self):
+            self.handlers = []
+
+        def connect(self, name, handler):
+            self.handlers.append(handler)
+
+        def show(self):
+            calls.append("show")
+
+        def __getattr__(self, name):
+            return lambda *a: None
+
+    class FileChooserNative:
+        @staticmethod
+        def new(*_args):
+            made.append(Native())
+            return made[-1]
+
+    gtk = mock.Mock(FileChooserNative=FileChooserNative)
+    gtk.Window, gtk.OffscreenWindow = type("W", (), {}), type("O", (), {})
+    gtk.ResponseType.ACCEPT = -3
+    request = mock.Mock()
+    request.get_select_multiple.return_value = False
+    request.get_mime_types_filter.return_value = None
+    request.get_selected_files.return_value = None
+    with mock.patch.object(recentguard, "_fitting", side_effect=fitting), \
+            mock.patch.object(recentguard, "keeper", return_value=None), \
+            mock.patch.object(recentguard, "_gtk", return_value=(None, gtk)):
+        recentguard.answer_file_input(mock.Mock(), request)
+        assert calls == ["fit", "show"]
+        made[0].handlers[0](made[0], -6)
+    assert calls == ["fit", "show", "unfit"]
+    calls.clear()
+
+    class BrowserView:
+        def create_file_dialog(self, *args, **kwargs):
+            calls.append("dialog")
+
+    backend = mock.Mock(BrowserView=BrowserView)
+    platforms = mock.Mock(gtk=backend)
+    modules = {"webview": mock.Mock(platforms=platforms), "webview.platforms": platforms,
+               "webview.platforms.gtk": backend}
+    for kept in (mock.Mock(), None):
+        BrowserView.create_file_dialog = lambda self, *a, **k: calls.append("dialog")
+        with mock.patch.dict(sys.modules, modules), \
+                mock.patch.object(recentguard, "_fitting", side_effect=fitting), \
+                mock.patch.object(recentguard, "keeper", return_value=kept), \
+                mock.patch.object(recentguard, "_hook_responses", return_value=lambda: None):
+            recentguard._wrap_pywebview_dialogs()
+            BrowserView().create_file_dialog()
+        assert calls == ["fit", "dialog", "unfit"]
+        calls.clear()
+
+
+FIT_SCRIPT = textwrap.dedent('''
+    import json, os, sys, threading
+    sys.path.insert(0, {src!r})
+    import gi
+    gi.require_version("Gtk", "3.0")
+    gi.require_version("Gdk", "3.0")
+    from gi.repository import Gdk, GLib, Gtk
+    from daprivatecoder import recentguard
+    from daprivatecoder.app import Desktop
+
+    folder, guarded = sys.argv[1], sys.argv[2] == "guarded"
+    if not guarded:
+        recentguard._fitting = lambda: (lambda: None)
+    seen = {{}}
+
+    def measure():
+        # once the chooser is on the screen: where, and how large, then Cancel
+        for window in Gtk.Window.list_toplevels():
+            if isinstance(window, Gtk.FileChooserDialog) and window.get_mapped():
+                frame = window.get_window().get_frame_extents()
+                area = Gdk.Display.get_default().get_monitor(0).get_workarea()
+                seen["frame"] = [frame.x, frame.y, frame.width, frame.height]
+                seen["area"] = [area.x, area.y, area.width, area.height]
+                window.response(Gtk.ResponseType.CANCEL)
+                return False
+        return True
+
+    window = Gtk.Window()
+    window.set_default_size(300, 200)
+    window.move(500, 380)              # near the screen's bottom right
+    window.show()
+
+    def pick():
+        seen["chosen"] = Desktop().choose_folder(folder)
+        GLib.idle_add(Gtk.main_quit)
+
+    def choose():
+        GLib.timeout_add(400, measure)
+        threading.Thread(target=pick, daemon=True).start()
+        return False
+
+    GLib.idle_add(choose)
+    Gtk.main()
+    print("RESULT", json.dumps(seen), flush=True)
+''')
+
+
+def shown_on_a_small_screen(tmp_path, guarded):
+    """The folder chooser (Desktop.choose_folder) on a 640x480 screen under Xvfb, in a process of its own:
+    (its frame, the work area)."""
+    if not shutil.which("xvfb-run") or importlib.util.find_spec("gi") is None:
+        pytest.skip("needs Xvfb and PyGObject")
+    top = tmp_path / "fit"
+    top.mkdir()
+    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "LANG": "C.UTF-8", "GTK_USE_PORTAL": "0",
+           "NO_AT_BRIDGE": "1", "GSETTINGS_BACKEND": "memory", "GIO_USE_VFS": "local"}
+    for name, sub in (("HOME", "home"), ("XDG_DATA_HOME", "data"), ("XDG_CONFIG_HOME", "config"),
+                      ("XDG_CACHE_HOME", "cache"), ("XDG_RUNTIME_DIR", "run"), ("XDG_STATE_HOME", "state")):
+        env[name] = str(top / sub)
+        os.mkdir(env[name], 0o700)
+    script = top / "fit.py"
+    script.write_text(FIT_SCRIPT.format(src=str(SRC)), encoding="utf-8")
+    command = ["xvfb-run", "-a", "-s", "-screen 0 640x480x24"]
+    command += ["dbus-run-session", "--"] if shutil.which("dbus-run-session") else []
+    command += [sys.executable, "-I", str(script), env["HOME"], "guarded" if guarded else "unguarded"]
+    done = subprocess.run(command, env=env, capture_output=True, text=True, timeout=180, check=False)
+    assert done.returncode == 0, done.stderr[-3000:]
+    results = [line[len("RESULT "):] for line in done.stdout.splitlines() if line.startswith("RESULT ")]
+    assert len(results) == 1, done.stdout[-3000:] + done.stderr[-3000:]
+    seen = json.loads(results[0])
+    assert "frame" in seen and seen.get("chosen") == "", done.stderr[-3000:]
+    return seen["frame"], seen["area"]
+
+
+def test_the_folder_chooser_lies_inside_the_work_area_of_a_small_screen(tmp_path):
+    (x, y, width, height), (left, top, across, down) = shown_on_a_small_screen(tmp_path, guarded=True)
+    assert x >= left and y >= top and x + width <= left + across and y + height <= top + down, (x, y, width, height)
+
+
+def test_gtks_own_chooser_on_a_small_screen_does_not(tmp_path):
+    """What the fitting changes: unfitted, the chooser is larger than the screen."""
+    frame, area = shown_on_a_small_screen(tmp_path, guarded=False)
+    assert frame[2] * frame[3] > area[2] * area[3], (frame, area)

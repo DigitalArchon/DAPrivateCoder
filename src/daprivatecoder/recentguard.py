@@ -62,6 +62,17 @@ The known limit: a program writing the list while the app's own write is pending
 quarter of a second after a choice, or as the app quits, before GTK has read it again)
 loses that write - GTK's own write would already have lost it.
 
+And a chooser shown on those paths fits the screen (fit): GTK sizes one from the font and
+the size it saved last, and on a 1280x800 screen, or under a tiling compositor (Hyprland),
+its header bar - Cancel, Open, the location bar - was off the screen. While one of the app's
+choosers is open, every Gtk.FileChooserDialog realized (the app's own, or the one GTK makes
+for a Gtk.FileChooserNative) is held to the work area of the monitor it opens on, less a
+margin (geometry hints, which GTK holds its own size to and tells a Wayland compositor), and
+where the app may place it (X11) moved to lie inside that area. Hyprland centres a dialog on
+its parent and keeps neither on the screen: there the chooser is also held to the room around
+its parent's centre, the parent's place read from Hyprland's own socket. A chooser that can't
+be that narrow (a Save chooser's header bar) has its name entry narrowed until it can.
+
 This is DA Private Coder's copy (src/daprivatecoder/recentguard.py) of DA Assistant's
 (assistant/recentguard.py), the canonical one, from which it differs only in this
 docstring's paths (the DA apps' security standard, Nov 2026).
@@ -87,6 +98,14 @@ MOST = 32 * 1024 * 1024
 HOLD_SECONDS = 30
 # The most lists kept while a chooser is open: the one it opened on, and the newest.
 SEEN = 8
+# A chooser fits the work area of the monitor it opens on, this share of the area's width
+# and height (and at least FIT_MARGIN_MIN pixels) left free on each side.
+FIT_MARGIN = 0.05
+FIT_MARGIN_MIN = 16
+# Where the compositor centres a dialog on its parent and keeps neither on the screen
+# (Hyprland), a chooser is held to the room around its parent's centre as well, but never
+# under this.
+FIT_FLOOR = (480, 360)
 
 ABSENT, FILE, LINK, OTHER = "absent", "file", "link", "other"
 
@@ -563,28 +582,302 @@ def _answered(guarding, chooser, response):
         guarding.chose(_uris(chooser))
 
 
+def fit_room(width, height):
+    """The most a chooser may take of a work area `width` x `height`: the area less its
+    margins (FIT_MARGIN of each side, at least FIT_MARGIN_MIN pixels), never under 1."""
+    across = max(FIT_MARGIN_MIN, int(width * FIT_MARGIN))
+    down = max(FIT_MARGIN_MIN, int(height * FIT_MARGIN))
+    return max(1, width - 2 * across), max(1, height - 2 * down)
+
+
+def within_parent(room, parent, floor=FIT_FLOOR):
+    """The room a chooser centred on a parent of size `parent` keeps inside it: the parent's
+    own size, never under `floor` nor over `room`. Where the parent's place is not known."""
+    return tuple(min(space, max(size, least))
+                 for space, size, least in zip(room, parent, floor))
+
+
+def around_centre(room, parent, area):
+    """The room a chooser centred on `parent` (x, y, width, height, on the screen) keeps
+    inside `area` (the work area): twice the way from the parent's centre to the nearer
+    edge, less FIT_MARGIN_MIN each side, never over `room` nor under 1."""
+    x, y, across, down = parent
+    left, top, width, height = area
+    centre_x, centre_y = x + across / 2, y + down / 2
+    free = (2 * min(centre_x - left, left + width - centre_x) - 2 * FIT_MARGIN_MIN,
+            2 * min(centre_y - top, top + height - centre_y) - 2 * FIT_MARGIN_MIN)
+    return tuple(max(1, min(space, int(each))) for space, each in zip(room, free))
+
+
+# A chooser's name entry (Save) is narrowed no further than this, in characters.
+NAME_CHARS_LEAST = 12
+
+
+def _least(window):
+    """The narrowest and lowest `window` can be, (width, height), as GTK measures it; None
+    where it can't say."""
+    try:
+        minimum = window.get_preferred_size()[0]
+        return int(minimum.width), int(minimum.height)
+    except Exception:  # noqa: BLE001 - not known
+        return None
+
+
+def _name_entries(window):
+    """The chooser's name entries (GtkFileChooserEntry: a Save chooser's), in its header bar
+    or its body."""
+    found, stack = [], [window, window.get_titlebar()]
+    while stack:
+        each = stack.pop()
+        if each is None or each in found:
+            continue
+        if each.__gtype__.name == "GtkFileChooserEntry":
+            found.append(each)
+        elif hasattr(each, "get_children"):
+            stack.extend(each.get_children())
+    return found
+
+
+def _narrow_name(window, width):
+    """A chooser no narrower than `width` can't be (a Save chooser's header bar - Cancel, the
+    name GTK makes 45 characters wide, the search and Save in one row - wants some 726 px,
+    wider than the room around a window tiled to half a 1280 px screen): its name entry made
+    as many characters narrower as that takes, to NAME_CHARS_LEAST at least. The entry still
+    scrolls whatever is typed in it."""
+    least = _least(window)
+    if least is None or least[0] <= width:
+        return
+    for entry in _name_entries(window):
+        chars = entry.get_width_chars()
+        if chars <= NAME_CHARS_LEAST:
+            continue
+        each = entry.get_preferred_width()[0] / chars
+        cut = math.ceil((least[0] - width) / each) if each > 0 else chars
+        entry.set_width_chars(max(NAME_CHARS_LEAST, chars - cut))
+        least = _least(window)
+        if least is None or least[0] <= width:
+            return
+
+
+def _deepest(text):
+    """How deep JSON `text` nests (outside its strings)."""
+    depth = deepest = 0
+    quoted = escaped = False
+    for each in text:
+        if quoted:
+            if escaped:
+                escaped = False
+            elif each == "\\":
+                escaped = True
+            elif each == '"':
+                quoted = False
+        elif each == '"':
+            quoted = True
+        elif each in "[{":
+            depth += 1
+            deepest = max(deepest, depth)
+        elif each in "]}":
+            depth -= 1
+    return deepest
+
+
+HYPRLAND_MOST = 4 * 1024 * 1024     # the most of Hyprland's answer read
+
+
+def _hyprland_place(parent):
+    """Where Hyprland has `parent` on the screen, (x, y, width, height), from its own socket
+    ($XDG_RUNTIME_DIR/hypr/<instance>/.socket.sock, "j/clients": this process's window of the
+    parent's title); None where it can't be had. GTK can't say: on Wayland a window has no
+    place it knows, and a tiled one's size is its tile's only where its minimum fits there."""
+    import json
+    import socket
+
+    runtime = os.environ.get("XDG_RUNTIME_DIR") or ""
+    instance = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE") or ""
+    if not os.path.isabs(runtime) or not instance or "/" in instance or instance in (".", ".."):
+        return None
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+            connection.settimeout(0.5)
+            connection.connect(os.path.join(runtime, "hypr", instance, ".socket.sock"))
+            connection.sendall(b"j/clients")
+            answer = b""
+            while len(answer) <= HYPRLAND_MOST:
+                piece = connection.recv(65536)
+                if not piece:
+                    break
+                answer += piece
+        if len(answer) > HYPRLAND_MOST:
+            return None
+        text = answer.decode("utf-8")
+        if _deepest(text) > 32:
+            return None
+        clients = json.loads(text)
+    except (OSError, ValueError, RecursionError):
+        return None
+    title, pid = parent.get_title(), os.getpid()
+    for client in clients if isinstance(clients, list) else ():
+        if not isinstance(client, dict) or client.get("pid") != pid \
+                or client.get("title") != title or client.get("hidden"):
+            continue
+        at, size = client.get("at"), client.get("size")
+        if isinstance(at, list) and isinstance(size, list) and len(at) == len(size) == 2 \
+                and all(isinstance(n, int) and not isinstance(n, bool) for n in at + size):
+            return at[0], at[1], size[0], size[1]
+    return None
+
+
+def _hyprland(display):
+    """Whether `display` is a Wayland one Hyprland serves, which centres a dialog on its parent
+    and leaves it there, on the screen or off it (0.56). GNOME's and KDE's compositors keep a
+    dialog on the screen themselves, and on X11 the app moves it."""
+    if display is None or display.__gtype__.name != "GdkWaylandDisplay":
+        return False
+    desktop = (os.environ.get("XDG_CURRENT_DESKTOP") or "").lower().split(":")
+    return "hyprland" in desktop or bool(os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"))
+
+
+def _centres_on_parent(window):
+    """Whether the compositor centres `window`, a dialog, on its parent and leaves it there
+    (_hyprland)."""
+    return _hyprland(window.get_display())
+
+
+def placed(x, y, width, height, area):
+    """Where a window of `width` x `height` at (x, y) goes to lie inside `area` (x, y,
+    width, height): moved in as little as it takes, its top left kept on the area where the
+    window is larger than it."""
+    left, top, across, down = area
+    x = max(left, min(x, left + across - width))
+    y = max(top, min(y, top + down - height))
+    return x, y
+
+
+def _monitor(window):
+    """The monitor `window` opens on: its parent's, where it has one on a screen, else its
+    own, else the display's primary (or first) monitor."""
+    display = window.get_display()
+    for each in (window.get_transient_for(), window):
+        surface = each.get_window() if each is not None else None
+        if surface is not None:
+            found = display.get_monitor_at_window(surface)
+            if found is not None:
+                return found
+    return display.get_primary_monitor() or display.get_monitor(0)
+
+
+def _area(window):
+    area = _monitor(window).get_workarea()
+    return area.x, area.y, area.width, area.height
+
+
+def _keep_on(window, _event=None):
+    """A chooser mapped: where the window system lets the app place it (X11), moved to lie
+    inside its monitor's work area. Wayland places it itself, within the size fit() set."""
+    try:
+        if window.get_display().__gtype__.name != "GdkX11Display":
+            return False
+        x, y = window.get_position()
+        frame = window.get_window().get_frame_extents()
+        to = placed(x, y, frame.width, frame.height, _area(window))
+        if to != (x, y):
+            window.move(*to)
+    except Exception as e:  # noqa: BLE001 - never a crash: the chooser stays where it is
+        _say(f"a file chooser not kept on the screen: {e}")
+    return False
+
+
+def fit(window):
+    """A file chooser (a Gtk.FileChooserDialog: the app's own, or the one GTK makes for a
+    Gtk.FileChooserNative) fits the work area of the monitor it opens on: never larger than
+    the area less its margins (geometry hints, which GTK holds every size it asks for to,
+    and which Wayland compositors are told), and, where the app may place it (X11), never
+    off it. GTK's own size for a chooser comes from the font and what it saved last, and on
+    a 1280x800 screen, or under a tiling compositor, its header bar - Cancel and Open - was
+    off the screen. Hyprland centres a dialog on its parent wherever that is, a window tiled
+    to one side of the screen included, and moves neither onto the screen: there a chooser
+    is no larger than its parent either (within_parent), so that centred on a parent that is
+    on the screen, it is too: no wider or taller than twice the way from its parent's centre
+    to the nearer edge (around_centre: the parent's place from Hyprland's own socket), or
+    where that can't be had, than its parent (within_parent). Wherever a chooser can't be as
+    narrow as its room (a Save chooser's header bar), its name entry is narrowed until it can
+    (_narrow_name).""" 
+    try:
+        from gi.repository import Gdk
+
+        area = _area(window)
+        width, height = fit_room(*area[2:])
+        parent = window.get_transient_for()
+        if parent is not None and _centres_on_parent(window):
+            place = _hyprland_place(parent)
+            width, height = (around_centre((width, height), place, area) if place
+                             else within_parent((width, height), parent.get_size()))
+        _narrow_name(window, width)
+        hints = Gdk.Geometry()
+        hints.max_width, hints.max_height = width, height
+        window.set_geometry_hints(None, hints, Gdk.WindowHints.MAX_SIZE)
+        across, down = window.get_default_size()
+        if across > width or down > height:
+            window.set_default_size(min(across, width), min(down, height))
+        window.connect("map-event", _keep_on)
+    except Exception as e:  # noqa: BLE001 - never a crash: the chooser opens as GTK sizes it
+        _say(f"a file chooser not fitted to the screen: {e}")
+
+
+def _fit_choosers():
+    """fit() for every Gtk.FileChooserDialog realized from now on (an emission hook on
+    "realize": GtkWindow's show realizes it before it asks for its size and maps it, so it
+    opens at its fitted size; a hook on "show" crashed PyGObject, called for widgets still
+    being made); what takes it away again."""
+    from gi.repository import GObject
+
+    Gtk = _gtk()[1]
+
+    def hook(widget, *_rest):
+        if isinstance(widget, Gtk.FileChooserDialog):
+            fit(widget)
+        return True
+
+    GObject.type_class_ref(Gtk.Widget)
+    hooked = GObject.add_emission_hook(Gtk.Widget, "realize", hook)
+    return lambda: GObject.remove_emission_hook(Gtk.Widget, "realize", hooked)
+
+
+def _fitting():
+    """_fit_choosers(), or where it can't be had (no GTK), a hook that takes nothing away."""
+    try:
+        return _fit_choosers()
+    except Exception as e:  # noqa: BLE001 - never a crash: the chooser opens as GTK sizes it
+        _say(f"file choosers not fitted to the screen: {e}")
+        return lambda: None
+
+
 def run(chooser):
     """chooser.run() for a Gtk.FileChooserNative or Gtk.FileChooserDialog the app made,
     the files it chose kept out of the recent files list: its answer. They are told to the
     keeper as the chooser answers, not once run() has returned: GTK adds them as it answers,
     and run() can come back after GTK's write (a Save dialog's, measured)."""
-    guarding = keeper()
-    if guarding is None:
-        return chooser.run()
+    unfit = _fitting()
     try:
-        chooser.connect("response", lambda answering, response:
-                        _answered(guarding, answering, response))
-        heard = True
-    except Exception:  # noqa: BLE001 - a stand-in with no signals: told once it is answered
-        heard = False
-    guarding.opened()
-    try:
-        response = chooser.run()
-        if not heard:
-            _answered(guarding, chooser, response)
+        guarding = keeper()
+        if guarding is None:
+            return chooser.run()
+        try:
+            chooser.connect("response", lambda answering, response:
+                            _answered(guarding, answering, response))
+            heard = True
+        except Exception:  # noqa: BLE001 - a stand-in with no signals: told once answered
+            heard = False
+        guarding.opened()
+        try:
+            response = chooser.run()
+            if not heard:
+                _answered(guarding, chooser, response)
+        finally:
+            guarding.closed()
+        return response
     finally:
-        guarding.closed()
-    return response
+        unfit()
 
 
 def answer_file_input(webview, request):
@@ -611,7 +904,10 @@ def answer_file_input(webview, request):
         chooser.set_filename(selected[0])
     guarding = keeper()
 
+    unfit = _fitting()
+
     def answered(native, response):
+        unfit()
         _open.discard(native)
         if _accepted(response) and int(response) == int(Gtk.ResponseType.ACCEPT):
             if guarding is not None:
@@ -686,7 +982,11 @@ def _wrap_pywebview_dialogs():
     def create_file_dialog(self, *args, **kwargs):
         guarding = keeper()
         if guarding is None:
-            return original(self, *args, **kwargs)
+            unfit = _fitting()
+            try:
+                return original(self, *args, **kwargs)
+            finally:
+                unfit()
         chooser = _gtk()[1].FileChooser
 
         def answered(dialog, response):
@@ -694,11 +994,13 @@ def _wrap_pywebview_dialogs():
                 _answered(guarding, dialog, response)
 
         unhook = _hook_responses(answered)
+        unfit = _fitting()
         guarding.opened()
         try:
             return original(self, *args, **kwargs)
         finally:
             guarding.closed()
+            unfit()
             unhook()
 
     create_file_dialog.recentguard = True
