@@ -25,8 +25,9 @@ SealedLore's keys_in_the_clear): to plain http on another machine of the local n
 where anyone on it can read it, a key goes only once the user has agreed for that origin (`answer_in_the_clear`:
 the window asks, No the default, and a No is kept for that origin, not asked again; `daprivatecoder key set`
 asks in a terminal). Without that it is refused, in words naming the address and the ways out (KeyInTheClear).
-A key already going there when this version first reads it (stored before origins were kept) is taken as agreed,
-once, with no question, as its origin is."""
+A key already going there when this version first reads it (stored before origins were kept) takes that address's
+origin, as any such key does, but is not taken as agreed (nothing is grandfathered): it is held back until the user
+says Yes."""
 
 from __future__ import annotations
 
