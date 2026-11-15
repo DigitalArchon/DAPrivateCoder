@@ -277,3 +277,60 @@ def test_the_settings_and_state_folders_are_this_users_alone(tmp_path, monkeypat
         os.umask(old)
         if gate._held is not None:
             os.close(gate._held)
+
+
+def test_the_data_folder_of_the_editors_script_is_this_users_alone(tmp_path, monkeypatch):
+    """~/.local/share/daprivatecoder, which holds the editor's script (editor/claude-editor), was made as the umask said
+    (0775 where it is 002, as on Mint and Ubuntu), as the settings and state folders were: this user's alone now, made
+    so, and set so as the window starts where an earlier version left it open. Never made where nothing was written,
+    and ~/.local/bin, which isn't the app's, is left as it is."""
+    import os
+    import stat
+
+    from daprivatecoder import commands
+
+    def mode(path) -> int:
+        return stat.S_IMODE(os.stat(path).st_mode)
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))   # never the user's, whatever their environment says
+    data = tmp_path / "data" / "daprivatecoder"
+    assert config.data_dir() == data and commands.wrapper_dir() == data / "editor"
+    old = os.umask(0o002)
+    try:
+        commands.refresh()                                  # the window starting before anything was written
+        assert not data.exists()
+        script = commands.write_editor_script()
+        assert script.parent == data / "editor"
+        assert mode(data) == 0o700 and mode(data / "editor") == 0o700
+        assert mode(script) == 0o755                        # the script itself still runs
+        # there already, as an earlier version made them: set so as the window starts
+        for folder in (data, data / "editor"):
+            os.chmod(folder, 0o775)
+        commands.refresh()
+        assert mode(data) == 0o700 and mode(data / "editor") == 0o700
+        os.chmod(data, 0o775)
+        (data / "editor" / "claude-editor").unlink()
+        os.rmdir(data / "editor")
+        commands.refresh()                                  # the folder alone, no script in it any more
+        assert mode(data) == 0o700
+        # the terminal commands' folder is the user's PATH, not the app's: made as the umask says, never set
+        commands.install()
+        assert mode(commands.bin_dir()) == 0o775
+    finally:
+        os.umask(old)
+
+
+def test_webkit_keeps_nothing_of_the_window_on_disk():
+    """WebKit, given a context of its own, keeps an app's HSTS list, storage salts and caches in folders named after
+    the program under the data and cache folders, made as the umask says (DA Assistant's found 0775). The window is
+    started in pywebview's private mode, whose GTK backend gives WebKit an ephemeral context: nothing of the window's
+    is written there, and no such folder is made (checked from the AppImage under Xvfb, Nov 15 2026)."""
+    import inspect
+    import re
+    from pathlib import Path
+
+    gtk = pytest.importorskip("webview.platforms.gtk")
+    app = (Path(config.__file__).parent / "app.py").read_text(encoding="utf-8")
+    assert re.search(r"webview\.start\([^)]*private_mode=True", app)
+    backend = inspect.getsource(gtk)
+    assert re.search(r"if _state\['private_mode'\]:\s+(#[^\n]*\n\s+)?web_context = webkit\.WebContext\.new_ephemeral\(\)",
+                     backend)

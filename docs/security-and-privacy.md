@@ -490,8 +490,9 @@ place.
   its token, and what it runs where, readable only by you and gone with the session;
   `window.lock`, held while the app is open; and `proxy-errors.log`, what the proxies write when
   something goes wrong.
-- **The editor's script** in `~/.local/share/daprivatecoder/editor/`, and, if you installed them,
-  `claude-private` and `daprivatecoder` in `~/.local/bin`. With the editor's switch on, its user
+- **The editor's script** in `~/.local/share/daprivatecoder/editor/`, in a folder only you can open
+  (set so as the window starts, where an earlier version left it open to your group or to everyone),
+  and, if you installed them, `claude-private` and `daprivatecoder` in `~/.local/bin`. With the editor's switch on, its user
   settings name the script, and a copy of them from before is kept beside them
   (`*.daprivatecoder-backup`).
 - **Your keyring**: your API keys, and an address typed with a password.

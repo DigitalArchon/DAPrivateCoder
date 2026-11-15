@@ -59,6 +59,12 @@ def state_dir() -> Path:
     return Path(base) / APP_ID
 
 
+def data_dir() -> Path:
+    """The app's data folder: the editor's script (commands.wrapper_dir) is in it."""
+    base = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
+    return Path(base) / APP_ID
+
+
 def config_path() -> Path:
     return config_dir() / "config.toml"
 
@@ -101,13 +107,14 @@ def write_private(path: Path, data: bytes | str, mode: int = 0o600) -> None:
 
 
 def made(folder: Path) -> Path:
-    """`folder`, made if it isn't there. Where it is the app's settings or state folder, or one inside them, that
+    """`folder`, made if it isn't there. Where it is the app's settings, state or data folder, or one inside them, that
     folder and it are readable by this user alone (0700), made so or set so if they were there already: the request
-    log, each session's token and what it runs where, the window's lock and the settings are nobody else's to list or
-    read. They were made as the umask said, which lets every user of the computer list them (0755). A folder elsewhere
-    (a --config file's) is made as the umask says and left as it is."""
+    log, each session's token and what it runs where, the window's lock, the settings and the editor's script are
+    nobody else's to list, read or change. They were made as the umask said, which lets every user of the computer
+    list them (0755), and where it is 002 (Mint, Ubuntu) the user's group change what is in them (0775). A folder
+    elsewhere (a --config file's, ~/.local/bin) is made as the umask says and left as it is."""
     folder = Path(folder)
-    for own in (config_dir(), state_dir()):
+    for own in (config_dir(), state_dir(), data_dir()):
         if folder == own or own in folder.parents:
             own.mkdir(parents=True, exist_ok=True, mode=0o700)
             folder.mkdir(parents=True, exist_ok=True, mode=0o700)

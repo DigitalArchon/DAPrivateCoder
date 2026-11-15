@@ -73,7 +73,9 @@ def install(names=tuple(COMMANDS)) -> dict[str, str]:
 
 def refresh() -> None:
     """Write again the commands and editor scripts DA Private Coder installed that no longer run it as
-    it runs now (an AppImage moved); never install ones the user hasn't."""
+    it runs now (an AppImage moved); never install ones the user hasn't. The folders of the editor's script are
+    made this user's alone first (own_folders), where an earlier version left them open."""
+    own_folders()
     stale = [name for name in COMMANDS if state(name) == "stale" and MARK in _text(path_of(name))]
     if stale:
         install(stale)
@@ -88,9 +90,19 @@ EDITOR_SCRIPT = "claude-editor"
 
 
 def wrapper_dir() -> Path:
-    """Where the editor's script is: out of the PATH."""
-    base = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
-    return Path(base) / "daprivatecoder" / "editor"
+    """Where the editor's script is: out of the PATH, in the app's data folder (~/.local/share/daprivatecoder)."""
+    from . import config
+    return config.data_dir() / "editor"
+
+
+def own_folders() -> None:
+    """The app's data folder, and the editor's script's folder in it, this user's alone (config.made: 0700), where they
+    are and an earlier version made them as the umask said (0775 or 0755, so that others could list them, and with a
+    umask of 002 the user's group change the script the editor runs). Nothing is made where nothing was written."""
+    from . import config
+    for folder in (wrapper_dir(), config.data_dir()):
+        if folder.is_dir():
+            config.made(folder)
 
 
 def editor_script() -> str:
@@ -111,7 +123,7 @@ def _write(path: Path, text: str) -> None:
     """A command, written whole or not at all and runnable (config.write_private): a link where it stood is
     replaced, never followed. The fixed temporary name it was written under before was any other copy's too."""
     from . import config
-    path.parent.mkdir(parents=True, exist_ok=True)
+    config.made(path.parent)                    # the editor's script's folder this user's alone; ~/.local/bin as it is
     if path.is_symlink():
         path.unlink()
     config.write_private(path, text, mode=0o755)
