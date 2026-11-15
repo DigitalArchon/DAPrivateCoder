@@ -518,6 +518,13 @@ The desktop's file-dialog service (xdg-desktop-portal) won't serve a process set
 where your desktop asks programs for its dialogs (`GTK_USE_PORTAL=1`), the folder chooser is GTK's
 own; what the app starts for you, the web browser it opens included, still gets your desktop's choice.
 
+The folder chooser leaves your recent files list as it was: GTK's chooser adds the folder you choose
+to the desktop's recent files list (`~/.local/share/recently-used.xbel`) and rewrites the whole list
+as it does, dropping entries older than 30 days, then again as the app quits, and the app puts the
+list back as it was, byte for byte, after each of those writes. A change another program makes to the
+list in the quarter of a second after you choose, or as the app quits, is lost, as GTK's own write
+would lose it.
+
 ## What the app can't protect you from
 
 - **What isn't sealed is read.** NanoGPT reads everything sent to a TEE model, and NanoGPT or your

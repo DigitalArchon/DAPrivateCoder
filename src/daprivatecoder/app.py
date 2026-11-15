@@ -16,6 +16,7 @@ import threading
 import time
 from pathlib import Path
 
+from . import recentguard
 from .hostenv import HOST_TYPELIB_DIRS, open_url, set_for_self
 
 NAME = "DA Private Coder"
@@ -84,7 +85,8 @@ class Desktop:
                 dialog.set_modal(True)
                 if start and os.path.isdir(start):
                     dialog.set_current_folder(start)
-                if dialog.run() == Gtk.ResponseType.ACCEPT:
+                # the folder chosen kept out of the desktop's recent files list (recentguard)
+                if recentguard.run(dialog) == Gtk.ResponseType.ACCEPT:
                     result["folder"] = dialog.get_filename() or ""
                 dialog.destroy()
             finally:
@@ -352,9 +354,13 @@ def main(argv: list[str] | None = None) -> None:
                 for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
                     GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, sig, close)
 
+            # pywebview's own dialogs and the page's <input type="file">, if it ever has one, keep
+            # their files out of the recent files list too (recentguard)
+            recentguard.guard_pywebview(window)
             webview.start(on_started, gui="gtk", private_mode=True, icon=window_icon())
     except KeyboardInterrupt:
         pass
     finally:
+        recentguard.put_back()          # GTK writes the list from its model as the loop ends
         server.should_exit = True
         thread.join(timeout=10)
