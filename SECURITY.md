@@ -28,8 +28,12 @@ Anything that breaks one of DA Private Coder's promises, as
 - an API key reaching Claude Code or going anywhere but its own provider; a secret (an API key, a
   password written into an address) written in the clear to a file, a log or a message; or a
   session's or the window's token reaching anyone else logged in to the computer;
+- a key going to an address other than the one it was stored for, or a key or a password going
+  over plain http to another machine on your network before you have said yes;
 - an address used that isn't HTTPS, but for this computer, your local network or a Tor onion
   service, or a provider's redirect followed;
+- a crash of one of DA Private Coder's own processes writing a core dump of its memory, or its
+  folder chooser leaving your recent files list changed;
 - something from your computer, or a key or password, getting into a web search or an address
   WebFetch reads, or text aimed at the model in search results reaching it unmarked;
 - the editor's switch running Claude Code on DA Private Coder in a folder not chosen for it;

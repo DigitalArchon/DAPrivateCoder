@@ -257,7 +257,10 @@ runs the model:
   to the address it was set for: change the address to another server, or from https to http, and
   the key is asked for again. A user name
   and password written into the address (`https://user:password@host/v1`) are kept in your keyring
-  too, not in the settings file, and nothing the app shows or logs names them.
+  too, not in the settings file, and nothing the app shows or logs names them. Over plain http to
+  another machine on your network, where anyone on it could read them, neither goes until you say
+  yes where the window asks (Models, Standard; No is the default, and a No is kept): a key that
+  went there with an earlier version is held back too, until you do.
 - **Runs on** (per model, NanoGPT and OpenRouter): the provider's own choice of host (on NanoGPT,
   what a subscription covers), or the fastest, the cheapest, the quickest to answer, or a host you
   pick from the provider's list, with its precision, price and speed; FP8 or better by default.
