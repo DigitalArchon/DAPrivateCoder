@@ -190,6 +190,10 @@ def create_app(token: str, manager: Manager, desktop=None, on_quit: Callable[[],
                         body.get("route"))
         return await in_thread(manager.state)
 
+    async def setup(request, body):
+        await in_thread(manager.setup_provider, str(body.get("provider") or ""), str(body.get("base_url") or ""))
+        return await in_thread(manager.state)
+
     async def start(request, body):
         await in_thread(manager.set_start, str(body.get("session") or ""))
         return await in_thread(manager.state)
@@ -263,6 +267,7 @@ def create_app(token: str, manager: Manager, desktop=None, on_quit: Callable[[],
         Route("/api/hosts", api(hosts), methods=["POST"]),
         Route("/api/route", api(route), methods=["POST"]),
         Route("/api/start", api(start), methods=["POST"]),
+        Route("/api/setup", api(setup), methods=["POST"]),
         Route("/api/tee-names", api(tee_names), methods=["POST"]),
         Route("/api/models", api(models)),
         Route("/api/check", api(check), methods=["POST"]),

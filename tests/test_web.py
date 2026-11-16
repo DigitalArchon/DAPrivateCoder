@@ -191,3 +191,16 @@ const test = ([kind, service]) => [providersFor(kind), kindOn({ services: { [kin
     chutes, tinfoil = run(sent_chip(), cases)
     assert chutes[:2] == ["tee", "sealed (Chutes, partial)"] and "Partial privacy" in chutes[2]
     assert "aegis" in chutes[2] and tinfoil[:2] == ["private", "sealed (Tinfoil)"]
+
+
+def test_setup_asks_for_its_providers_key_alone_and_says_web_search_needs_nanogpts():
+    code = script("PROVIDERS", "providerSaid", "needsSetup", "setupWhat", "searchNeedsNanogpt") + """
+const test = (st) => st.what ? setupWhat(st.what) : st.search ? searchNeedsNanogpt() : needsSetup(st);"""
+    base = {"config_error": "", "claude": {"path": "/usr/bin/claude"}, "key": {"stored": False}}
+    assert run(code, [{**base, "setup_ready": True}, {**base, "setup_ready": False}, base,
+                      {**base, "key": {"stored": True}}]) == [False, True, True, False]
+    tinfoil, chutes, anthropic, own, search = run(code, [{"what": w} for w in ("tinfoil", "chutes", "anthropic", "custom")]
+                                                  + [{"search": True}])
+    assert "end-to-end encrypted straight to Tinfoil" in tinfoil and "partial privacy" in chutes
+    assert "Standard sessions run on Anthropic, not private" in anthropic and "Only if your provider needs a key" in own
+    assert "without one, sessions start with web search off" in search

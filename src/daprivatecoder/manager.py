@@ -23,6 +23,9 @@ from .search import NAMES as SEARCH_NAMES
 PROFILE_FIELDS = ("model", "opus_model", "fast_model", "vision_model", "reasoning", "web_search", "provider", "base_url")
 # the window's three kinds of session, each a profile of that name (config.DEFAULTS)
 SESSIONS = ("private", "tee", "standard")
+# the kind of session a provider chosen in Setup runs (setup_provider): Tinfoil's private sessions, Chutes' TEE ones
+# (its -TEE models, end-to-end encrypted), any other's standard ones; NanoGPT runs all three
+SETUP_KIND = {"tinfoil": "private", "chutes": "tee"}
 THEMES = ("dark", "light", "system")
 RECENT = 8                                  # folders remembered for "Open Claude Code"
 MODELS_FOR = 10 * 60                        # the list of private models is read again after this
@@ -115,7 +118,9 @@ class Manager:
         return {"theme": data.get("theme") if data.get("theme") in THEMES else "dark",
                 "recent": [f for f in data.get("recent", []) if isinstance(f, str)][:RECENT],
                 # what "Start Claude Code" opens: a private, TEE or standard session
-                "start": data.get("start") if data.get("start") in SESSIONS else "private"}
+                "start": data.get("start") if data.get("start") in SESSIONS else "private",
+                # the provider Setup was given (setup_provider): NanoGPT unless another was chosen there
+                "setup": data.get("setup") if data.get("setup") in providers.PROVIDERS else "nanogpt"}
 
     def _save_prefs(self, prefs: dict) -> None:
         path = prefs_path()
@@ -189,6 +194,21 @@ class Manager:
                 return key["stored"]
             return pk["stored"] or providers.get(pk["provider"]).key_optional
         out["ready"] = {name: base and key_ok(name) for name in SESSIONS}
+        # Setup's provider and its key: NanoGPT's, or the one another provider's session runs on (setup_provider), so
+        # a key of Anthropic's, Tinfoil's or Chutes' alone gets through Setup
+        chosen = out.get("setup") if out.get("setup") in providers.PROVIDERS else "nanogpt"
+        out["setup"] = chosen
+        spec = providers.get(chosen)
+        if chosen == "nanogpt":
+            setup_key = key
+        else:
+            kind = SETUP_KIND.get(chosen, "standard")
+            profile = cfg.profiles.get(kind) if cfg else None
+            setup_key = out["provider_keys"].get(kind) if profile and profile.provider == chosen else None
+            setup_key = setup_key or {"provider": chosen, "stored": False, "ending": "", "error": "", "in_the_clear": "",
+                                      "clear_host": ""}
+        out["setup_key"] = setup_key
+        out["setup_ready"] = bool(cfg) and (setup_key["stored"] or spec.key_optional)
         return out
 
     def usage(self) -> dict:
@@ -447,6 +467,26 @@ class Manager:
         the next reply on; off, nothing more is asked of api.redpill.ai."""
         cfg = config.load()
         config.save(replace(cfg, tee_name_upstreams=bool(on)))
+
+    def setup_provider(self, provider: str, base_url: str = "") -> None:
+        """Setup's provider: NanoGPT (as before: every kind of session on it), or another, whose kind of session is
+        set to it (SETUP_KIND: Tinfoil's private one, Chutes' TEE one, any other's standard one), with its models,
+        and made the session Start opens. A provider of your own needs its address."""
+        spec = providers.PROVIDERS.get(provider)
+        if spec is None:
+            raise UserError(f"There's no provider called {provider!r}.")
+        prefs = self.prefs()
+        if provider != "nanogpt":
+            kind = SETUP_KIND.get(provider, "standard")
+            fields = {"provider": provider, **({"base_url": base_url} if spec.own_address else {})}
+            if spec.own_address and not (base_url or "").strip():
+                raise UserError("Give your provider's address first.")
+            current = config.load().profile(kind)
+            if current.provider != provider or (spec.own_address and current.base_url != base_url.strip()):
+                self.save_profile(kind, fields)
+            prefs["start"] = kind
+        prefs["setup"] = provider
+        self._save_prefs(prefs)
 
     def set_start(self, session: str) -> None:
         if session not in SESSIONS:

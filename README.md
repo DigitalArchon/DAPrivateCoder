@@ -61,12 +61,16 @@ your computer and what the app can't protect you from are set out in
 
 You need x86-64 Linux with GLib 2.80 or newer (Ubuntu 24.04, Mint 22, Debian 13, current Fedora and
 Arch), Claude Code (the CLI, or the Claude Code extension of VSCodium or VS Code, whose own Claude
-Code is used), and a NanoGPT API key with credit (Private Mode is paid per use).
+Code is used), and an API key with credit: NanoGPT's (Private Mode is paid per use), or one of
+Tinfoil's, Chutes', Anthropic's or another provider's.
 
 1. Download `DAPrivateCoder-<version>-x86_64.AppImage`, make it executable, and open it.
    The window needs WebKitGTK 4.1 (`sudo apt install gir1.2-webkit2-4.1`, `sudo dnf install
    webkit2gtk4.1`, `sudo pacman -S webkit2gtk-4.1`); without it, it opens in your web browser.
-2. In **Setup**: paste your NanoGPT key (or use DA Vibe Manager's).
+2. In **Setup**: paste your NanoGPT key (or use DA Vibe Manager's). Or choose another **Provider**
+   there and paste its key alone: Tinfoil runs Private sessions, Chutes TEE ones (its `-TEE`
+   models), Anthropic, OpenRouter or a provider of your own Standard ones. Web search goes through
+   NanoGPT, so without a NanoGPT key sessions start with it off.
 3. **Start Claude Code**: choose a folder, and **Open in VSCodium** (or VS Code), or **Open in a
    terminal**. **Private** is chosen; **TEE** and **Standard** aren't end-to-end encrypted. To type
    `claude-private` in a terminal yourself instead, **Install** the terminal commands (optional).
@@ -320,7 +324,8 @@ the editor, or `daprivatecoder claude --profile tee` (or `standard`) in a termin
 
 Claude Code's own web search runs on Anthropic's servers, so DA Private Coder gives it one of its
 own, through NanoGPT. **No search is end-to-end encrypted**, whichever you choose: NanoGPT and the
-search provider read every query.
+search provider read every query. It needs a NanoGPT API key: without one stored, a session starts
+with web search off, and says so.
 
 | Choice | Searches with | What the provider keeps |
 |---|---|---|

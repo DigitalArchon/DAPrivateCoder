@@ -571,7 +571,8 @@ went and how, and which will stop.
 Claude Code's own web search runs on Anthropic's servers, so it is switched off in a session, and
 DA Private Coder gives it one of its own: a small server Claude Code starts, which searches through
 NanoGPT with your key. **No search is end-to-end encrypted**, whichever session it is in: NanoGPT
-and the search provider read each one.
+and the search provider read each one. Without a NanoGPT key stored (a session set up with another provider's key alone), a session
+starts with web search off: no search server, and nothing searched.
 
 - **Asked first.** Claude Code asks you before each search, showing the query; an earlier "don't
   ask again" doesn't skip it. With no one to ask (`claude -p`), a search runs only where you allowed

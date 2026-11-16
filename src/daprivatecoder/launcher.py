@@ -446,10 +446,31 @@ def run_for_folder(argv: list[str]):
     run(load(), profile_name, argv)
 
 
+# said when a session starts with its web search left off for want of NanoGPT's key (searching)
+NO_SEARCH_KEY = ("Web search is off in this session: it goes through NanoGPT, and no NanoGPT API key is stored. Add "
+                 "one in DA Private Coder's window (Setup) to search.")
+
+
+def searching(cfg: Config, profile: Profile) -> Profile:
+    """`profile` as a session starts it: its web search left off when no NanoGPT key is stored, since every search
+    goes through NanoGPT (search.py). A keyring that can't be read now leaves it on: the search says why it can't."""
+    from dataclasses import replace
+
+    from . import creds
+    if profile.web_search == "off":
+        return profile
+    try:
+        stored = creds.get_key("nanogpt", cfg.base_url, sending=False)
+    except creds.KeyringUnavailable:
+        return profile
+    return profile if stored else replace(profile, web_search="off")
+
+
 def run(cfg: Config, profile_name: str, argv: list[str]):
     """Become Claude Code, on a proxy for `profile_name`. Returns only by raising."""
     from . import editor, gate
-    profile = cfg.profile(profile_name)
+    asked = cfg.profile(profile_name)
+    profile = searching(cfg, asked)
     wrapped, args = split_wrapper_args(argv)
     # the editor's process wrapper: the editor whose switch this is, so the session stops when it's off
     editors = editor.started_by(wrapped, profile.name) if wrapped else []
@@ -472,7 +493,7 @@ def run(cfg: Config, profile_name: str, argv: list[str]):
     proxy = start_proxy(profile, sock, token, cfg.path, editors)
     sock.close()                                  # the proxy has it now
     full_args = write_settings(full_args, proxy.pid)
-    notice = search_notice(profile)
+    notice = search_notice(profile) or (NO_SEARCH_KEY if asked.web_search != profile.web_search else "")
     if notice and sys.stderr.isatty():
         print(f"daprivatecoder: {notice}", file=sys.stderr)
     os.execve(binary, [binary, *full_args], child_env(dict(os.environ), env))

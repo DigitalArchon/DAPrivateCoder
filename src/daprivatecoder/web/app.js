@@ -42,7 +42,7 @@ const $ = (sel) => document.querySelector(sel);
 // whether its hosts below FP8 are left out), what is typed and not yet saved (drafts: a key, an address),
 // the actions under way (busy: not sent twice), what is being checked
 const S = { state: null, folder: "", tab: "", models: {}, modelsError: {}, hosts: {}, routeHost: {}, routeFp8: {},
-  customUrl: "", replacing: "", checking: "", drafts: {}, busy: {}, asked: 0, shown: 0 };
+  customUrl: "", setupOwn: "", replacing: "", checking: "", drafts: {}, busy: {}, asked: 0, shown: 0 };
 // what the editor's switch runs when it runs each folder as chosen (editor.PER_FOLDER)
 const PER_FOLDER = ":folders";
 
@@ -334,22 +334,76 @@ function keyControls(slot, state, provider, label, said) {
   return { stored: true, controls: [replace, remove], extra: replacing };
 }
 
-// what Setup still needs before any session can start: it's shown first until then
+// what Setup still needs before any session can start: it's shown first until then. The key is Setup's provider's
+// (manager.py setup_ready): NanoGPT's, or Anthropic's, Tinfoil's, Chutes' or another's alone
 function needsSetup(st) {
-  return Boolean(st.config_error) || !st.claude.path || !st.key.stored;
+  const keyed = st.setup_ready !== undefined ? st.setup_ready : st.key.stored;
+  return Boolean(st.config_error) || !st.claude.path || !keyed;
+}
+
+// Setup's provider (manager.py SETUP_KIND): which kind of session it runs, and what its key is for
+const SETUP_KINDS = { tinfoil: "private", chutes: "tee" };
+function setupWhat(provider) {
+  if (provider === "nanogpt") return "Needed for Private and TEE sessions, web search, and Standard sessions on NanoGPT. "
+    + "Usage is paid from your NanoGPT balance. Get a key at nano-gpt.com/api.";
+  if (provider === "tinfoil") return "Private sessions run on Tinfoil, every request end-to-end encrypted straight to "
+    + "Tinfoil's verified router (preliminary). Usage is paid from your Tinfoil account.";
+  if (provider === "chutes") return "TEE sessions run on Chutes' -TEE models, each request end-to-end encrypted to a verified "
+    + "Chutes instance, with partial privacy (preliminary). Usage is paid from your Chutes account.";
+  const own = PROVIDERS[provider] && PROVIDERS[provider].own;
+  return `Standard sessions run on ${own ? "your provider" : providerSaid(provider)}, not private: it can read every prompt, `
+    + `file and reply.${own ? " Only if your provider needs a key." : ""}`;
+}
+
+// web search goes through NanoGPT whatever the session's provider: without its key, sessions start with it off
+function searchNeedsNanogpt() {
+  return "Web search goes through NanoGPT, so it needs a NanoGPT API key: without one, sessions start with web search off.";
 }
 
 function setupSection(st) {
   const k = st.key;
-  const nano = keyControls("nanogpt", k, "nanogpt", "NanoGPT", "The key is stored in your keyring.");
-  const keyRow = check(nano.stored, "NanoGPT API key",
-    nano.stored ? `Stored in your keyring (ending ${k.ending}).`
-      : k.error || "Needed for Private and TEE sessions, web search, and Standard sessions on NanoGPT. "
-        + "Usage is paid from your NanoGPT balance. Get a key at nano-gpt.com/api.",
-    ...nano.controls,
-    !nano.stored && k.vibe_manager ? h("button", { class: "small", onclick: () => act("POST", "/api/key", { from: "vibe-manager" },
-      "DA Vibe Manager's key is now stored for DA Private Coder too.") }, "Use DA Vibe Manager's key") : null);
-  if (nano.extra) keyRow.querySelector(".body").append(nano.extra);
+  const chosen = st.setup || "nanogpt";
+  const pickRow = h("div", { class: "model-row" }, h("label", {}, "Provider"),
+    h("select", { onchange: (e) => {
+      const v = e.target.value;
+      if (PROVIDERS[v].own) { S.setupOwn = v; render(); }
+      else { S.setupOwn = ""; act("POST", "/api/setup", { provider: v }, v === "nanogpt" ? "NanoGPT is set up."
+        : `${PROVIDERS[v].name} is set up for ${KINDS[SETUP_KINDS[v] || "standard"].label} sessions.`); }
+    } }, Object.keys(PROVIDERS).map((v) => h("option", { value: v, selected: v === (S.setupOwn || chosen) }, PROVIDERS[v].label))));
+  const rows = [pickRow];
+  if (S.setupOwn) {
+    const spec = PROVIDERS[S.setupOwn];
+    const url = h("input", { type: "text", class: "mono", placeholder: spec.placeholder, value: S.drafts.setupUrl || "",
+      oninput: (e) => { S.drafts.setupUrl = e.target.value; } });
+    rows.push(h("div", { class: "model-row" }, h("label", {}, "Address"), h("div", { class: "row" }, url,
+      h("button", { class: "small primary", onclick: () => act("POST", "/api/setup", { provider: S.setupOwn, base_url: url.value.trim() },
+        "Your provider is set up for Standard sessions.").then((done) => { if (done) { S.setupOwn = ""; delete S.drafts.setupUrl; } }) },
+      "Save"))));
+  }
+  let keyRow;
+  if (chosen === "nanogpt" || S.setupOwn) {
+    const nano = keyControls("nanogpt", k, "nanogpt", "NanoGPT", "The key is stored in your keyring.");
+    keyRow = check(nano.stored, "NanoGPT API key",
+      nano.stored ? `Stored in your keyring (ending ${k.ending}).` : k.error || setupWhat("nanogpt"),
+      ...nano.controls,
+      !nano.stored && k.vibe_manager ? h("button", { class: "small", onclick: () => act("POST", "/api/key", { from: "vibe-manager" },
+        "DA Vibe Manager's key is now stored for DA Private Coder too.") }, "Use DA Vibe Manager's key") : null);
+    if (nano.extra) keyRow.querySelector(".body").append(nano.extra);
+  } else {
+    const sk = st.setup_key || { stored: false };
+    const own = Boolean(PROVIDERS[chosen].own);
+    const keys = keyControls(`setup:${chosen}`, sk, chosen, keyName(chosen), "The key is stored in your keyring.");
+    keyRow = check(sk.stored || (own ? "optional" : false), `${own ? "Your provider's" : providerSaid(chosen)} API key`,
+      sk.stored ? `Stored in your keyring (ending ${sk.ending}).` : sk.error || setupWhat(chosen), ...keys.controls);
+    if (keys.extra) keyRow.querySelector(".body").append(keys.extra);
+    // NanoGPT's key, for web search alone here: optional, and said so
+    const nano = keyControls("nanogpt", k, "nanogpt", "NanoGPT", "The key is stored in your keyring. Web search can be used.");
+    const searchRow = check(nano.stored || "optional", "NanoGPT API key, for web search",
+      nano.stored ? `Stored in your keyring (ending ${k.ending}).` : searchNeedsNanogpt(), ...nano.controls);
+    if (nano.extra) searchRow.querySelector(".body").append(nano.extra);
+    rows.push(keyRow);
+    keyRow = searchRow;
+  }
 
   const claude = check(Boolean(st.claude.path), "Claude Code",
     st.claude.path ? h("span", { class: "mono" }, st.claude.path) : st.claude.error);
@@ -372,7 +426,7 @@ function setupSection(st) {
   const noEditor = st.editors.length ? null
     : check("optional", "Claude Code in your editor", "VSCodium and VS Code weren't found. Use a terminal instead.");
 
-  return h("div", { class: "section" }, h("h3", {}, "Setup"), keyRow, claude, commandsRow, noEditor);
+  return h("div", { class: "section" }, h("h3", {}, "Setup"), ...rows, keyRow, claude, commandsRow, noEditor);
 }
 
 // ------------------------------------------------------------------ each profile's models, and the hosts that run them
@@ -801,6 +855,8 @@ function searchPart(st, tab, p) {
       "Perplexity for answers, Kagi for finding sites. Not zero data retention: NanoGPT and the search provider can read each "
       + "search, and the provider keeps it under its own policy."),
     radio("off", "No web search", "Claude Code can still fetch a page if you give it the address."),
+    st.key.stored || p.web_search === "off" ? null : h("div", { class: "warnbox" }, searchNeedsNanogpt(),
+      " Add it in Setup."),
     p.web_search === "best" && tab === "private" ? h("div", { class: "warnbox" }, h("b", {}, "Your sessions are private, but these searches aren't. "),
       "Perplexity and Kagi may keep your searches. Choose Keep nothing to use Linkup, which doesn't.") : null);
 }
