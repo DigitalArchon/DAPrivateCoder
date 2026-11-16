@@ -439,3 +439,19 @@ def test_a_conversation_taken_up_again_says_the_claude_model_it_began_on(tmp_pat
     anthropic = Profile("a", "standard", "claude-opus-5-5", "claude-opus-5-5", "claude-haiku-5-5", "", "low",
                         provider="anthropic")
     assert launcher.began_on(anthropic, ["claude-opus-5-5"]) == "" and launcher.began_on(NANO, ["claude-opus-5-5"])
+
+
+def test_a_provider_that_gets_claude_codes_requests_as_written_gets_its_billing_block_too():
+    """Anthropic answered every request of an Anthropic session with "Your credit balance is too low" (Nov 2026, an
+    account with credit): it knows Claude Code's requests by their claude-code beta and system prompt, and refuses them
+    without Claude Code's billing block, which the launcher took out for every session. A provider that gets Claude
+    Code's requests as written keeps it; every other provider still goes without (it means nothing to its models)."""
+    anthropic = Profile("a", "standard", "claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-5-5", "", "low",
+                        provider="anthropic")
+    own = Profile("o", "standard", "some-model", "some-model", "some-model", "", "low", provider="custom-anthropic",
+                  base_url="https://llm.example.com")
+    for profile in (anthropic, own):
+        assert "CLAUDE_CODE_ATTRIBUTION_HEADER" not in claude_env(profile, 1, "t"), profile.provider
+    for profile in (PRIVATE, NANO, Profile("r", "standard", "z-ai/glm-5.3", "z-ai/glm-5.3", "z-ai/glm-5.3", "", "low",
+                                           provider="openrouter")):
+        assert claude_env(profile, 1, "t")["CLAUDE_CODE_ATTRIBUTION_HEADER"] == "0", profile.provider

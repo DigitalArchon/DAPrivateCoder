@@ -104,6 +104,10 @@ nothing is translated, and the model is the one Claude Code asked for, its own n
 header. Two things are taken out on the way, as for a Claude model on any provider: Claude Code's
 `metadata` (this computer's device id and the session's id; Anthropic knows your account by its
 key), and the reasoning blocks of another model this app ran, which Anthropic's API would refuse.
+Claude Code's billing block (the first line of its system prompt: its version, how it was started, and
+a short fingerprint of the conversation) goes to Anthropic as plain Claude Code sends it: Anthropic
+refuses a request it knows as Claude Code's without it. Every other provider gets Claude Code's
+requests without that block.
 A provider of your own that speaks Anthropic's API (**Another provider (Anthropic-compatible)**)
 gets the same: every request as Claude Code wrote it, less those two, its key (if you stored one)
 in `x-api-key`. One that speaks OpenAI's gets Claude Code's requests translated, as OpenRouter does

@@ -175,6 +175,12 @@ def claude_env(profile: Profile, port: int, token: str) -> dict[str, str]:
     # assume 200K and say so at every start; Claude's own models (a standard profile's anthropic/…) keep theirs
     env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = str(profile.context)
     env.update(auto_mode_env(profile))
+    if providers.get(profile.provider).api == "anthropic":
+        # a provider that gets Claude Code's requests as Claude Code wrote them (Anthropic, or one that speaks its API)
+        # gets Claude Code's billing block too: Anthropic answers a request it knows as Claude Code's (its
+        # claude-code beta, its system prompt) without it with "Your credit balance is too low", whatever the
+        # balance (measured Nov 2026: the same request with the block went through)
+        env.pop("CLAUDE_CODE_ATTRIBUTION_HEADER", None)
     if profile.kind != "standard":
         # no pre-release features (Anthropic's server-side context editing, tool search): nothing here runs them
         env["CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"] = "1"
