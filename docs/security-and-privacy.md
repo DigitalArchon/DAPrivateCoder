@@ -74,7 +74,10 @@ Your AI provider for private and TEE sessions, and for a standard session on Nan
 HTTPS. With your NanoGPT key, the app sends it:
 
 - Claude Code's requests to its model, translated or forwarded by the session's proxy
-  ([below](#how-a-session-runs-the-proxy));
+  ([below](#how-a-session-runs-the-proxy)). A standard model's go to NanoGPT's Anthropic endpoint
+  (`https://nano-gpt.com/api/v1/messages`) as Claude Code wrote them, less its `metadata` (this
+  computer's device id and the session's id) and its thinking setting, with images described first
+  for a model that can't see them;
 - for a private model: the Private Mode preflight before each request (NanoGPT checks your balance
   and reserves the charge), and the sealed request itself ([Private sessions](#private-sessions));
 - for a TEE model: the request for its attestation, and, after each reply, for the record NanoGPT
@@ -103,8 +106,8 @@ header. Two things are taken out on the way, as for a Claude model on any provid
 key), and the reasoning blocks of another model this app ran, which Anthropic's API would refuse.
 A provider of your own that speaks Anthropic's API (**Another provider (Anthropic-compatible)**)
 gets the same: every request as Claude Code wrote it, less those two, its key (if you stored one)
-in `x-api-key`. One that speaks OpenAI's gets Claude Code's requests translated, as NanoGPT and
-OpenRouter do. Either way its key is its server's, by host and port: the same key whichever API
+in `x-api-key`. One that speaks OpenAI's gets Claude Code's requests translated, as OpenRouter does
+(and NanoGPT, for its private and TEE models). Either way its key is its server's, by host and port: the same key whichever API
 you choose for that server, and no other server's.
 
 ### Tinfoil (inference.tinfoil.sh), directly: private sessions on Tinfoil (preliminary)

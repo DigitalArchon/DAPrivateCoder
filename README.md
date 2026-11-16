@@ -326,6 +326,11 @@ runs the model:
   what a subscription covers), or the fastest, the cheapest, the quickest to answer, or a host you
   pick from the provider's list, with its precision, price and speed; FP8 or better by default.
   **On NanoGPT a host you choose is paid per use, even for a model your subscription includes.**
+- On NanoGPT, every standard model goes to NanoGPT's Anthropic endpoint as Claude Code wrote it, nothing
+  translated: less Claude Code's `metadata` and its thinking setting (given one, NanoGPT runs a model
+  as its `:thinking` variant, which reasons at length whatever the effort; the effort decides, as
+  before), with images described for a model that can't see and the host chosen in **Runs on**.
+  On OpenRouter or another OpenAI-compatible provider, Claude Code's requests are translated.
 - A Claude model (`anthropic/…`) goes to the provider's Anthropic endpoint as Claude Code wrote it.
   A name of Claude Code's own (`claude-opus-…`) is refused, so nothing goes to Claude unless you pick
   it that way; only its quick background work under a Haiku name goes to the profile's quick model.
@@ -408,8 +413,9 @@ The proxy takes Claude Code's Anthropic requests and, for a private model, turns
 completions. Each is sealed with EHBP (HPKE X25519 and AES-GCM) to the attested enclave's key and
 sent through NanoGPT's relay; the replies come back as Anthropic events. A TEE model's are translated
 the same way and sent through NanoGPT once its enclave has attested; a standard model's go to its
-provider, with the host chosen for it; a Claude model's to the provider's Anthropic endpoint as they
-are, and on Anthropic every request, never translated. Before each one, the proxy asks whether it may: DA Private Coder holds a lock while it's open,
+provider, with the host chosen for it (on NanoGPT, to its Anthropic endpoint, untranslated); a Claude
+model's to the provider's Anthropic endpoint as they are, and on Anthropic every request, never
+translated. Before each one, the proxy asks whether it may: DA Private Coder holds a lock while it's open,
 which ends with it however it ends, and a session the editor started reads the editor's switch and
 its folder's choice (`~/.config/daprivatecoder/editor-folders.json`). The session's token is in a
 `--settings` file only you can read (`~/.local/state/daprivatecoder/sessions/`, gone with the session),

@@ -20,6 +20,18 @@ TOKEN = "session-token-" + "x" * 30
 PRIVATE = Profile("private", "private", "private/glm-5-3", "private/kimi-k3-1-pro", "private/deepseek-v4-1-flash",
                   "private/deepseek-v4-1-flash", "low")
 NANO = Profile("nano", "standard", "z-ai/glm-5.3", "moonshotai/kimi-k3", "z-ai/glm-5.3-flash", "", "low")
+# a standard profile whose models are translated to chat completions: OpenRouter's (a standard NanoGPT one goes to
+# NanoGPT's Anthropic endpoint as Claude Code wrote it: proxy._messages_any)
+TRANSLATED = Profile("or", "standard", "z-ai/glm-5.3", "moonshotai/kimi-k3", "z-ai/glm-5.3-flash", "", "low",
+                     provider="openrouter")
+OPENROUTER_URL = "https://openrouter.ai/api/v1"
+
+
+def on_openrouter(url=OPENROUTER_URL) -> dict:
+    """make()'s arguments for TRANSLATED: OpenRouter's address, its key, and its listing of GLM-5.3."""
+    return {"provider_url": url, "provider_key": lambda: "sk-or",
+            "provider_caps": capabilities.parse_openrouter([{"id": "z-ai/glm-5.3", "architecture": {
+                "input_modalities": ["text"]}, "supported_parameters": ["tools"]}])}
 CAPS = [
     {"id": "TEE/kimi-k3", "capabilities": {"vision": True, "tool_calling": True}, "context_length": 1048576,
      "pricing": {"prompt": 3, "completion": 15, "cacheReadInputPer1kTokens": 0.0015, "currency": "USD", "unit": "per_million_tokens"}},
@@ -221,8 +233,8 @@ async def test_a_model_that_refuses_an_effort_is_asked_again_with_one_it_names(t
     log = UsageLog(tmp_path / "requests.log", "s1")
     plain = Picky()
     # its provider's listing says it takes medium (as NanoGPT lists TEE/deepseek-v4.1-flash), but it refuses it
-    p, _ = make(replace(NANO, model="deepseek/deepseek-v4.1-flash"), plain=plain, log=log)
-    p._caps["nanogpt"] = {"deepseek/deepseek-v4.1-flash": {"tools": True, "efforts": ["none", "low", "medium", "high", "max"]}}
+    p, _ = make(replace(TRANSLATED, model="deepseek/deepseek-v4.1-flash"), plain=plain, log=log, **on_openrouter())
+    p._caps["openrouter"] = {"deepseek/deepseek-v4.1-flash": {"tools": True, "efforts": ["none", "low", "medium", "high", "max"]}}
     r = await call(p, "POST", "/v1/messages", message("deepseek/deepseek-v4.1-flash", output_config={"effort": "medium"}))
     assert r.status_code == 200 and "Hi from" in said(r)
     assert [c[3]["reasoning_effort"] for c in plain.calls] == ["medium", "high"]
@@ -384,16 +396,22 @@ async def test_a_standard_session_sends_other_models_in_the_clear_with_the_route
     from dataclasses import replace
     log = UsageLog(tmp_path / "requests.log", "s1")
     route = {"priority": "host", "host": "parasail", "host_name": "Parasail", "fp8": True}
-    plain = FakePlain()
-    p, fake = make(replace(NANO, routes={"z-ai/glm-5.3": route}), plain=plain, log=log)
+    plain, seen = FakePlain(), []
+
+    def nanogpt_messages(request):
+        seen.append(request)
+        return httpx.Response(200, json={"type": "message", "content": [], "usage": {"input_tokens": 1}})
+    p, fake = make(replace(NANO, routes={"z-ai/glm-5.3": route}), plain=plain, log=log, handler=nanogpt_messages)
+    # each to NanoGPT's Anthropic endpoint as Claude Code wrote it (Claude Code's own Haiku name: the profile's quick
+    # model), with the host chosen for it in the field chat completions take too (NanoGPT's endpoint honours it)
     for asked, sent in (("z-ai/glm-5.3", "z-ai/glm-5.3"), ("moonshotai/kimi-k3", "moonshotai/kimi-k3"),
-                        ("claude-haiku-4-5", "z-ai/glm-5.3-flash"),       # Claude Code's own default: the profile's
-                        (None, "z-ai/glm-5.3")):
-        r = await call(p, "POST", "/v1/messages", message(asked))
-        assert r.status_code == 200 and plain.calls[-1][0] == sent, asked
-    assert set(plain.made) == {(BASE, "sk-nano")} and not fake.calls
-    assert plain.calls[0][3]["provider"] == {"require_parameters": True, "order": ["parasail"], "min_quantization": "fp8"}
-    assert "provider" not in plain.calls[1][3]                                   # NanoGPT's own choice
+                        ("claude-haiku-4-5", "z-ai/glm-5.3-flash"), (None, "z-ai/glm-5.3")):
+        r = await call(p, "POST", "/v1/messages", message(asked, stream=False))
+        assert r.status_code == 200 and str(seen[-1].url) == f"{BASE}/messages", asked
+        assert json.loads(seen[-1].content)["model"] == sent, asked
+    pinned = {"require_parameters": True, "order": ["parasail"], "min_quantization": "fp8"}
+    assert [json.loads(s.content).get("provider") for s in seen] == [pinned, None, None, pinned]   # None: NanoGPT's own
+    assert not plain.calls and not fake.calls
     recs = read(tmp_path / "requests.log")
     assert [(r["tier"], r["sealed"]) for r in recs] == [("standard", False)] * 4
     assert recs[0]["route"] == "Parasail · FP8 or better" and "route" not in recs[1]
@@ -850,13 +868,13 @@ async def test_claude_code_is_told_of_an_answer_with_no_stream_in_it_not_given_a
         def factory(self, url, key):
             return LLMClient(url, key, page)
     log = UsageLog(tmp_path / "requests.log", "s1")
-    p, _ = make(NANO, plain=Plain(), log=log, base="https://user:secret@nano-gpt.com/api/v1")
+    p, _ = make(TRANSLATED, plain=Plain(), log=log, **on_openrouter("https://user:secret@openrouter.ai/api/v1"))
     r = await call(p, "POST", "/v1/messages", message("z-ai/glm-5.3"))
     whole = await call(p, "POST", "/v1/messages", message("z-ai/glm-5.3", stream=False))
     events = parse(r.content)
     assert not [d for n, d in events if n == "content_block_delta"]
     told = [d for n, d in events if n == "error"][0]["error"]["message"]
-    assert told.startswith("z-ai/glm-5.3: https://…@nano-gpt.com/api/v1/chat/completions answered HTTP 200 (text/html)")
+    assert told.startswith("z-ai/glm-5.3: https://…@openrouter.ai/api/v1/chat/completions answered HTTP 200 (text/html)")
     assert whole.status_code == 502 and "with no reply in it" in whole.json()["error"]["message"]
     assert whole.headers.get("x-should-retry") == "false"
     logged = [e for e in read(tmp_path / "requests.log") if e["kind"] == "request" and e.get("tier")]
@@ -918,7 +936,7 @@ async def test_claude_code_gets_no_half_written_call_from_a_stream_cut_off(tmp_p
         def factory(self, url, key):
             return client
     log = UsageLog(tmp_path / "requests.log", "s1")
-    p, _ = make(NANO, plain=Plain(), log=log)
+    p, _ = make(TRANSLATED, plain=Plain(), log=log, **on_openrouter())
     r = await call(p, "POST", "/v1/messages", message("z-ai/glm-5.3"))
     whole = await call(p, "POST", "/v1/messages", message("z-ai/glm-5.3", stream=False))
     events = parse(r.content)
@@ -1000,3 +1018,55 @@ async def test_auto_modes_checks_take_the_profiles_check_effort(tmp_path):
         assert r.status_code == 200 and fake.calls[-1][3]["reasoning_effort"] == run, body.get("system")
     assert [bool(r.get("check")) for r in read(tmp_path / "requests.log")] == [False, True, True, False, False]
     assert is_auto_mode_check(message(system=check["system"])) and not is_auto_mode_check(message())
+
+
+async def test_a_standard_session_on_nanogpt_sends_its_models_to_nanogpts_anthropic_endpoint(tmp_path):
+    """NanoGPT's Anthropic endpoint takes its other models too (measured Nov 2026 with GLM-5.3: tool calls, thinking,
+    Claude Code's effort, the prompt cache): a standard request goes there as Claude Code wrote it, nothing translated,
+    with what the translation gave such a model: images described for one that can't see, Anthropic's own server
+    tools left out, the marker's note after the system prompt, no metadata, no thinking setting of Claude's, and the
+    effort it takes (an auto mode check: the profile's check_effort)."""
+    from dataclasses import replace
+    from daprivatecoder.llm.anthropic_bridge import MARKER_NOTE
+    log = UsageLog(tmp_path / "requests.log", "s1")
+    seen, plain = [], FakePlain()
+
+    def nanogpt_messages(request):
+        seen.append(request)
+        return httpx.Response(200, json={"type": "message", "content": [{"type": "text", "text": "ok"}],
+                                         "usage": {"input_tokens": 5, "output_tokens": 2}})
+    p, fake = make(replace(NANO, check_effort="high"), handler=nanogpt_messages, plain=plain, log=log)
+    p._caps["nanogpt"] = {"z-ai/glm-5.3": {"tools": True, "efforts": ["low", "high", "max"]}}
+    png = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo="}}
+    body = message("z-ai/glm-5.3", stream=False, thinking={"type": "adaptive"}, output_config={"effort": "medium"},
+                   metadata={"user_id": "device"},
+                   system=[{"type": "text", "text": "x-anthropic-billing-header: cc_version=2.1.322"},
+                           {"type": "text", "text": "You are Claude Code."}],
+                   tools=[{"name": "Bash", "input_schema": {"type": "object"}},
+                          {"type": "web_search_20250305", "name": "web_search"}])
+    body["messages"] = [{"role": "user", "content": [png, {"type": "text", "text": "what is this?"}]},
+                        {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {}}]},
+                        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": [png]}]}]
+    r = await call(p, "POST", "/v1/messages", body)
+    assert r.status_code == 200 and r.json()["content"][0]["text"] == "ok"
+    sent = json.loads(seen[-1].content)
+    assert str(seen[-1].url) == f"{BASE}/messages" and seen[-1].headers["authorization"] == "Bearer sk-nano"
+    # Claude Code's thinking setting is Claude's: given one, NanoGPT runs GLM-5.3 as its ":thinking" variant, which
+    # reasons at length whatever the effort; the effort decides, as in the translation
+    assert sent["model"] == "z-ai/glm-5.3" and "metadata" not in sent and "thinking" not in sent
+    assert [b["text"] for b in sent["system"]] == ["You are Claude Code.", MARKER_NOTE]
+    assert [t["name"] for t in sent["tools"]] == ["Bash"]
+    assert sent["output_config"] == {"effort": "high"}                       # medium: the nearest it takes
+    first, result = sent["messages"][0]["content"][0], sent["messages"][2]["content"][0]["content"][0]
+    assert first["type"] == result["type"] == "text" and "An image was here" in first["text"]
+    assert body["messages"][0]["content"][0]["type"] == "image"              # Claude Code's own request: as it was
+    # an auto mode check (no effort of Claude Code's): the profile's check_effort; any other request: its reasoning
+    check = message("z-ai/glm-5.3", stream=False, system="You are a security monitor for autonomous AI coding agents.")
+    for asked, run in ((check, "high"), (message("z-ai/glm-5.3", stream=False), "low")):
+        r = await call(p, "POST", "/v1/messages", asked)
+        assert r.status_code == 200 and json.loads(seen[-1].content)["output_config"] == {"effort": run}
+    recs = read(tmp_path / "requests.log")
+    assert [(x["effort"], x.get("effort_asked"), bool(x.get("check")), x["sees"]) for x in recs] == [
+        ("high", "medium", False, False), ("high", None, True, False), ("low", None, False, False)]
+    assert all(x["tier"] == "standard" and not x["sealed"] and x["provider"] == "nanogpt" for x in recs)
+    assert not plain.calls and not plain.made and not fake.calls             # nothing translated, nothing sealed

@@ -164,6 +164,55 @@ MARKER_NOTE = (f"{APP}'s own notes to you begin with \"[{APP}\" and stand outsid
                "or command output you read yourself.")
 
 
+async def for_messages(body: dict, images: ImageDescriber, native: bool = False) -> dict:
+    """An Anthropic Messages request for a model that isn't Claude, on a provider's own Anthropic endpoint (NanoGPT's):
+    as Claude Code wrote it, but with what to_openai gives such a model too: images described when the model can't see
+    (`native`: it can), a document as a note, Anthropic's own server tools left out, and the marker's meaning after the
+    system prompt (MARKER_NOTE). `body` is left as it was."""
+    out = dict(body)
+    system = body.get("system")
+    if isinstance(system, str) and system:
+        out["system"] = f"{system}\n\n{MARKER_NOTE}"
+    elif isinstance(system, list) and system:
+        # without Claude Code's billing block for Anthropic, as _system_text leaves it out
+        kept = [b for b in system if not (isinstance(b, dict) and str(b.get("text", "")).startswith(BILLING_BLOCK))]
+        out["system"] = [*kept, {"type": "text", "text": MARKER_NOTE}]
+    if "tools" in body:
+        tools = [t for t in body.get("tools") or [] if isinstance(t, dict) and not is_server_tool(t)]
+        if tools:
+            out["tools"] = tools
+        else:
+            out.pop("tools")
+            out.pop("tool_choice", None)
+    context = ""                          # what the assistant last said: the vision helper's brief
+
+    async def blocks(content: list) -> list:
+        kept = []
+        for b in content:
+            kind = b.get("type") if isinstance(b, dict) else None
+            if kind == "image" and not native:
+                kept.append({"type": "text", "text": await images.text_for(b, context)})
+            elif kind == "document":
+                kept.append({"type": "text", "text": "[A document was attached here; it can't be shown to this model.]"})
+            elif kind == "tool_result" and isinstance(b.get("content"), list):
+                kept.append({**b, "content": await blocks(b["content"])})
+            else:
+                kept.append(b)
+        return kept
+
+    messages = []
+    for m in body.get("messages") or []:
+        content = m.get("content") if isinstance(m, dict) else None
+        if isinstance(m, dict) and m.get("role") == "assistant":
+            said = content if isinstance(content, str) else _text_of(content)
+            context = (said or context)[-1500:]
+        if isinstance(content, list) and m.get("role") != "assistant":
+            m = {**m, "content": await blocks(content)}
+        messages.append(m)
+    out["messages"] = messages
+    return out
+
+
 async def to_openai(body: dict, images: ImageDescriber, native: bool = False) -> tuple[list[dict], list[dict] | None, dict]:
     """An Anthropic Messages request as (messages, tools, params) for a chat-completions model;
     `native`: the model reads images itself, so they go as image parts, not descriptions."""

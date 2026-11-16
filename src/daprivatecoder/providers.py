@@ -59,6 +59,10 @@ class Provider:
     kinds: tuple[str, ...] = ("standard",)      # the kinds of profile whose models it serves (config.KINDS)
     claude: str = ""                # where a Claude model goes as Claude Code wrote it, for an "openai" one: HERE, an
                                     # address of the provider's own, or "" (none)
+    # its Anthropic endpoint (claude HERE) takes any of its standard models, not only Claude's: a standard request goes
+    # there as Claude Code wrote it, nothing translated (NanoGPT's, measured Nov 2026 with GLM-5.3: tool calls,
+    # thinking blocks, Claude Code's effort and the prompt cache all hold; an image it refuses for a model that can't see)
+    messages_any: bool = False
     key_hint: str = ""              # where its key is found, after "paste the key … shows you"
     # the origins alone its key may go to (creds.origin's form): a provider whose address is fixed. Empty: the
     # origin the key was stored for (creds.py)
@@ -89,7 +93,7 @@ def _origin(url: str) -> str:
 
 
 PROVIDERS: dict[str, Provider] = {p.id: p for p in (
-    Provider("nanogpt", "NanoGPT", "NanoGPT", kinds=("private", "tee", "standard"), claude=HERE,
+    Provider("nanogpt", "NanoGPT", "NanoGPT", kinds=("private", "tee", "standard"), claude=HERE, messages_any=True,
              key_hint="nano-gpt.com/api"),
     Provider("chutes", "Chutes", "Chutes", base_url=CHUTES_BASE_URL, kinds=("tee", "standard"),
              key_hint="chutes.ai, API keys", key_origins=CHUTES_KEY_ORIGINS,

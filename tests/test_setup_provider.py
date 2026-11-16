@@ -2,6 +2,7 @@
 own) and asks for that provider's key alone: a key of Anthropic's, Tinfoil's or Chutes' gets a session started
 without NanoGPT's. Web search goes through NanoGPT, so without its key a session starts with search off, and says so."""
 
+import json
 from dataclasses import replace
 
 import pytest
@@ -74,7 +75,10 @@ async def test_a_standard_session_on_nanogpt_or_openrouter_treats_claude_names_a
                     provider_key=lambda: "sk-1")
         r = await call(p, "POST", "/v1/messages", message("anthropic/claude-opus-5.5", stream=False))
         assert r.status_code == 200 and str(seen[-1].url) == f"{url}/messages", provider
-        r = await call(p, "POST", "/v1/messages", message("claude-haiku-4-5"))
-        assert r.status_code == 200 and plain.calls[-1][0] == NANO.fast_model, provider
+        r = await call(p, "POST", "/v1/messages", message("claude-haiku-4-5", stream=provider == "openrouter"))
+        if provider == "nanogpt":           # NanoGPT's Anthropic endpoint takes its other models too (messages_any)
+            assert r.status_code == 200 and json.loads(seen[-1].content)["model"] == NANO.fast_model, provider
+        else:
+            assert r.status_code == 200 and plain.calls[-1][0] == NANO.fast_model, provider
         r = await call(p, "POST", "/v1/messages", message("claude-opus-5-5"))
         assert r.status_code == 400 and "anthropic/… for Claude" in r.json()["error"]["message"], provider

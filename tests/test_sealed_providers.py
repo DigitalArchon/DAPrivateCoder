@@ -339,3 +339,37 @@ async def test_a_tee_session_through_chutes_proxy_of_anthropics_api_never_passes
         assert r.status_code == 400, asked
     r = await call(p, "POST", "/v1/messages/count_tokens", {"model": "zai-org/GLM-5.3", "messages": []})
     assert r.status_code == 400 and len(fake.calls) == 1
+
+
+# ---------------------------------------------------------------------- auto mode and effort on every provider
+
+EVERY_MODEL = {m: {"vision": False, "tools": True, "efforts": ["low", "high", "max"]} for m in (
+    "glm-5-3", "zai-org/GLM-5.2-TEE", "zai-org/GLM-5.3", "z-ai/glm-5.3")}
+CHECK_SYSTEM = "You are a security monitor for autonomous AI coding agents.\n\n## Context"
+
+
+@pytest.mark.parametrize("profile, url, model, way", [
+    (ON_TINFOIL, TINFOIL, "glm-5-3", "sealed"),                          # sealed straight to Tinfoil's router
+    (ON_CHUTES, CHUTES, "zai-org/GLM-5.2-TEE", "sealed"),                # sealed to an attested Chutes instance
+    (CHUTES_STANDARD, CHUTES, "zai-org/GLM-5.3", "translated"),          # Chutes' others: chat completions
+    (replace(CHUTES_STANDARD, name="or", provider="openrouter", model="z-ai/glm-5.3", opus_model="z-ai/glm-5.3",
+             fast_model="z-ai/glm-5.3"), providers.OPENROUTER_BASE_URL, "z-ai/glm-5.3", "translated")])
+async def test_auto_modes_checks_and_the_effort_hold_on_tinfoil_chutes_and_openrouter(profile, url, model, way):
+    """Every provider, not only NanoGPT: a session's auto mode checks on its own model, here (launcher.auto_mode_env);
+    a check runs at the profile's check_effort and anything else at Claude Code's effort or the profile's; each by its
+    provider's own way (sealed, or translated), never NanoGPT's Anthropic endpoint (only NanoGPT's takes any model)."""
+    from daprivatecoder import launcher
+    env = launcher.claude_env(profile, 1234, "tok")
+    assert env["CLAUDE_CODE_AUTO_MODE_SERVER"] == "0" and env["CLAUDE_CODE_AUTO_MODE_MODEL"] == profile.model
+    profile = replace(profile, reasoning="low", check_effort="high")
+    plain = FakePlain()
+    p, fake, _ = sealed_proxy(profile, url, caps=EVERY_MODEL, plain=plain)
+    assert not p._messages_any(model)
+    for body, run in ((message(model), "low"), (message(model, output_config={"effort": "max"}), "max"),
+                      (message(model, stream=False, system=CHECK_SYSTEM, stop_sequences=["</block>"]), "high")):
+        r = await call(p, "POST", "/v1/messages", body)
+        assert r.status_code == 200, r.text
+        sent = fake.calls[-1][1] if way == "sealed" else plain.calls[-1][3]
+        assert sent["reasoning_effort"] == run, body
+    assert len(fake.calls if way == "sealed" else plain.calls) == 3
+    assert not (plain.calls if way == "sealed" else fake.calls)

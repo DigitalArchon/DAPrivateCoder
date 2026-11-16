@@ -47,7 +47,8 @@ from . import providers as providers_mod
 from .config import Profile
 from .llm import capabilities, privacy, routes
 from .llm.dcap import since_boot
-from .llm.anthropic_bridge import VISION_PROMPT, ImageDescriber, estimate_tokens, has_images, message, sse, to_openai
+from .llm.anthropic_bridge import (VISION_PROMPT, ImageDescriber, estimate_tokens, for_messages, has_images, message, sse,
+                                   to_openai)
 from .llm.client import RANK, LLMClient, is_claude, is_private_mode, is_tee, private_id
 from .llm.errors import error_words, shown_error
 from .llm.secure_http import ACCEPT_ENCODING, loads
@@ -1154,7 +1155,8 @@ class Proxy:
                     raise Refused(403, why)
                 model = self.choose(asked)
                 tier = self.tier(model)
-                if tier == "standard" and (self.spec.api == "anthropic" or (is_claude(model) and self.spec.claude)):
+                if tier == "standard" and (self.spec.api == "anthropic" or (is_claude(model) and self.spec.claude)
+                                           or self._messages_any(model)):
                     return await self._forward(request, path, data, model, asked, body)
                 return await self._translated(path, data, model, asked, len(body), tier)
             except Refused as e:
@@ -1289,10 +1291,17 @@ class Proxy:
                 self._check_later(model, check, ended, rec)
         return StreamingResponse(body(), media_type="text/event-stream")
 
+    def _messages_any(self, model: str) -> bool:
+        """Whether a standard request for `model` goes to the provider's Anthropic endpoint though it isn't Claude's:
+        the provider's endpoint takes any of its models (providers.Provider.messages_any: NanoGPT's)."""
+        return self.spec.messages_any
+
     async def _forward(self, request, path: str, data: dict, model: str, asked: str, body: bytes):
-        """A request for a Claude model in a standard session, or any request to a provider that speaks Anthropic's
-        API: to the provider's Anthropic endpoint, as Claude Code wrote it, with the provider's key in the header the
-        provider takes it in (providers.auth_headers)."""
+        """A request for a Claude model in a standard session, any request to a provider that speaks Anthropic's API,
+        or a standard one to a provider whose Anthropic endpoint takes all its models (_messages_any): to the
+        provider's Anthropic endpoint, as Claude Code wrote it, with the provider's key in the header the provider
+        takes it in (providers.auth_headers). For a model that isn't Claude, what the translation would give it too
+        (for_messages: images described for one that can't see, the marker's note) and the effort it takes."""
         from starlette.responses import Response, StreamingResponse
 
         base = self.spec.anthropic_url(self.provider_url)
@@ -1307,7 +1316,38 @@ class Proxy:
         # the thinking blocks of DA Private Coder's (another model's reasoning) aren't Claude's: Anthropic's
         # API refuses a signature it didn't make, so they go no further
         ours = drop_our_thinking(data)
-        if data.get("model") != model or "metadata" in data or ours:
+        extra: dict = {}
+        other = path == "/v1/messages" and self.spec.api != "anthropic" and not is_claude(model)
+        if other:
+            # images described for a model that can't see (raises Refused when it isn't known whether it does), and the
+            # effort as the translation gives it: Claude Code's, or the profile's (an auto mode check: its check_effort),
+            # at the nearest level the model takes
+            native = await self.sees(model, "standard") if has_images(data) else False
+            data = await for_messages(data, self._images("standard"), native=native)
+            checking = is_auto_mode_check(data)
+            wanted = effort_of(data, self.profile.check_effort if checking else self.profile.reasoning)
+            effort = await self._effort(model, "standard", wanted)
+            config = {k: v for k, v in (data.get("output_config") or {}).items() if k != "effort"} \
+                if isinstance(data.get("output_config"), dict) else {}
+            if effort:
+                config["effort"] = effort
+            if config:
+                data["output_config"] = config
+            else:
+                data.pop("output_config", None)
+            # Claude Code's thinking setting is Claude's: NanoGPT runs a model given one as its ":thinking" variant,
+            # which reasons at length whatever the effort (measured Nov 2026: GLM-5.3 asked for low gave seven replies
+            # of 16K tokens or more in 123, two cut off at 32K, where the translation, which never passes it on, gave
+            # none in 128). The effort says how much the model reasons, as in the translation; it still shows it
+            data.pop("thinking", None)
+            # the host chosen for it (the window's Runs on), as on chat completions: NanoGPT's Anthropic endpoint takes
+            # the same field (measured: a request pinned to a host was billed, not covered by the subscription)
+            route = self.profile.routes.get(model)
+            data.update(routes.body(self.provider, route))
+            extra = {"sees": native, "effort": effort, **({"effort_asked": wanted} if wanted != effort else {}),
+                     **({"check": True} if checking else {}),
+                     **({"route": routes.describe(self.provider, route)} if route else {})}
+        if other or data.get("model") != model or "metadata" in data or ours:
             data["model"] = model
             data.pop("metadata", None)
             body = json.dumps(data).encode()
@@ -1317,7 +1357,7 @@ class Proxy:
         client = self._client(url)
         started = time.monotonic()
         rec = {"path": path, "model": model, "asked_for": asked if asked and asked != model else "", "sealed": False,
-               "tier": "standard", "provider": self.provider, "bytes_out": len(body)}
+               "tier": "standard", "provider": self.provider, "bytes_out": len(body), **extra}
         name = NAMES[self.provider]
         try:
             resp = await client.send(client.build_request(request.method, url, content=body, headers=headers), stream=True)
