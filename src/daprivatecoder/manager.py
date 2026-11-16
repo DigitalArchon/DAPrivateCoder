@@ -12,7 +12,7 @@ import time
 from dataclasses import asdict, replace
 from pathlib import Path
 
-from . import __version__, commands, config, creds, editor, folders, gate, hostenv, launch, usagelog
+from . import __version__, commands, config, creds, editor, folders, gate, hostenv, launch, providers, usagelog
 from .config import ConfigError
 from .llm import capabilities, routes
 from .llm.client import is_tee
@@ -142,10 +142,12 @@ class Manager:
             except creds.KeyringUnavailable:
                 pass
         out["key"] = key
-        # the standard profile's provider's key, when it isn't NanoGPT's (a server of your own may need none)
-        standard = cfg.profiles.get("standard") if cfg else None
-        out["provider_key"] = _key_state(standard.provider, cfg.provider_url(standard)) \
-            if standard and standard.provider != "nanogpt" else None
+        # each session's provider's key, where it isn't NanoGPT's (a server of your own may need none); provider_key
+        # is the standard one's, as the window had it before every kind could take another provider
+        out["provider_keys"] = {name: _key_state(p.provider, cfg.provider_url(p))
+                                for name, p in (cfg.profiles.items() if cfg else ())
+                                if name in SESSIONS and p.provider != "nanogpt"}
+        out["provider_key"] = out["provider_keys"].get("standard")
         try:
             out["claude"] = {"path": launcher.find_claude(cfg.claude if cfg else ""), "error": ""}
         except launcher.LaunchError as e:
@@ -173,9 +175,13 @@ class Manager:
         out["tee_attestations"] = self.tee_attestations()
         # whether a session of each kind can start: Claude Code, and the key its models need
         base = bool(cfg) and bool(out["claude"]["path"])
-        provider_ok = out["provider_key"] is None or out["provider_key"]["stored"] or out["provider_key"]["provider"] == "custom"
-        out["ready"] = {"private": base and key["stored"], "tee": base and key["stored"],
-                        "standard": base and (key["stored"] if out["provider_key"] is None else provider_ok)}
+
+        def key_ok(name: str) -> bool:
+            pk = out["provider_keys"].get(name)
+            if pk is None:
+                return key["stored"]
+            return pk["stored"] or providers.get(pk["provider"]).key_optional
+        out["ready"] = {name: base and key_ok(name) for name in SESSIONS}
         return out
 
     def usage(self) -> dict:
@@ -241,24 +247,27 @@ class Manager:
 
     # ------------------------------------------------------------------ the keys
 
-    def _provider_of(self, provider: str) -> tuple[str, str]:
+    def _provider_of(self, provider: str, profile: str = "standard") -> tuple[str, str]:
         """(provider, its base URL) for a key: the address it goes to, whose origin is kept beside it (creds.py).
-        NanoGPT's is the settings' base_url, OpenRouter's its own, a custom one's the standard profile's endpoint."""
-        if provider not in config.PROVIDERS:
+        NanoGPT's is the settings' base_url, a provider's with a fixed address that one (providers.py), one of
+        your own's the endpoint of `profile` (the window's tab: the standard one's unless said)."""
+        spec = providers.PROVIDERS.get(provider)
+        if spec is None:
             raise UserError(f"There's no provider called {provider!r}.")
-        if provider == "openrouter":
-            return provider, config.OPENROUTER_BASE_URL
+        if spec.base_url:
+            return provider, spec.base_url
         cfg = config.load()
         if provider == "nanogpt":
             return provider, cfg.base_url
-        return provider, cfg.provider_url(cfg.profile("standard"))
+        return provider, cfg.provider_url(cfg.profile(profile))
 
     def set_key(self, key: str, provider: str = "nanogpt") -> None:
         from .netpolicy import key_problem
         key = (key or "").strip()
         if not key:
-            where = {"nanogpt": " (nano-gpt.com/api)", "openrouter": " (openrouter.ai/settings/keys)"}.get(provider, "")
-            raise UserError(f"That isn't an API key: paste the key {config.PROVIDERS.get(provider, 'the provider')} "
+            spec = providers.PROVIDERS.get(provider)
+            where = f" ({spec.key_hint})" if spec and spec.key_hint else ""
+            raise UserError(f"That isn't an API key: paste the key {spec.name if spec else 'the provider'} "
                             f"shows you{where}.")
         if key_problem(key):                       # said without anything of the key: it may be most of it
             raise UserError("That isn't an API key: it has a space, a line break or another character no API key "

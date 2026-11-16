@@ -79,25 +79,29 @@ def _claude(argv: list[str]) -> int:
 
 def _key(args) -> int:
     from . import creds
+    from . import providers
     provider, base_url = args.provider, ""
-    name = config.PROVIDERS[provider]
-    # the address the key goes to, whose origin is kept beside it (creds.py): NanoGPT's base_url, OpenRouter's own
-    if provider == "openrouter":
-        base_url = config.OPENROUTER_BASE_URL
+    spec = providers.get(provider)
+    name = spec.name
+    # the address the key goes to, whose origin is kept beside it (creds.py): NanoGPT's base_url, a provider's own
+    # fixed one (providers.py), or the standard profile's, for one of your own
+    if spec.base_url:
+        base_url = spec.base_url
     elif provider == "nanogpt":
         try:
             base_url = config.load().base_url
         except ConfigError:
             base_url = ""                   # stored without one: it takes the address it is first read for
-    if provider == "custom":
+    if spec.own_address:
         cfg = config.load()
-        base_url = cfg.provider_url(cfg.profile("standard"))
-        if not base_url:
-            raise CliError("The standard profile's provider isn't a custom one: set provider and base_url first.")
+        standard = cfg.profile("standard")
+        if not providers.get(standard.provider).own_address:
+            raise CliError("The standard profile's provider isn't one of your own: set provider and base_url first.")
+        base_url = cfg.provider_url(standard)
         name = f"the provider at {shown(base_url)}"
     flag = "" if provider == "nanogpt" else f" --provider {provider}"
     if args.action == "status":
-        key = creds.get_key(provider, base_url, sending=False) if provider == "custom" else creds.get_key(provider, base_url)
+        key = creds.get_key(provider, base_url, sending=False) if spec.own_address else creds.get_key(provider, base_url)
         print(f"A key for {name} is stored in your keyring (ending {key[-4:]})." if key
               else f"No key for {name} is stored. Store one with: daprivatecoder key set{flag}")
         if key and creds.in_the_clear_state(provider, base_url) in ("ask", "declined"):

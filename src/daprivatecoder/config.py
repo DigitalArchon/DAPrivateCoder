@@ -21,17 +21,18 @@ import tomllib
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
+from . import providers as providers_mod
 from .llm import routes as routes_mod
 from .llm.client import RANK, private_id, tier_of
 from .netpolicy import InsecureURL, check_url, shown, without_password
+from .providers import NANOGPT_BASE_URL, OPENROUTER_BASE_URL  # noqa: F401 - named here since before providers.py
 
 APP_ID = "daprivatecoder"
-NANOGPT_BASE_URL = "https://nano-gpt.com/api/v1"
-OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 # how a profile's requests travel (llm/client.py's tiers): sealed, attested TEE, or in the clear
 KINDS = ("private", "tee", "standard")
-# where a standard profile's models are: private and TEE profiles are NanoGPT's
-PROVIDERS = {"nanogpt": "NanoGPT", "openrouter": "OpenRouter", "custom": "another provider"}
+# where a profile's models are, and the kinds of profile each serves (providers.py: private and TEE profiles are
+# NanoGPT's): id -> its name in a sentence
+PROVIDERS = {p.id: p.name for p in providers_mod.PROVIDERS.values()}
 # where a session's effort starts (Claude Code's own changes it); a model is sent the nearest level it
 # takes (proxy.effort_for). Never "none": GLM with its thinking off reasons all the more, in its answer
 REASONING = ("low", "medium", "high", "max")
@@ -138,8 +139,8 @@ class Profile:
     vision_model: str = ""
     reasoning: str = "high"         # no level is called recommended: for coding it's up to the use case
     web_search: str = "off"
-    provider: str = "nanogpt"       # a standard profile's: nanogpt, openrouter or custom (PROVIDERS)
-    base_url: str = ""              # custom: its OpenAI-compatible endpoint
+    provider: str = "nanogpt"       # where its models are (providers.py): a standard profile's any one
+    base_url: str = ""              # a provider of your own's (providers.Provider.own_address): its endpoint
     # which of the provider's hosts runs a model (llm/routes.py): model -> route; none for its own choice
     routes: dict = field(default_factory=dict, hash=False)
     context: int = CONTEXTS[0]      # the conversation's size where Claude Code compacts it (CONTEXTS)
@@ -185,12 +186,8 @@ class Config:
         return replace(self, profiles={**self.profiles, profile.name: profile})
 
     def provider_url(self, profile: Profile) -> str:
-        """Where `profile`'s models are: NanoGPT's base_url, OpenRouter's, or its own."""
-        if profile.provider == "openrouter":
-            return OPENROUTER_BASE_URL
-        if profile.provider == "custom":
-            return profile.base_url
-        return self.base_url
+        """Where `profile`'s models are: NanoGPT's base_url, a provider's own fixed address, or the profile's own."""
+        return providers_mod.get(profile.provider).address(self.base_url, profile.base_url)
 
 
 DEFAULTS = Config(profiles={
@@ -252,6 +249,16 @@ Web search, through NanoGPT. No search is end-to-end encrypted: NanoGPT and the 
 }
 
 
+# what a provider of your own's base_url is, when it is missing
+_ENDPOINT = {"custom": "the OpenAI-compatible endpoint of your provider (as https://api.example.com/v1)"}
+
+
+def _own(provider: str) -> bool:
+    """Whether `provider` is one of your own, whose address the profile says."""
+    found = providers_mod.PROVIDERS.get(provider)
+    return bool(found and found.own_address)
+
+
 def _q(text: str) -> str:
     return json.dumps(text, ensure_ascii=False)        # a TOML basic string
 
@@ -285,7 +292,7 @@ def render(cfg: Config) -> str:
         out += ["", f"# {start}", f"# {_KIND_INTRO[p.kind]}", f"[profiles.{p.name}]", f"kind = {_q(p.kind)}"]
         if p.kind == "standard":
             out += [*note("provider"), f"provider = {_q(p.provider)}"]
-            if p.provider == "custom":
+            if _own(p.provider):
                 out.append(f"base_url = {_q(p.base_url)}")
         for key in ("model", "opus_model", "fast_model", "vision_model", "reasoning", "web_search"):
             out += [*note(key), f"{key} = {_q(getattr(p, key))}"]
@@ -311,10 +318,11 @@ DEFAULT_TEXT = render(DEFAULTS)
 
 
 def _addresses(cfg: Config) -> list[tuple[str, str]]:
-    """(setting, address) for each address `cfg` has: NanoGPT's, and each profile's own provider's (one
-    whose provider is custom: another's isn't written, render)."""
+    """(setting, address) for each address `cfg` has: NanoGPT's, and each profile's own provider's (one of your own:
+    another's isn't written, render)."""
     return [("base_url", cfg.base_url)] + [(f"profiles.{name}.base_url", p.base_url) for name, p in cfg.profiles.items()
-                                           if p.provider == "custom" and p.base_url]
+                                           if _own(p.provider) and p.base_url]
+
 
 
 def _with_address(cfg: Config, setting: str, value: str) -> Config:
@@ -399,13 +407,16 @@ def _profile(name: str, table: dict, where: str) -> Profile:
     provider = _text(table, "provider", where, "nanogpt").lower()
     if provider not in PROVIDERS:
         raise ConfigError(f"{where}: provider must be one of {', '.join(PROVIDERS)} (not {provider!r}).")
-    if kind != "standard" and provider != "nanogpt":
-        raise ConfigError(f"{where}: a {kind} profile's models are NanoGPT's, so its provider is nanogpt.")
-    base_url = _text(table, "base_url", where).rstrip("/") if provider == "custom" else ""
-    if provider == "custom":
+    if kind not in providers_mod.get(provider).kinds:
+        allowed = providers_mod.for_kind(kind)
+        raise ConfigError(f"{where}: a {kind} profile's models are "
+                          f"{' or '.join(providers_mod.name(a) for a in allowed)}'s, so its provider is "
+                          f"{' or '.join(allowed)}.")
+    own = _own(provider)
+    base_url = _text(table, "base_url", where).rstrip("/") if own else ""
+    if own:
         if not base_url:
-            raise ConfigError(f"{where}: base_url is missing: the OpenAI-compatible endpoint of your provider "
-                              "(as https://api.example.com/v1).")
+            raise ConfigError(f"{where}: base_url is missing: {_ENDPOINT[provider]}.")
         try:
             check_url(base_url, f"{where}: base_url")
         except InsecureURL as e:

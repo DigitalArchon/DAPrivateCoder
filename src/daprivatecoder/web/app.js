@@ -42,7 +42,7 @@ const $ = (sel) => document.querySelector(sel);
 // whether its hosts below FP8 are left out), what is typed and not yet saved (drafts: a key, an address),
 // the actions under way (busy: not sent twice), what is being checked
 const S = { state: null, folder: "", tab: "", models: {}, modelsError: {}, hosts: {}, routeHost: {}, routeFp8: {},
-  customUrl: false, replacing: "", checking: "", drafts: {}, busy: {}, asked: 0, shown: 0 };
+  customUrl: "", replacing: "", checking: "", drafts: {}, busy: {}, asked: 0, shown: 0 };
 // what the editor's switch runs when it runs each folder as chosen (editor.PER_FOLDER)
 const PER_FOLDER = ":folders";
 
@@ -136,15 +136,28 @@ const KINDS = {
   tee: { label: "TEE", chip: ["tee", "TEE: not end-to-end encrypted"], models: "TEE models (not end-to-end encrypted)" },
   standard: { label: "Standard", chip: ["warn", "not private"], models: "standard models (not private)" },
 };
-const PROVIDERS = { nanogpt: "NanoGPT", openrouter: "OpenRouter", custom: "Another provider (OpenAI-compatible)" };
+// where a profile's models are (providers.py's PROVIDERS, in its order: tests/test_providers.py holds the two to one
+// list): its name in the Provider list (label) and in a sentence, the kinds of session it serves, whether it lists
+// what its models cost, and for a provider of your own (own), what its address is
+const PROVIDERS = {
+  nanogpt: { label: "NanoGPT", name: "NanoGPT", kinds: ["private", "tee", "standard"], prices: true },
+  openrouter: { label: "OpenRouter", name: "OpenRouter", kinds: ["standard"], prices: true },
+  custom: { label: "Another provider (OpenAI-compatible)", name: "your provider", kinds: ["standard"], own: true,
+    placeholder: "https://api.example.com/v1", address: "The provider's OpenAI-compatible API address." },
+};
+// whose a request was, in a sentence ("your provider" for one of your own)
+const providerSaid = (id) => (PROVIDERS[id] ? PROVIDERS[id].name : id || "NanoGPT");
+// whose key a key field asks for, after "Paste your" ("Paste your provider's API key" for one of your own)
+const keyName = (id) => (PROVIDERS[id] && PROVIDERS[id].own ? "provider's" : providerSaid(id));
 
 const chipOf = (kind) => h("span", { class: `chip ${KINDS[kind].chip[0]}` }, KINDS[kind].chip[1]);
 
 // a provider of your own by its address, without the user name and password one may have in it
 function providerName(st, profile) {
   const p = st.config && st.config.profiles[profile];
-  if (!p || p.kind !== "standard") return "NanoGPT";
-  return p.provider === "custom" ? (p.base_url_shown || "your provider") : PROVIDERS[p.provider];
+  if (!p) return "NanoGPT";
+  const spec = PROVIDERS[p.provider];
+  return spec && spec.own ? (p.base_url_shown || "your provider") : providerSaid(p.provider);
 }
 
 // what a session of `kind` is, in a sentence; and for one that isn't private, what it gives away
@@ -172,8 +185,8 @@ function warningOf(st, kind) {
 function notReady(st, kind) {
   if (st.ready[kind]) return "";
   if (!st.claude.path) return "Can't start yet: Claude Code wasn't found. See Setup.";
-  if (kind === "standard" && st.provider_key) {
-    return `Can't start yet: add your ${providerName(st, "standard")} API key under Models (the Standard tab).`;
+  if ((st.provider_keys || {})[kind]) {
+    return `Can't start yet: add your ${providerName(st, kind)} API key under Models (the ${KINDS[kind].label} tab).`;
   }
   return "Can't start yet: add your NanoGPT API key in Setup.";
 }
@@ -423,34 +436,46 @@ function contextRows(tab, p, save) {
       + "so its requests would fail before Claude Code summarises.") : null))];
 }
 
-// a standard profile's provider: NanoGPT, OpenRouter, or an OpenAI-compatible endpoint of your own, and its key
+// the providers a session of `kind` can take (PROVIDERS' kinds), in the list's order
+const providersFor = (kind) => Object.keys(PROVIDERS).filter((v) => PROVIDERS[v].kinds.includes(kind));
+
+// a profile's provider, where its kind can take more than one (a standard one: NanoGPT, OpenRouter, or an endpoint
+// of your own), and its key
 function providerRows(st, tab, p, save) {
-  const custom = p.provider === "custom" || S.customUrl;
+  const offered = providersFor(p.kind);
+  if (offered.length < 2) return [];
+  // one of your own being given its address (S.customUrl), before it is saved: shown as chosen
+  const choosing = S.customUrl && PROVIDERS[S.customUrl] && PROVIDERS[S.customUrl].own ? S.customUrl : "";
+  const shownNow = choosing || p.provider;
+  const spec = PROVIDERS[shownNow] || {};
+  const label = KINDS[p.kind].label;
   const pick = h("select", { onchange: (e) => {
     const v = e.target.value;
-    if (v === "custom" && !p.base_url) { S.customUrl = true; render(); }
-    else { S.customUrl = false; save({ provider: v }, `Saved. Standard sessions now use ${PROVIDERS[v]}.`); }
-  } }, Object.entries(PROVIDERS).map(([v, l]) => h("option", { value: v, selected: v === (custom ? "custom" : p.provider) }, l)));
+    // one of your own needs its address first: asked, then saved with it
+    if (PROVIDERS[v].own && v !== p.provider) { S.customUrl = v; delete S.drafts.url; render(); }
+    else { S.customUrl = ""; save({ provider: v }, `Saved. ${label} sessions now use ${PROVIDERS[v].name}.`); }
+  } }, offered.map((v) => h("option", { value: v, selected: v === shownNow }, PROVIDERS[v].label)));
   const rows = [h("div", { class: "model-row" }, h("label", {}, "Provider"), pick)];
-  if (custom) {
-    const url = h("input", { type: "text", class: "mono", value: S.drafts.url ?? (p.base_url || ""), placeholder: "https://api.example.com/v1",
-      oninput: (e) => { S.drafts.url = e.target.value; }, onkeydown: (e) => { if (e.key === "Enter") go(); } });
-    const go = () => save({ provider: "custom", base_url: url.value.trim() }, "Saved. Standard sessions now use it.")
-      .then((done) => { if (done) { S.customUrl = false; delete S.drafts.url; } });
+  if (spec.own) {
+    const url = h("input", { type: "text", class: "mono", value: S.drafts.url ?? (choosing ? "" : p.base_url || ""),
+      placeholder: spec.placeholder, oninput: (e) => { S.drafts.url = e.target.value; },
+      onkeydown: (e) => { if (e.key === "Enter") go(); } });
+    const go = () => save({ provider: shownNow, base_url: url.value.trim() }, `Saved. ${label} sessions now use it.`)
+      .then((done) => { if (done) { S.customUrl = ""; delete S.drafts.url; } });
     rows.push(h("div", { class: "model-row" }, h("label", {}, "Address"), h("div", { class: "row" }, url,
       h("button", { class: "small primary", onclick: go }, "Save"))),
       h("div", { class: "model-row" }, h("span", {}), h("div", { class: "small muted" },
-        "The provider's OpenAI-compatible API address. It must be https, except on this computer or your local network. "
+        `${spec.address} It must be https, except on this computer or your local network. `
         + "A user name and password in it are kept in your keyring, not in the settings file.")));
   }
-  const pk = st.provider_key;
-  if (pk && !S.customUrl) {
-    const label = p.provider === "openrouter" ? "OpenRouter" : "provider's";     // after "Paste your"
-    const keys = keyControls(`provider:${p.provider}`, pk, p.provider, label, "The key is stored in your keyring.");
+  const pk = (st.provider_keys || {})[tab];
+  if (pk && !choosing) {
+    const own = Boolean(PROVIDERS[p.provider] && PROVIDERS[p.provider].own);
+    const keys = keyControls(`provider:${p.provider}`, pk, p.provider, keyName(p.provider), "The key is stored in your keyring.");
     rows.push(h("div", { class: "model-row" }, h("label", {}, "API key"), h("div", { class: "col" },
       h("div", { class: "row" }, keys.stored ? h("span", { class: "small muted" }, `Stored (ending ${pk.ending})`) : null,
         ...keys.controls),
-      keys.extra, !keys.stored && p.provider === "custom" ? h("div", { class: "small muted" }, "Only if the provider needs one.") : null)));
+      keys.extra, !keys.stored && own ? h("div", { class: "small muted" }, "Only if the provider needs one.") : null)));
     const clear = inTheClear(pk, p.provider);
     if (clear) rows.push(h("div", { class: "model-row" }, h("span", {}), clear));
     // a saved key held to the address it was stored for, not this one (creds.KeyElsewhere): it says which, and the
@@ -516,15 +541,15 @@ function modelsSection(st) {
   const prices = "Prices per million tokens: input / cached input / output";
   const lead = tab === "private" ? `${prices}, including NanoGPT's 5% Private Mode markup.`
     : tab === "tee" ? `${prices}.`
-      : `${providerName(st, tab)}'s models that support tool calls.${p.provider === "custom" ? "" : ` ${prices}.`}`
+      : `${providerName(st, tab)}'s models that support tool calls.${PROVIDERS[p.provider] && PROVIDERS[p.provider].prices ? ` ${prices}.` : ""}`
         + (p.provider === "nanogpt" ? " When NanoGPT chooses the host, your subscription covers the models it includes; "
           + "a host you choose is always paid per use." : "");
   const reading = tab === "standard" ? `Loading ${providerName(st, tab)}'s models…` : `Loading NanoGPT's ${tab === "tee" ? "TEE" : "private"} models…`;
   return h("div", { class: "section" }, h("h3", {}, "Models and web search", chipOf(tab)),
     h("p", { class: "lead" }, "Each kind of session has its own settings."),
-    seg(tab, (pick) => { S.tab = pick; S.customUrl = false; if (!S.models[pick]) loadModels(pick); render(); }),
+    seg(tab, (pick) => { S.tab = pick; S.customUrl = ""; if (!S.models[pick]) loadModels(pick); render(); }),
     warningOf(st, tab),
-    p.kind === "standard" ? providerRows(st, tab, p, save) : null,
+    providerRows(st, tab, p, save),
     h("p", { class: "lead" }, lead),
     h("p", { class: "lead small" }, "Default is what sessions start with. Opus and Quick are what ", h("code", {}, "/model opus"),
       " and ", h("code", {}, "/model haiku"), " pick; Quick also runs Claude Code's background tasks. Images describes images "
@@ -611,7 +636,7 @@ function whereItWent(last) {
     if (last.reply === "checking") return "sent through NanoGPT (which can read it) while its attestation held; its reply is being checked";
     return "⚠ not shown to reach the attested enclave; sent through NanoGPT (which can read it)";
   }
-  if (last.sent === "clear") return `unencrypted, to ${last.provider === "openrouter" ? "OpenRouter" : last.provider === "custom" ? "your provider" : "NanoGPT"}`;
+  if (last.sent === "clear") return `unencrypted, to ${providerSaid(last.provider)}`;
   return "not sent";
 }
 
@@ -802,7 +827,7 @@ function usageSection(st) {
   const u = st.usage;
   const rows = u.last.flatMap((r) => {
     const [chip, how, means] = sentChip(r);
-    const where = r.provider && r.provider !== "nanogpt" ? ` · ${r.provider === "openrouter" ? "OpenRouter" : "your provider"}` : "";
+    const where = r.provider && r.provider !== "nanogpt" ? ` · ${providerSaid(r.provider)}` : "";
     const what = r.kind === "search"
       ? `web search${r.what ? `, ${r.what}` : ""}${r.results !== null && r.results !== undefined ? ` · ${r.results} results` : ""}`
       : r.what + (r.kind === "vision" ? " (image)" : "") + where;

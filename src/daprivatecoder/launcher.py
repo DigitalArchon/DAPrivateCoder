@@ -126,7 +126,8 @@ def _describe(profile: Profile, model: str) -> str:
         return "Private: sealed on this computer to an attested enclave"
     if tier == "tee":
         return "TEE: an attested enclave, but NanoGPT's gateway reads it (not end-to-end encrypted)"
-    return f"{PROVIDERS[profile.provider].capitalize()}, in the clear: not private"
+    named = PROVIDERS[profile.provider]
+    return f"{named[0].upper()}{named[1:]}, in the clear: not private"
 
 
 def claude_env(profile: Profile, port: int, token: str) -> dict[str, str]:

@@ -18,7 +18,8 @@ port) it was stored for, and a key is read for an address only when that address
 provider of your own's from https to http, gets no key, and says why and what to do (KeyElsewhere). A
 key stored before origins were kept takes the origin of the address it is first read for, with no
 question. No key is ever deleted for it. (A provider of your own's key was already its server's own,
-by host and port: `account`.)
+by host and port: `account`.) A provider whose address is fixed (OpenRouter's; providers.py `key_origins`) has
+its key held to that address's origin alone, whatever is stored beside it.
 
 Nor does a key cross a network unencrypted without the user's say (the cross-app standard, Nov 2026, as
 SealedLore's keys_in_the_clear): to plain http on another machine of the local network (netpolicy.in_the_clear),
@@ -34,6 +35,8 @@ from __future__ import annotations
 import keyring
 import keyring.core
 from keyring.errors import PasswordDeleteError
+
+from .providers import PROVIDERS
 
 SERVICE = "daprivatecoder"
 USER = "nanogpt"            # NanoGPT's key: private and TEE sessions, web search, and a standard one on NanoGPT
@@ -61,8 +64,8 @@ class KeyUnusable(KeyringUnavailable):
     says this too, rather than sending it to be quoted back in an error."""
 
 
-# whose key, in what is said of it
-NAMES = {"nanogpt": "NanoGPT", "openrouter": "OpenRouter", "custom": "your provider"}
+# whose key, in what is said of it (providers.py)
+NAMES = {p.id: p.name for p in PROVIDERS.values()}
 
 
 def _usable(key: str | None, provider: str) -> None:
@@ -103,17 +106,19 @@ def _get(service: str, user: str) -> str | None:
 
 
 def account(provider: str = "nanogpt", base_url: str = "") -> str:
-    """The keyring entry for a provider's key: "nanogpt", "openrouter", or "custom:<host>[:<port>]"
-    (each server its own, two on one host included, so a key never goes to another server)."""
-    if provider == "custom":
+    """The keyring entry for a provider's key (providers.Provider.account): "nanogpt", "openrouter", or, for a
+    provider of your own, "custom:<host>[:<port>]" (each server its own, two on one host included, so a key never
+    goes to another server)."""
+    spec = PROVIDERS.get(provider)
+    if spec is not None and spec.own_address:
         from urllib.parse import urlparse
         u = urlparse(base_url)
         try:
             port = u.port
         except ValueError:
             port = None
-        return f"custom:{(u.hostname or '').lower()}{f':{port}' if port else ''}"
-    return provider if provider == "openrouter" else USER
+        return f"{spec.account}:{(u.hostname or '').lower()}{f':{port}' if port else ''}"
+    return spec.account if spec is not None else USER
 
 
 # the keyring entry of the origin a key was stored for, beside the key's own (its account's name)
@@ -153,6 +158,17 @@ def _held_to(user: str, provider: str, base_url: str) -> None:
     (stored before they were) takes this one's; one going there over plain http to another machine is not taken as
     agreed to (the author, Nov 14 2026: nothing is grandfathered), and is held back until the user says Yes."""
     here = origin(base_url)
+    spec = PROVIDERS.get(provider)
+    fixed = spec.key_origins if spec is not None else frozenset()
+    from .netpolicy import shown
+    where = shown(base_url) or "an address that can't be read"
+    if fixed:
+        # a provider whose address is fixed: its key goes there alone, whatever origin is stored beside it
+        if here in fixed:
+            return
+        raise KeyElsewhere(
+            f"The {spec.name} API key goes only to {' or '.join(_said(o) for o in sorted(fixed))}, and would go to "
+            f"{where} now, so it wasn't sent.")
     kept = _get(SERVICE, ORIGIN.format(user))
     if kept is None and here:
         try:
@@ -162,9 +178,7 @@ def _held_to(user: str, provider: str, base_url: str) -> None:
         return
     if kept == here:
         return
-    from .netpolicy import shown
     name = NAMES.get(provider, provider)
-    where = shown(base_url) or "an address that can't be read"
     raise KeyElsewhere(
         f"The {name} API key in your keyring was stored for {_said(kept or '') or 'another address'}, and would "
         f"go to {where} now, so it wasn't sent: a key goes only to the address it was stored for. If that is where "

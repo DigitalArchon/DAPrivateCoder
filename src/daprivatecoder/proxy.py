@@ -41,6 +41,7 @@ from typing import Awaitable, Callable
 import httpx
 
 from . import creds
+from . import providers as providers_mod
 from .config import Profile
 from .llm import capabilities, routes
 from .llm.dcap import since_boot
@@ -51,6 +52,7 @@ from .llm.secure_http import ACCEPT_ENCODING, loads
 from .llm.private_mode import (Attestation, Enclave, PrivateModeClient, list_private_models, offers_private_mode,
                                relay_said, relay_url)
 from .netpolicy import check_url, key_problem, scrubbed, shown
+from .providers import HERE, PROVIDERS
 from .usagelog import UsageLog
 
 MODEL_PATHS = frozenset({("POST", "/v1/messages"), ("POST", "/v1/messages/count_tokens"), ("GET", "/v1/models")})
@@ -312,9 +314,9 @@ TeeCheck = Callable[[str, str, str], "AttestedTee | dict"]
 # a TEE model's enclave is attested again after this, before its next request (as DA Vibe Manager does), on a
 # clock that runs on while the computer sleeps (dcap.since_boot: time.monotonic stops during a suspend)
 TEE_REATTEST_SECONDS = 900
-# providers with an Anthropic endpoint, where a Claude model goes as Claude Code wrote the request
-ANTHROPIC_ENDPOINTS = ("nanogpt", "openrouter")
-NAMES = {"nanogpt": "NanoGPT", "openrouter": "OpenRouter", "custom": "your provider"}
+# providers with an Anthropic endpoint, where a Claude model goes as Claude Code wrote the request (providers.py)
+ANTHROPIC_ENDPOINTS = tuple(p.id for p in PROVIDERS.values() if p.claude == HERE)
+NAMES = {p.id: p.name for p in PROVIDERS.values()}
 
 
 def attest_tee(base_url: str, key: str, model: str) -> dict:
@@ -492,6 +494,7 @@ class Proxy:
         self._private_client = private_client
         # a standard profile's models are its provider's; a private or TEE profile's, NanoGPT's
         self.provider = profile.provider if profile.kind == "standard" else "nanogpt"
+        self.spec = providers_mod.get(self.provider)
         self.provider_url = check_url(provider_url or self.base_url, f"{NAMES[self.provider]}'s base URL").rstrip("/")
         self._provider_key = provider_key or (self._key if self.provider == "nanogpt"
                                               else lambda: creds.get_key(self.provider, self.provider_url))
@@ -579,14 +582,14 @@ class Proxy:
         except (creds.KeyUnusable, creds.KeyElsewhere, creds.KeyInTheClear) as e:
             raise Refused(403, str(e)) from None            # said, and nothing sent: never sent without it instead
         except creds.KeyringUnavailable as e:
-            if provider == "custom":
+            if providers_mod.get(provider).key_optional:
                 return None                                  # a server of your own may need none: it says if it does
             raise Refused(403, str(e)) from None
         # a key no header can carry is never sent: the HTTP library's error would quote it to Claude Code
         problem = key_problem(key, NAMES[provider])
         if problem:
             raise Refused(403, problem)
-        if key or provider == "custom":                      # a server of your own may need none
+        if key or providers_mod.get(provider).key_optional:  # a server of your own may need none
             return key
         if provider == "nanogpt":
             raise Refused(403, "No NanoGPT API key is stored. Run `daprivatecoder key set` in a terminal, then try again.")
@@ -803,7 +806,7 @@ class Proxy:
         if tier == "private":
             return PRIVATE_EFFORTS
         provider = self._provider_of(tier)
-        if provider == "custom":
+        if providers_mod.get(provider).own_address:
             return CUSTOM_EFFORTS
         caps = await self.capabilities(provider) or {}
         return (capabilities.lookup(caps, model) or {}).get("efforts")
@@ -1129,7 +1132,7 @@ class Proxy:
             data.pop("metadata", None)
             body = json.dumps(data).encode()
         headers = {k: v for k, v in request.headers.items() if k.lower() in PASS_HEADERS}
-        headers["authorization"] = f"Bearer {key}"
+        headers.update(providers_mod.auth_headers(self.provider, key))
         url = upstream_url(self.provider_url, path, request.url.query)
         client = self._client(url)
         started = time.monotonic()
