@@ -54,7 +54,7 @@ from .llm.secure_http import ACCEPT_ENCODING, loads
 from .llm.private_mode import (Attestation, Enclave, PrivateModeClient, list_private_models, offers_private_mode,
                                relay_said, relay_url)
 from .netpolicy import check_url, key_problem, scrubbed, shown
-from .providers import HERE, PROVIDERS
+from .providers import PROVIDERS
 from .usagelog import UsageLog
 
 MODEL_PATHS = frozenset({("POST", "/v1/messages"), ("POST", "/v1/messages/count_tokens"), ("GET", "/v1/models")})
@@ -317,7 +317,7 @@ TeeCheck = Callable[[str, str, str], "AttestedTee | dict"]
 # clock that runs on while the computer sleeps (dcap.since_boot: time.monotonic stops during a suspend)
 TEE_REATTEST_SECONDS = 900
 # providers with an Anthropic endpoint, where a Claude model goes as Claude Code wrote the request (providers.py)
-ANTHROPIC_ENDPOINTS = tuple(p.id for p in PROVIDERS.values() if p.claude == HERE)
+ANTHROPIC_ENDPOINTS = tuple(p.id for p in PROVIDERS.values() if p.claude)
 NAMES = {p.id: p.name for p in PROVIDERS.values()}
 
 
@@ -498,6 +498,7 @@ class Proxy:
         self.provider = profile.provider if profile.kind == "standard" else "nanogpt"
         self.spec = providers_mod.get(self.provider)
         self.provider_url = check_url(provider_url or self.base_url, f"{NAMES[self.provider]}'s base URL").rstrip("/")
+        self._given_key = provider_key is not None             # given (tests): it is the key wherever it goes
         self._provider_key = provider_key or (self._key if self.provider == "nanogpt"
                                               else lambda: creds.get_key(self.provider, self.provider_url))
         self._plain_client = plain_client or LLMClient
@@ -579,9 +580,16 @@ class Proxy:
         what = "end-to-end encrypted" if p.kind == "private" else "attested in an enclave"
         return f"{model} isn't {what}, and this is a {label} conversation, so nothing was sent. {pick}."
 
-    def _read_key(self, provider: str = "nanogpt") -> str | None:
+    def _read_key(self, provider: str = "nanogpt", at: str = "") -> str | None:
+        """The provider's key, read for `at`, the address it goes to when that isn't where its models are (a Claude
+        endpoint of its own elsewhere): a key goes only to the addresses it is held to (creds.py)."""
         try:
-            key = self._key() if provider == "nanogpt" else self._provider_key()
+            if provider == "nanogpt":
+                key = self._key()
+            elif at and at != self.provider_url and not self._given_key:
+                key = creds.get_key(provider, at)
+            else:
+                key = self._provider_key()
         except (creds.KeyUnusable, creds.KeyElsewhere, creds.KeyInTheClear) as e:
             raise Refused(403, str(e)) from None            # said, and nothing sent: never sent without it instead
         except creds.KeyringUnavailable as e:
@@ -993,8 +1001,7 @@ class Proxy:
                     raise Refused(403, why)
                 model = self.choose(asked)
                 tier = self.tier(model)
-                if tier == "standard" and (self.spec.api == "anthropic"
-                                           or (is_claude(model) and self.provider in ANTHROPIC_ENDPOINTS)):
+                if tier == "standard" and (self.spec.api == "anthropic" or (is_claude(model) and self.spec.claude)):
                     return await self._forward(request, path, data, model, asked, body)
                 return await self._translated(path, data, model, asked, len(body), tier)
             except Refused as e:
@@ -1126,7 +1133,8 @@ class Proxy:
         provider takes it in (providers.auth_headers)."""
         from starlette.responses import Response, StreamingResponse
 
-        key = self._read_key(self.provider)
+        base = self.spec.anthropic_url(self.provider_url)
+        key = self._read_key(self.provider, at=base)
         # Claude Code's metadata is this computer's device id and the session's: the provider knows the
         # account by its key, and needs neither
         # the thinking blocks of DA Private Coder's (another model's reasoning) aren't Claude's: Anthropic's
@@ -1138,7 +1146,7 @@ class Proxy:
             body = json.dumps(data).encode()
         headers = {k: v for k, v in request.headers.items() if k.lower() in PASS_HEADERS}
         headers.update(providers_mod.auth_headers(self.provider, key))
-        url = upstream_url(self.provider_url, path, request.url.query)
+        url = upstream_url(base, path, request.url.query)
         client = self._client(url)
         started = time.monotonic()
         rec = {"path": path, "model": model, "asked_for": asked if asked and asked != model else "", "sealed": False,

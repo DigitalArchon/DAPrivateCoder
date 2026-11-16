@@ -6,7 +6,8 @@ provider is added here, once.
 
 A provider speaks one of two APIs to the proxy:
 - "openai": Claude Code's requests are translated to chat completions (llm/anthropic_bridge.py), and a Claude
-  model's goes as Claude Code wrote it to the provider's Anthropic endpoint, where it has one (`claude`);
+  model's goes as Claude Code wrote it to the provider's Anthropic endpoint, where it has one (`claude`: at its own
+  address, or at another of its own, as Chutes' claude.chutes.ai);
 - "anthropic": every request goes on as Claude Code wrote it, never translated (Anthropic's own API, or a
   provider of your own that copies it).
 
@@ -29,7 +30,8 @@ ANTHROPIC_VERSION = "2023-06-01"
 
 APIS = ("openai", "anthropic")
 AUTHS = ("bearer", "x-api-key")
-# `claude` for a provider whose Anthropic endpoint is at its own address (NanoGPT's, OpenRouter's)
+# `claude` for a provider whose Anthropic endpoint is at its own address (NanoGPT's, OpenRouter's); another
+# provider's `claude` is that endpoint's address
 HERE = "here"
 # the keyring entry of a provider of your own's key: its server's, by host and port (creds.account)
 OWN = "custom"
@@ -46,7 +48,8 @@ class Provider:
     own_address: bool = False       # a provider of your own: the profile says its address (its base_url)
     key_optional: bool = False      # a server of your own may need no key: it says if it does
     kinds: tuple[str, ...] = ("standard",)      # the kinds of profile whose models it serves (config.KINDS)
-    claude: str = ""                # where a Claude model goes as Claude Code wrote it, for an "openai" one: HERE, or none
+    claude: str = ""                # where a Claude model goes as Claude Code wrote it, for an "openai" one: HERE, an
+                                    # address of the provider's own, or "" (none)
     key_hint: str = ""              # where its key is found, after "paste the key … shows you"
     # the origins alone its key may go to (creds.origin's form): a provider whose address is fixed. Empty: the
     # origin the key was stored for (creds.py)
@@ -60,6 +63,13 @@ class Provider:
     def address(self, settings_url: str = "", profile_url: str = "") -> str:
         """Where its models are: its own fixed address, the profile's (one of your own), else NanoGPT's base_url."""
         return self.base_url or (profile_url if self.own_address else settings_url)
+
+    def anthropic_url(self, provider_url: str) -> str:
+        """Where a request goes as Claude Code wrote it (`provider_url`: where its models are): the provider itself for
+        one that speaks Anthropic's API or has its Anthropic endpoint there, else its `claude` address; "" for none."""
+        if self.api == "anthropic" or self.claude == HERE:
+            return provider_url
+        return self.claude
 
 
 def _origin(url: str) -> str:

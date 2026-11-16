@@ -79,3 +79,30 @@ def test_key_set_for_a_provider_of_your_own_needs_the_standard_profile_on_one(ri
 def test_each_providers_key_goes_in_its_own_header():
     assert providers.auth_headers("nanogpt", "k") == {"authorization": "Bearer k"}
     assert providers.auth_headers("custom", None) == {}
+
+
+async def test_a_claude_endpoint_a_provider_keeps_elsewhere_gets_claude_models_with_the_key_held_to_it(ring, monkeypatch):
+    """How Chutes' claude.chutes.ai is to slot in: a provider whose Anthropic endpoint isn't at its own address gets a
+    Claude model's request there, as Claude Code wrote it, with its key only if the key may go to that address."""
+    import httpx
+
+    from test_proxy import NANO, call, make, message
+    claude_at = "https://claude.openrouter.example"
+    spec = providers.PROVIDERS["openrouter"]
+    monkeypatch.setitem(providers.PROVIDERS, "openrouter", replace(spec, claude=claude_at))
+    seen = []
+
+    def server(request):
+        seen.append(request)
+        return httpx.Response(200, json={"type": "message", "content": [], "usage": {"input_tokens": 1}})
+    profile = replace(NANO, provider="openrouter")
+    creds.set_key("sk-or-123456", "openrouter", providers.OPENROUTER_BASE_URL)
+    p, _ = make(profile, handler=server, provider_url=providers.OPENROUTER_BASE_URL)
+    r = await call(p, "POST", "/v1/messages", message("anthropic/claude-opus-5.5", stream=False))
+    assert r.status_code == 403 and "goes only to https://openrouter.ai" in r.text and not seen
+    monkeypatch.setitem(providers.PROVIDERS, "openrouter", replace(
+        spec, claude=claude_at, key_origins=spec.key_origins | {"https://claude.openrouter.example:443"}))
+    p, _ = make(profile, handler=server, provider_url=providers.OPENROUTER_BASE_URL)
+    r = await call(p, "POST", "/v1/messages", message("anthropic/claude-opus-5.5", stream=False))
+    assert r.status_code == 200 and str(seen[-1].url) == "https://claude.openrouter.example/v1/messages"
+    assert seen[-1].headers["authorization"] == "Bearer sk-or-123456"
