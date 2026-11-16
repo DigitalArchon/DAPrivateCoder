@@ -470,7 +470,12 @@ class Manager:
             caps = await capabilities.fetch(p.provider, url) or {}
             ids = sorted(m for m, c in caps.items() if c.get("tools"))
         else:
-            caps, ids = None, await self._listed(url, await in_thread(creds.get_key, "custom", url))
+            spec = providers.get(p.provider)
+            key = await in_thread(creds.get_key, p.provider, url)
+            if not key and not spec.key_optional:
+                raise UserError(f"{spec.name}'s list of models needs your {spec.name} API key: add it below, and its "
+                                "models are listed here.")
+            caps, ids = None, await self._listed(url, key, p.provider)
         out = []
         for m in ids:
             c = capabilities.lookup(caps, m) or {} if caps else {}
@@ -484,8 +489,9 @@ class Manager:
         return out
 
     @staticmethod
-    async def _listed(url: str, key: str | None) -> list[str]:
-        """A provider of your own: the ids its /models lists (OpenAI's shape), with its key."""
+    async def _listed(url: str, key: str | None, provider: str = "custom") -> list[str]:
+        """The ids a provider's list of models has, asked for with its key: OpenAI's /models (a provider of your
+        own), or the Messages API's /v1/models (one that speaks Anthropic's: each model it lists, at most 1000)."""
         import httpx
 
         from .llm.client import reading_options
@@ -494,8 +500,15 @@ class Manager:
         check_url(url, "Your provider's base URL")
         # a provider on this computer or its network is reached directly, never through a proxy the environment
         # names: its key went to it (DA Toolkit's c6de017, as DA Vibe Manager's)
+        if providers.get(provider).api == "anthropic":
+            from .proxy import upstream_url
+            where = upstream_url(url, "/v1/models", "limit=1000")
+            headers = {"anthropic-version": providers.ANTHROPIC_VERSION}
+        else:
+            where, headers = url.rstrip("/") + "/models", {}
+        headers.update(providers.auth_headers(provider, key))
         async with httpx.AsyncClient(timeout=30, follow_redirects=False, **reading_options(url)) as client:
-            r = await client.get(url.rstrip("/") + "/models", headers={"Authorization": f"Bearer {key}"} if key else {})
+            r = await client.get(where, headers=headers)
             if r.status_code >= 300:            # said without the address's password (httpx's own error quotes it)
                 raise UserError(f"{shown(url)} answered HTTP {r.status_code} when asked for its models.")
             listed = loads(r.content)

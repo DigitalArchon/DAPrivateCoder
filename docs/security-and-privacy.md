@@ -83,11 +83,19 @@ that run an open model, when you open its **Runs on** choice.
 NanoGPT can read everything sent to a TEE or standard model. Of a private model's requests it sees
 your account, the model, when, how much and what it costs, not what was said.
 
-### OpenRouter, or a provider of your own (standard sessions)
+### OpenRouter, Anthropic, or a provider of your own (standard sessions)
 
 Only for a **standard** profile set to it. Claude Code's requests go there in the clear, with that
 provider's key, as does a request for its list of models (OpenRouter's and its list of hosts need
-no key; a provider of your own gets its key with the request for its list, if you stored one).
+no key; Anthropic's list needs your Anthropic key; a provider of your own gets its key with the
+request for its list, if you stored one).
+
+**Anthropic** (api.anthropic.com) gets every request of such a session as Claude Code wrote it:
+nothing is translated, and the model is the one Claude Code asked for, its own names
+(`claude-haiku-…` for its background work) included. The key goes in Anthropic's `x-api-key`
+header. Two things are taken out on the way, as for a Claude model on any provider: Claude Code's
+`metadata` (this computer's device id and the session's id; Anthropic knows your account by its
+key), and the reasoning blocks of another model this app ran, which Anthropic's API would refuse.
 
 ### The companies that run the models
 
@@ -141,9 +149,11 @@ which keeps nothing.
 
 ### Anthropic
 
-The app never sends anything to Anthropic but a request for a Claude model you chose in a standard
-session, which goes to your provider's Anthropic endpoint (NanoGPT's or OpenRouter's), not to
-Anthropic directly. In a session, Claude Code's own traffic to Anthropic is switched off: its
+The app never sends anything to Anthropic but the requests of a standard session whose provider is
+Anthropic ([above](#openrouter-anthropic-or-a-provider-of-your-own-standard-sessions)), and its
+list of models when you open that profile in the window. A Claude model you choose in a standard
+session on NanoGPT or OpenRouter goes to that provider's Anthropic endpoint, not to Anthropic
+directly. In a session, Claude Code's own traffic to Anthropic is switched off: its
 telemetry, error reports, auto-updates, release notes, `/feedback`, `/bug` and `/share`, the
 feedback survey, claude.ai's connectors, the official plugin marketplace's automatic install,
 WebFetch's check of each site with Anthropic, and Anthropic's own web search. Claude Code you start
@@ -193,7 +203,7 @@ as usual (plain `claude`, or a folder not chosen for DA Private Coder) is Anthro
 
 ## Keys and passwords
 
-- **Your API keys** (NanoGPT's, OpenRouter's, a provider of your own's, each server its own) are
+- **Your API keys** (NanoGPT's, OpenRouter's, Anthropic's, a provider of your own's, each server its own) are
   kept in your system's keyring (GNOME Keyring or KWallet), never in a file. Without a secure
   keyring the app keeps no key at all, rather than one in a plain file, and says what to install.
   Once read, a key is kept in memory while that part of the app runs, so that a keyring that locks
@@ -203,8 +213,9 @@ as usual (plain `claude`, or a folder not chosen for DA Private Coder) is Anthro
   and an address edited since to another (NanoGPT's `base_url` changed in the settings file, a
   provider of your own's moved from `https://` to `http://`) gets no key; the window, the commands
   and Claude Code are told why, and to store the key again for the new address if that is where it
-  should go. A key stored before this rule takes the address it is first used with. No key is
-  deleted for it. It isn't in any log,
+  should go. A key stored before this rule takes the address it is first used with. OpenRouter's
+  and Anthropic's keys go to their own address alone (`https://openrouter.ai`,
+  `https://api.anthropic.com`), whatever is stored beside them. No key is deleted for it. It isn't in any log,
   message or error. A key with a space, a line break or a character no key has in it is refused
   when it is stored and whenever it is read, without being repeated back.
 - **A password written into an address** (`https://user:password@host/v1`, for a provider of your
@@ -392,8 +403,8 @@ the reply's mark never changes.
 
 ## Standard sessions
 
-A standard session runs any model of its provider (NanoGPT, OpenRouter, or an OpenAI-compatible
-provider of your own), **in the clear**: the provider and the company that runs the model read every
+A standard session runs any model of its provider (NanoGPT, OpenRouter, Anthropic, or an
+OpenAI-compatible provider of your own), **in the clear**: the provider and the company that runs the model read every
 prompt, file and reply, and keep them under their own policies. A provider's host you choose under
 **Runs on** is asked for by name; NanoGPT and OpenRouter may still fall back to another host if
 it's down.
@@ -403,6 +414,8 @@ it's down.
   computer's device id and the session's id) and the reasoning blocks of other models. A name of
   Claude Code's own (`claude-opus-…`) is refused, so nothing goes to Claude unless you pick it that
   way.
+- **On Anthropic**, every request goes to Anthropic as Claude Code wrote it, less the same two
+  things, never translated: Claude Code's own model names are Anthropic's, and go as asked.
 - **A `private/` or `TEE/` model** you pick in a standard session is still sealed, or attested, as
   in those sessions. Once a private model has been used, nothing more of that session goes in the
   clear: everything said so far is in every request.

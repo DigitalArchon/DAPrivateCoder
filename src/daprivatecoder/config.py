@@ -237,8 +237,9 @@ _NOTES = {
     "context": ("the conversation's size, in tokens, where Claude Code compacts it (summarises it, and goes on):\n"
                 "# 200000 (what it assumes for models it doesn't know), 400000 or 1000000 (what NanoGPT lists for these).\n"
                 "# Every request sends the whole conversation, so a bigger one costs more each time, even from the cache"),
-    "provider": ('"nanogpt", "openrouter", or "custom" (any OpenAI-compatible endpoint: base_url, https unless it\n'
-                 "# is on this computer or your network). Its API key is in your keyring, set in the window"),
+    "provider": ('"nanogpt", "openrouter", "anthropic" (Anthropic\'s own API: Claude Code\'s requests go to it as they\n'
+                 '# are), or "custom" (any OpenAI-compatible endpoint: base_url, https unless it is on this computer or\n'
+                 "# your network). Its API key is in your keyring, set in the window"),
     "web_search": """\
 Web search, through NanoGPT. No search is end-to-end encrypted: NanoGPT and the search provider
 # read every query (Claude Code asks you before each one, and refuses one naming this computer).

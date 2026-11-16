@@ -20,7 +20,9 @@ never leaves this process. After DA Vibe Manager's gateway (its model endpoint).
 - In a standard profile, any other model's request is translated and sent to its provider (NanoGPT,
   OpenRouter, another OpenAI-compatible one) in the clear, with the host the user chose for it
   (llm/routes.py); a Claude model's goes to the provider's Anthropic endpoint as Claude Code wrote
-  it. A redirect is never followed. Once a private model has been used in a session, nothing more
+  it. On a provider that speaks Anthropic's API (Anthropic's own: providers.py), every request goes
+  to it as Claude Code wrote it, never translated, with its key in x-api-key. A redirect is never
+  followed. Once a private model has been used in a session, nothing more
   goes in the clear: what was said is in every request.
 
 Only what Claude Code needs is served: POST /v1/messages, POST /v1/messages/count_tokens and
@@ -554,7 +556,8 @@ class Proxy:
             self.used_private = True
             return private_id(model)
         name = model.lower()
-        own = model in p.models
+        # a provider that speaks Anthropic's API takes every model as Claude Code asked for it, its own names included
+        own = model in p.models or (tier == "standard" and self.spec.api == "anthropic")
         if not own and name.startswith("claude-") and "haiku" in name:
             return self.choose(p.fast_model)
         if not own and (name.startswith("claude-") or RANK[tier] < RANK[p.kind]):
@@ -990,7 +993,8 @@ class Proxy:
                     raise Refused(403, why)
                 model = self.choose(asked)
                 tier = self.tier(model)
-                if tier == "standard" and is_claude(model) and self.provider in ANTHROPIC_ENDPOINTS:
+                if tier == "standard" and (self.spec.api == "anthropic"
+                                           or (is_claude(model) and self.provider in ANTHROPIC_ENDPOINTS)):
                     return await self._forward(request, path, data, model, asked, body)
                 return await self._translated(path, data, model, asked, len(body), tier)
             except Refused as e:
@@ -1117,8 +1121,9 @@ class Proxy:
         return StreamingResponse(body(), media_type="text/event-stream")
 
     async def _forward(self, request, path: str, data: dict, model: str, asked: str, body: bytes):
-        """A request for a Claude model in a standard session: to the provider's Anthropic endpoint, as
-        Claude Code wrote it, with the provider's key."""
+        """A request for a Claude model in a standard session, or any request to a provider that speaks Anthropic's
+        API: to the provider's Anthropic endpoint, as Claude Code wrote it, with the provider's key in the header the
+        provider takes it in (providers.auth_headers)."""
         from starlette.responses import Response, StreamingResponse
 
         key = self._read_key(self.provider)

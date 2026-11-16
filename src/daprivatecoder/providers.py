@@ -72,6 +72,9 @@ PROVIDERS: dict[str, Provider] = {p.id: p for p in (
              key_hint="nano-gpt.com/api"),
     Provider("openrouter", "OpenRouter", "OpenRouter", base_url=OPENROUTER_BASE_URL, claude=HERE,
              key_hint="openrouter.ai/settings/keys", key_origins=frozenset({_origin(OPENROUTER_BASE_URL)})),
+    Provider("anthropic", "Anthropic", "Anthropic", api="anthropic", auth="x-api-key", base_url=ANTHROPIC_BASE_URL,
+             key_hint="console.anthropic.com, Settings, API keys",
+             key_origins=frozenset({_origin(ANTHROPIC_BASE_URL)})),
     Provider("custom", "your provider", "Another provider (OpenAI-compatible)", own_address=True, key_optional=True),
 )}
 

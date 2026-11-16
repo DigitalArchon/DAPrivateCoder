@@ -18,8 +18,8 @@ quit it, nothing more is sent. Closing its window keeps it open in the tray (see
 
 For convenience it also runs Claude Code on models that **aren't** end-to-end encrypted, and says so
 wherever you choose them: NanoGPT's TEE models, each enclave attested before anything is sent to it,
-and standard models of NanoGPT, OpenRouter or another OpenAI-compatible provider, in the clear (see
-[TEE and standard sessions](#tee-and-standard-sessions)). `claude-private` is only ever private.
+and standard models of NanoGPT, OpenRouter, Anthropic or another OpenAI-compatible provider, in the
+clear (see [TEE and standard sessions](#tee-and-standard-sessions)). `claude-private` is only ever private.
 
 ## What is private, and what isn't
 
@@ -251,8 +251,10 @@ the switch from their next reply. How each check works, and what each leaves to 
 **Standard** sessions run any model of their provider, **in the clear** to it and to the host that
 runs the model:
 
-- **NanoGPT** (with your NanoGPT key), **OpenRouter** (with an OpenRouter key), or **another
-  provider** with an OpenAI-compatible API (its address: https, or http only on this computer or
+- **NanoGPT** (with your NanoGPT key), **OpenRouter** (with an OpenRouter key), **Anthropic** (with
+  an Anthropic key: every request goes to api.anthropic.com as Claude Code wrote it, never
+  translated, Claude Code's own model names included), or **another provider** with an
+  OpenAI-compatible API (its address: https, or http only on this computer or
   your network; a key if it needs one). Each key is in your keyring, set in the window, and goes only
   to the address it was set for: change the address to another server, or from https to http, and
   the key is asked for again. A user name
@@ -319,7 +321,7 @@ session needs DA Private Coder open.
 | `daprivatecoder claude [--profile NAME] [args]` | Claude Code on a profile: `tee` and `standard` aren't end-to-end encrypted |
 | `daprivatecoder editor on\|off\|status [vscodium\|code] [--profile NAME\|usual]` | The switch for Claude Code in the editor; with `--profile`, how any folder not chosen runs |
 | `daprivatecoder editor folder PATH private\|tee\|standard\|usual` | How Claude Code in the editor runs in a folder (and the folders in it) |
-| `daprivatecoder key set\|clear\|status [--provider openrouter\|custom]` | An API key, in your keyring (GNOME Keyring or KWallet): NanoGPT's unless said |
+| `daprivatecoder key set\|clear\|status [--provider openrouter\|anthropic\|custom]` | An API key, in your keyring (GNOME Keyring or KWallet): NanoGPT's unless said |
 | `daprivatecoder check [--profile NAME]` | Attest the enclaves (a TEE profile's models too); list the models, their prices, and any your profile uses that are gone |
 | `daprivatecoder log [-n N]` | The last requests and searches: model, sealed or not, tokens, cost |
 | `daprivatecoder status` | What is set up here |
@@ -347,7 +349,7 @@ completions. Each is sealed with EHBP (HPKE X25519 and AES-GCM) to the attested 
 sent through NanoGPT's relay; the replies come back as Anthropic events. A TEE model's are translated
 the same way and sent through NanoGPT once its enclave has attested; a standard model's go to its
 provider, with the host chosen for it; a Claude model's to the provider's Anthropic endpoint as they
-are. Before each one, the proxy asks whether it may: DA Private Coder holds a lock while it's open,
+are, and on Anthropic every request, never translated. Before each one, the proxy asks whether it may: DA Private Coder holds a lock while it's open,
 which ends with it however it ends, and a session the editor started reads the editor's switch and
 its folder's choice (`~/.config/daprivatecoder/editor-folders.json`). The session's token is in a
 `--settings` file only you can read (`~/.local/state/daprivatecoder/sessions/`, gone with the session),

@@ -142,6 +142,7 @@ const KINDS = {
 const PROVIDERS = {
   nanogpt: { label: "NanoGPT", name: "NanoGPT", kinds: ["private", "tee", "standard"], prices: true },
   openrouter: { label: "OpenRouter", name: "OpenRouter", kinds: ["standard"], prices: true },
+  anthropic: { label: "Anthropic", name: "Anthropic", kinds: ["standard"] },
   custom: { label: "Another provider (OpenAI-compatible)", name: "your provider", kinds: ["standard"], own: true,
     placeholder: "https://api.example.com/v1", address: "The provider's OpenAI-compatible API address." },
 };
