@@ -254,8 +254,9 @@ runs the model:
 - **NanoGPT** (with your NanoGPT key), **OpenRouter** (with an OpenRouter key), **Anthropic** (with
   an Anthropic key: every request goes to api.anthropic.com as Claude Code wrote it, never
   translated, Claude Code's own model names included), or **another provider** with an
-  OpenAI-compatible API (its address: https, or http only on this computer or
-  your network; a key if it needs one). Each key is in your keyring, set in the window, and goes only
+  OpenAI-compatible API or an Anthropic-compatible one (its address: https, or http only on this
+  computer or your network; for an Anthropic-compatible one, the address you would give Claude Code
+  as `ANTHROPIC_BASE_URL`, and Claude Code's requests go to it as they are; a key if it needs one). Each key is in your keyring, set in the window, and goes only
   to the address it was set for: change the address to another server, or from https to http, and
   the key is asked for again. A user name
   and password written into the address (`https://user:password@host/v1`) are kept in your keyring

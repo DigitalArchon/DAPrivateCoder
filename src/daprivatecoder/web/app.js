@@ -145,6 +145,10 @@ const PROVIDERS = {
   anthropic: { label: "Anthropic", name: "Anthropic", kinds: ["standard"] },
   custom: { label: "Another provider (OpenAI-compatible)", name: "your provider", kinds: ["standard"], own: true,
     placeholder: "https://api.example.com/v1", address: "The provider's OpenAI-compatible API address." },
+  "custom-anthropic": { label: "Another provider (Anthropic-compatible)", name: "your provider", kinds: ["standard"],
+    own: true, placeholder: "https://api.example.com/anthropic",
+    address: "The provider's Anthropic-compatible API address, as you would give Claude Code as ANTHROPIC_BASE_URL: "
+      + "Claude Code's requests go to it as they are." },
 };
 // whose a request was, in a sentence ("your provider" for one of your own)
 const providerSaid = (id) => (PROVIDERS[id] ? PROVIDERS[id].name : id || "NanoGPT");

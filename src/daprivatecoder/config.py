@@ -238,8 +238,9 @@ _NOTES = {
                 "# 200000 (what it assumes for models it doesn't know), 400000 or 1000000 (what NanoGPT lists for these).\n"
                 "# Every request sends the whole conversation, so a bigger one costs more each time, even from the cache"),
     "provider": ('"nanogpt", "openrouter", "anthropic" (Anthropic\'s own API: Claude Code\'s requests go to it as they\n'
-                 '# are), or "custom" (any OpenAI-compatible endpoint: base_url, https unless it is on this computer or\n'
-                 "# your network). Its API key is in your keyring, set in the window"),
+                 '# are), "custom" (any OpenAI-compatible endpoint: base_url, https unless it is on this computer or\n'
+                 '# your network) or "custom-anthropic" (any Anthropic-compatible one, its base_url as Claude Code\n'
+                 "# would be given it: requests go to it as they are). Its API key is in your keyring, set in the window"),
     "web_search": """\
 Web search, through NanoGPT. No search is end-to-end encrypted: NanoGPT and the search provider
 # read every query (Claude Code asks you before each one, and refuses one naming this computer).
@@ -251,7 +252,9 @@ Web search, through NanoGPT. No search is end-to-end encrypted: NanoGPT and the 
 
 
 # what a provider of your own's base_url is, when it is missing
-_ENDPOINT = {"custom": "the OpenAI-compatible endpoint of your provider (as https://api.example.com/v1)"}
+_ENDPOINT = {"custom": "the OpenAI-compatible endpoint of your provider (as https://api.example.com/v1)",
+             "custom-anthropic": "the Anthropic-compatible endpoint of your provider, the address Claude Code would be "
+                                 "given as ANTHROPIC_BASE_URL (as https://api.example.com/anthropic)"}
 
 
 def _own(provider: str) -> bool:

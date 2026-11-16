@@ -96,6 +96,11 @@ nothing is translated, and the model is the one Claude Code asked for, its own n
 header. Two things are taken out on the way, as for a Claude model on any provider: Claude Code's
 `metadata` (this computer's device id and the session's id; Anthropic knows your account by its
 key), and the reasoning blocks of another model this app ran, which Anthropic's API would refuse.
+A provider of your own that speaks Anthropic's API (**Another provider (Anthropic-compatible)**)
+gets the same: every request as Claude Code wrote it, less those two, its key (if you stored one)
+in `x-api-key`. One that speaks OpenAI's gets Claude Code's requests translated, as NanoGPT and
+OpenRouter do. Either way its key is its server's, by host and port: the same key whichever API
+you choose for that server, and no other server's.
 
 ### The companies that run the models
 
@@ -404,7 +409,7 @@ the reply's mark never changes.
 ## Standard sessions
 
 A standard session runs any model of its provider (NanoGPT, OpenRouter, Anthropic, or an
-OpenAI-compatible provider of your own), **in the clear**: the provider and the company that runs the model read every
+OpenAI-compatible or Anthropic-compatible provider of your own), **in the clear**: the provider and the company that runs the model read every
 prompt, file and reply, and keep them under their own policies. A provider's host you choose under
 **Runs on** is asked for by name; NanoGPT and OpenRouter may still fall back to another host if
 it's down.
@@ -414,8 +419,9 @@ it's down.
   computer's device id and the session's id) and the reasoning blocks of other models. A name of
   Claude Code's own (`claude-opus-…`) is refused, so nothing goes to Claude unless you pick it that
   way.
-- **On Anthropic**, every request goes to Anthropic as Claude Code wrote it, less the same two
-  things, never translated: Claude Code's own model names are Anthropic's, and go as asked.
+- **On Anthropic**, or an Anthropic-compatible provider of your own, every request goes to it as
+  Claude Code wrote it, less the same two things, never translated: Claude Code's own model names
+  go as asked.
 - **A `private/` or `TEE/` model** you pick in a standard session is still sealed, or attested, as
   in those sessions. Once a private model has been used, nothing more of that session goes in the
   clear: everything said so far is in every request.

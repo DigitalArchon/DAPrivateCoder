@@ -130,3 +130,65 @@ async def test_the_window_takes_anthropic_and_its_key_and_lists_its_models_with_
     assert cfg.provider_url(cfg.profile("standard")) == providers.ANTHROPIC_BASE_URL
     config.save(cfg.with_profile(replace(cfg.profile("standard"), provider="nanogpt")))
     assert ring.store[("daprivatecoder", "anthropic")] == "sk-ant-123456"     # kept, for when it's chosen again
+
+
+# ---------------------------------------------------------------------- an Anthropic-compatible provider of your own
+
+OWN = replace(ANTHROPIC, name="own", provider="custom-anthropic", base_url="http://127.0.0.1:8080/anthropic",
+              model="glm-5.3", opus_model="kimi-k3", fast_model="glm-5.3-flash")
+
+
+async def test_an_anthropic_compatible_provider_of_your_own_gets_every_request_as_claude_code_wrote_it():
+    seen, plain = [], FakePlain()
+    p, fake = make(OWN, handler=anthropic_server(seen), plain=plain, provider_url=OWN.base_url,
+                   provider_key=lambda: "sk-own-123456")
+    for asked in ("glm-5.3", "claude-haiku-4-5", "anthropic/claude-opus-5.5"):
+        body = message(asked)
+        r = await call(p, "POST", "/v1/messages", body, headers={"anthropic-version": "2023-06-01"})
+        assert r.status_code == 200 and "message_stop" in r.text, asked
+        assert str(seen[-1].url) == "http://127.0.0.1:8080/anthropic/v1/messages"
+        assert seen[-1].headers["x-api-key"] == "sk-own-123456" and "authorization" not in seen[-1].headers
+        assert json.loads(seen[-1].content) == body
+    assert not plain.calls and not fake.calls
+    # one that needs no key gets none: the server says if it does
+    p, _ = make(OWN, handler=anthropic_server(seen), provider_url=OWN.base_url, provider_key=lambda: None)
+    assert (await call(p, "POST", "/v1/messages", message("glm-5.3"))).status_code == 200
+    assert "x-api-key" not in seen[-1].headers and "authorization" not in seen[-1].headers
+
+
+def test_an_anthropic_compatible_provider_needs_its_address_over_https_unless_its_local():
+    own = '[profiles.s]\nprovider = "custom-anthropic"\nmodel = "glm-5.3"\n'
+    with pytest.raises(ConfigError, match="base_url is missing: the Anthropic-compatible endpoint of your provider"):
+        parse(own)
+    with pytest.raises(ConfigError, match="https"):
+        parse(own + 'base_url = "http://llm.example.com/anthropic"\n')        # refused, never rewritten
+    cfg = parse(own + 'base_url = "https://api.example.com/anthropic/"\n')
+    assert cfg.provider_url(cfg.profile("s")) == "https://api.example.com/anthropic"
+    assert parse(config.render(cfg)).profile("s") == cfg.profile("s")
+    assert '"custom-anthropic" (any Anthropic-compatible one' in config.render(cfg)
+
+
+async def test_the_window_lists_an_anthropic_compatible_providers_models_and_its_key_is_its_servers(window, ring,
+                                                                                                    monkeypatch):
+    where = "https://api.example.com/anthropic"
+    st = (await window_call(window, "POST", "/api/profile", {"profile": "standard", "fields": {
+        "provider": "custom-anthropic", "base_url": where}}))[1]
+    assert st["config"]["profiles"]["standard"]["base_url"] == where and st["provider_key"]["provider"] == "custom-anthropic"
+    st = (await window_call(window, "POST", "/api/key", {"key": "sk-own-123456", "provider": "custom-anthropic"}))[1]
+    assert st["provider_key"]["stored"] and ring.store[("daprivatecoder", "custom:api.example.com")] == "sk-own-123456"
+    asked = []
+
+    def server(request):
+        asked.append(request)
+        return httpx.Response(200, json={"data": [{"type": "model", "id": "glm-5.3"}], "has_more": False})
+    real = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *a, **kw: real(*a, **{"transport": httpx.MockTransport(server),
+                                                                            **kw}))
+    status, listed = await window_call(window, "GET", "/api/models?profile=standard&fresh=1")
+    assert status == 200 and [m["id"] for m in listed["models"]] == ["glm-5.3"]
+    assert str(asked[0].url) == "https://api.example.com/anthropic/v1/models?limit=1000"
+    assert asked[0].headers["x-api-key"] == "sk-own-123456"
+    # the same server's key, whichever API it is spoken to in: a key goes to its server alone
+    assert creds.get_key("custom", where) == "sk-own-123456"
+    with pytest.raises(creds.KeyElsewhere):
+        creds.get_key("custom-anthropic", "http://api.example.com/anthropic")

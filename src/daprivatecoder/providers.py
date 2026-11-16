@@ -76,6 +76,8 @@ PROVIDERS: dict[str, Provider] = {p.id: p for p in (
              key_hint="console.anthropic.com, Settings, API keys",
              key_origins=frozenset({_origin(ANTHROPIC_BASE_URL)})),
     Provider("custom", "your provider", "Another provider (OpenAI-compatible)", own_address=True, key_optional=True),
+    Provider("custom-anthropic", "your provider", "Another provider (Anthropic-compatible)", api="anthropic",
+             auth="x-api-key", own_address=True, key_optional=True),
 )}
 
 
