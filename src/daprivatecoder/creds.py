@@ -131,18 +131,10 @@ CLEAR_NO = "{}_in_the_clear_no"
 
 def origin(url: str) -> str:
     """`url`'s origin as a key is held to it: scheme://host:port, in lower case, the port its scheme's when none
-    is written. "" for what has no scheme or host."""
-    from urllib.parse import urlparse
-    try:
-        u = urlparse((url or "").strip())
-        port = u.port
-    except ValueError:
-        return ""
-    scheme, host = (u.scheme or "").lower(), (u.hostname or "").lower()
-    if not scheme or not host:
-        return ""
-    port = port or {"https": 443, "http": 80}.get(scheme, 0)
-    return f"{scheme}://{f'[{host}]' if ':' in host else host}:{port}"
+    is written. "" for what isn't an http(s) address. The DA apps' one form (llm/privacy.py key_origin), which the
+    Chutes key's three origins are written in."""
+    from .llm.privacy import key_origin
+    return key_origin(url)
 
 
 def _said(kept: str) -> str:
