@@ -23,7 +23,7 @@ from pathlib import Path
 
 from . import providers as providers_mod
 from .llm import routes as routes_mod
-from .llm.client import RANK, private_id, tier_of
+from .llm.client import RANK, is_private_mode, private_id
 from .netpolicy import InsecureURL, check_url, shown, without_password
 from .providers import NANOGPT_BASE_URL, OPENROUTER_BASE_URL  # noqa: F401 - named here since before providers.py
 
@@ -237,10 +237,13 @@ _NOTES = {
     "context": ("the conversation's size, in tokens, where Claude Code compacts it (summarises it, and goes on):\n"
                 "# 200000 (what it assumes for models it doesn't know), 400000 or 1000000 (what NanoGPT lists for these).\n"
                 "# Every request sends the whole conversation, so a bigger one costs more each time, even from the cache"),
-    "provider": ('"nanogpt", "openrouter", "anthropic" (Anthropic\'s own API: Claude Code\'s requests go to it as they\n'
-                 '# are), "custom" (any OpenAI-compatible endpoint: base_url, https unless it is on this computer or\n'
-                 '# your network) or "custom-anthropic" (any Anthropic-compatible one, its base_url as Claude Code\n'
-                 "# would be given it: requests go to it as they are). Its API key is in your keyring, set in the window"),
+    "provider": ('"nanogpt", "chutes", "tinfoil", "openrouter", "anthropic" (Anthropic\'s own API: Claude Code\'s\n'
+                 '# requests go to it as they are), "custom" (any OpenAI-compatible endpoint: base_url, https unless it\n'
+                 '# is on this computer or your network) or "custom-anthropic" (any Anthropic-compatible one, its\n'
+                 "# base_url as Claude Code would be given it: requests go to it as they are). A private profile's is\n"
+                 '# nanogpt or tinfoil (every Tinfoil model end-to-end encrypted, preliminary), a TEE one\'s nanogpt or\n'
+                 "# chutes (its -TEE models end-to-end encrypted to an attested instance: partial privacy, preliminary).\n"
+                 "# Its API key is in your keyring, set in the window"),
     "web_search": """\
 Web search, through NanoGPT. No search is end-to-end encrypted: NanoGPT and the search provider
 # read every query (Claude Code asks you before each one, and refuses one naming this computer).
@@ -294,7 +297,7 @@ def render(cfg: Config) -> str:
     for p in cfg.profiles.values():
         start = "claude-private" if p.name == "private" else f"daprivatecoder claude --profile {p.name}"
         out += ["", f"# {start}", f"# {_KIND_INTRO[p.kind]}", f"[profiles.{p.name}]", f"kind = {_q(p.kind)}"]
-        if p.kind == "standard":
+        if p.kind == "standard" or p.provider != "nanogpt":
             out += [*note("provider"), f"provider = {_q(p.provider)}"]
             if _own(p.provider):
                 out.append(f"base_url = {_q(p.base_url)}")
@@ -387,7 +390,19 @@ def _text(table: dict, key: str, where: str, default: str = "") -> str:
     return value.strip()
 
 
-def _profile(name: str, table: dict, where: str) -> Profile:
+def _below(kind: str, service: str) -> str:
+    """Why a model below a profile's kind can't be one of its models, after "model is 'x', "."""
+    if service == "chutes":
+        return ("which isn't one of Chutes' end-to-end encrypted models (…-TEE). A TEE profile on Chutes only uses "
+                "those (or NanoGPT's private ones), so nothing goes to Chutes in the clear.")
+    if kind == "private":
+        return ("which isn't a NanoGPT Private Mode model (private/…). A private profile only uses those (or "
+                "Tinfoil's, on Tinfoil), so nothing would be sent in the clear.")
+    return ("which isn't one of NanoGPT's TEE models (TEE/…). A TEE profile only uses those (or private ones, or "
+            "Chutes' -TEE models on Chutes), so nothing goes to a host unattested.")
+
+
+def _profile(name: str, table: dict, where: str, settings_url: str = NANOGPT_BASE_URL) -> Profile:
     if not PROFILE_NAME.fullmatch(name):
         raise ConfigError(f"{where}: a profile's name is lower-case letters, digits and dashes ({name!r} isn't).")
     if not isinstance(table, dict):
@@ -411,11 +426,6 @@ def _profile(name: str, table: dict, where: str) -> Profile:
     provider = _text(table, "provider", where, "nanogpt").lower()
     if provider not in PROVIDERS:
         raise ConfigError(f"{where}: provider must be one of {', '.join(PROVIDERS)} (not {provider!r}).")
-    if kind not in providers_mod.get(provider).kinds:
-        allowed = providers_mod.for_kind(kind)
-        raise ConfigError(f"{where}: a {kind} profile's models are "
-                          f"{' or '.join(providers_mod.name(a) for a in allowed)}'s, so its provider is "
-                          f"{' or '.join(allowed)}.")
     own = _own(provider)
     base_url = _text(table, "base_url", where).rstrip("/") if own else ""
     if own:
@@ -425,6 +435,13 @@ def _profile(name: str, table: dict, where: str) -> Profile:
             check_url(base_url, f"{where}: base_url")
         except InsecureURL as e:
             raise ConfigError(str(e)) from None
+    # where its models are: a provider of your own at Tinfoil's or Chutes' address serves what they do
+    address = providers_mod.get(provider).address(settings_url, base_url)
+    if kind not in providers_mod.kinds_at(provider, address):
+        allowed = providers_mod.for_kind(kind)
+        owners = " or ".join(providers_mod.name(a) + ("'" if providers_mod.name(a).endswith("s") else "'s")
+                             for a in allowed)
+        raise ConfigError(f"{where}: a {kind} profile's models are {owners}, so its provider is {' or '.join(allowed)}.")
     model = _text(table, "model", where)
     if not model:
         raise ConfigError(f"{where}: model is missing.")
@@ -439,18 +456,13 @@ def _profile(name: str, table: dict, where: str) -> Profile:
     web_search = _text(table, "web_search", where, "best" if kind == "standard" else "zero-retention").lower()
     if web_search not in WEB_SEARCH:
         raise ConfigError(f"{where}: web_search must be one of {', '.join(WEB_SEARCH)} (not {web_search!r}).")
-    nanogpt = provider == "nanogpt"
     for key, value in (("model", model), ("opus_model", opus), ("fast_model", fast), ("vision_model", vision)):
         # below the profile's kind, a model would get what was said with less protection: refused here,
-        # before anything starts
-        if value and RANK[tier_of(value, nanogpt)] < RANK[kind]:
-            if kind == "private":
-                raise ConfigError(f"{where}: {key} is {value!r}, which isn't a NanoGPT Private Mode model (private/…). "
-                                  "A private profile only uses those, so nothing would be sent in the clear.")
-            raise ConfigError(f"{where}: {key} is {value!r}, which isn't one of NanoGPT's TEE models (TEE/…). A TEE "
-                              "profile only uses those (or private ones), so nothing goes to a host unattested.")
+        # before anything starts (how private it is is its address's: providers.privacy_of)
+        if value and RANK[providers_mod.tier_of(provider, address, value)] < RANK[kind]:
+            raise ConfigError(f"{where}: {key} is {value!r}, {_below(kind, providers_mod.service_at(address))}")
     if kind == "private":
-        model, opus, fast, vision = (private_id(m) if m else "" for m in (model, opus, fast, vision))
+        model, opus, fast, vision = (private_id(m) if is_private_mode(m) else m for m in (model, opus, fast, vision))
     routes = table.get("routes", {})
     if not isinstance(routes, dict):
         raise ConfigError(f"{where}: routes must be a table: [profiles.{name}.routes].")
@@ -489,7 +501,7 @@ def parse(text: str, path: Path | None = None) -> Config:
     profiles_table = data.get("profiles", {})
     if not isinstance(profiles_table, dict):
         raise ConfigError(f"{where}: profiles must be tables, as [profiles.private].")
-    profiles = {name: _profile(name, table, where) for name, table in profiles_table.items()}
+    profiles = {name: _profile(name, table, where, base_url.rstrip("/")) for name, table in profiles_table.items()}
     # the window's three kinds of session are always there: one left out of the file is its default
     profiles.update({name: p for name, p in DEFAULTS.profiles.items() if name not in profiles})
     return Config(base_url=base_url.rstrip("/"), claude=claude, profiles=profiles, path=path, tee_name_upstreams=names)

@@ -45,10 +45,10 @@ import httpx
 from . import creds
 from . import providers as providers_mod
 from .config import Profile
-from .llm import capabilities, routes
+from .llm import capabilities, privacy, routes
 from .llm.dcap import since_boot
 from .llm.anthropic_bridge import VISION_PROMPT, ImageDescriber, estimate_tokens, has_images, message, sse, to_openai
-from .llm.client import RANK, LLMClient, is_claude, is_private_mode, is_tee, private_id, tier_of
+from .llm.client import RANK, LLMClient, is_claude, is_private_mode, is_tee, private_id
 from .llm.errors import error_words, shown_error
 from .llm.secure_http import ACCEPT_ENCODING, loads
 from .llm.private_mode import (Attestation, Enclave, PrivateModeClient, list_private_models, offers_private_mode,
@@ -309,6 +309,35 @@ class OpenedPrivateClient(PrivateModeClient):
         return super().stream(*args, **kwargs)
 
 
+class Opened:
+    """A sealed client of the shared ones (llm/tinfoil_direct.py, llm/chutes_client.py) as the proxy uses it: its
+    stream says ("open", None) once the sealed reply has begun, as OpenedPrivateClient's does."""
+
+    def __init__(self, client):
+        self.client = client
+
+    def stream(self, *args, **kwargs):
+        kwargs.setdefault("opened", True)
+        return self.client.stream(*args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self.client, name)
+
+
+def tinfoil_client(base_url: str, key: str, state) -> object:
+    """Tinfoil direct (llm/tinfoil_direct.py): every request sealed to Tinfoil's attested router, over TLS pinned
+    to its attested key."""
+    from .llm.tinfoil_direct import TinfoilDirectClient
+    return TinfoilDirectClient(base_url, key, state)
+
+
+def chutes_client(base_url: str, key: str, key_origin: str, state, on_attested, client=None) -> object:
+    """Chutes' end-to-end encryption (llm/chutes_client.py): a -TEE model's every request sealed to an attested
+    Chutes instance, through api.chutes.ai."""
+    from .llm.chutes_client import ChutesE2EEClient
+    return ChutesE2EEClient(base_url, key, key_origin=key_origin, state=state, on_attested=on_attested, client=client)
+
+
 PrivateClientFactory = Callable[[str, str, Enclave], object]   # (base_url, key, enclave) -> PrivateModeClient
 PlainClientFactory = Callable[[str, "str | None"], object]     # (base_url, key) -> LLMClient
 # (NanoGPT's base_url, key, model) -> the attestation (AttestedTee, or what it found: no reply is checked then)
@@ -343,6 +372,9 @@ def attested_as(found: dict) -> str:
     "TEE gateway attested" where what was attested is RedPill's gateway, which passes the model's requests on
     to the machine that runs it, else "TEE attested"; "only in part" where it fell short (SealedLore's,
     Nov 11 2026: say what was attested, not only that something was)."""
+    if found.get("service") == "chutes":
+        # Chutes' own end-to-end encryption: sealed to each attested instance, always partial (llm/chutes_client.py)
+        return "E2EE attested (Chutes), only in part"
     what = "TEE gateway attested" if found.get("attested") == "gateway" else "TEE attested"
     return f"{what}, only in part" if found.get("level") == "partial" else what
 
@@ -476,12 +508,14 @@ class Proxy:
                  provider_url: str = "", provider_key: Callable[[], str | None] | None = None,
                  plain_client: PlainClientFactory | None = None, tee_check: TeeCheck = attest_tee_for_replies,
                  provider_capabilities_loader: Callable[[], Awaitable[dict | None]] | None = None,
-                 gate: Callable[[], str] | None = None, name_upstreams: Callable[[], bool] | None = None):
+                 gate: Callable[[], str] | None = None, name_upstreams: Callable[[], bool] | None = None,
+                 tinfoil: Callable[..., object] = tinfoil_client, chutes: Callable[..., object] = chutes_client):
         """`base_url` and `key` are NanoGPT's (private and TEE models); a standard profile's provider
         is at `provider_url`, with `provider_key`. `gate` says why nothing may be sent now ("": it may;
         gate.py: DA Private Coder closed, the editor switched off). `name_upstreams` says whether to name
         the provider behind each TEE reply now (config.names_upstreams: the user's choice, off by default,
-        asked before each reply's check); without it, none is."""
+        asked before each reply's check); without it, none is. `tinfoil` and `chutes` make the sealed clients
+        of Tinfoil's and Chutes' addresses (tests give their own)."""
         self._gate = gate
         self._name_upstreams = name_upstreams
         self.profile = profile
@@ -494,14 +528,20 @@ class Proxy:
         self._own_http: httpx.AsyncClient | None = None      # the proxy's own, for any address on the internet
         self._local_http: httpx.AsyncClient | None = None    # and for one on this computer or its network
         self._private_client = private_client
-        # a standard profile's models are its provider's; a private or TEE profile's, NanoGPT's
-        self.provider = profile.provider if profile.kind == "standard" else "nanogpt"
+        # where the profile's models are (a private one's NanoGPT's or Tinfoil's, a TEE one's NanoGPT's or Chutes')
+        self.provider = profile.provider
         self.spec = providers_mod.get(self.provider)
         self.provider_url = check_url(provider_url or self.base_url, f"{NAMES[self.provider]}'s base URL").rstrip("/")
         self._given_key = provider_key is not None             # given (tests): it is the key wherever it goes
         self._provider_key = provider_key or (self._key if self.provider == "nanogpt"
                                               else lambda: creds.get_key(self.provider, self.provider_url))
         self._plain_client = plain_client or LLMClient
+        # the service its address is (providers.service_at): "tinfoil", "chutes", or "": what seals what (privacy_of)
+        self.service = providers_mod.service_at(self.provider_url)
+        self._tinfoil_client, self._chutes_client = tinfoil, chutes
+        self._tinfoil_state = None                           # Tinfoil's attested router and listing, once needed
+        self._chutes_state = None                            # Chutes' instances' attestations and nonces
+        self._chutes_http: httpx.Client | None = None        # the blocking client Chutes' discovery goes by
         self._plain: dict[tuple[str, str], object] = {}
         self._tee_check = tee_check
         # (NanoGPT's base_url, model) -> when it attested, what it found, the check of its replies against that
@@ -516,8 +556,7 @@ class Proxy:
         self._caps_loaders: dict[str, Callable[[], Awaitable[dict | None]]] = {
             "nanogpt": capabilities_loader or (lambda: capabilities.fetch_nanogpt(self.base_url, self._client(self.base_url)))}
         if self.provider != "nanogpt":
-            self._caps_loaders[self.provider] = provider_capabilities_loader or (
-                lambda: capabilities.fetch(self.provider, self.provider_url, self._client(self.provider_url)))
+            self._caps_loaders[self.provider] = provider_capabilities_loader or self._listing
         self._list_private = private_lister or (lambda: list_private_models(self.base_url, self._client(self.base_url)))
         self._caps: dict[str, dict | None] = {}
         self._caps_failed: dict[str, float] = {}       # provider -> when its list last couldn't be read
@@ -528,16 +567,53 @@ class Proxy:
         self._describers: dict[str, ImageDescriber] = {}
         self._efforts: dict[str, tuple[str, ...]] = {}      # model -> the efforts its refusal said it takes
         self._no_reasoning_back: set[str] = set()          # providers that refused the reasoning handed back
-        self.used_private = False
+        # how private the session has been made so far (the most private model it has used): it moves only to a
+        # model as private or more (llm/privacy.py move_refusal), since every request carries what was said
+        self.held = privacy.NONE
+
+    @property
+    def used_private(self) -> bool:
+        """Whether the session has used a model with the highest privacy (NanoGPT's private/ ones, Tinfoil's)."""
+        return self.held.level == privacy.HIGHEST
+
+    async def _listing(self) -> dict | None:
+        """The profile's provider's list of models, what they can do and cost: Tinfoil's and Chutes' public ones
+        (no key sent), else capabilities.fetch's (None for one that lists none)."""
+        if self.service == "tinfoil":
+            from .llm.tinfoil_direct import listing_capabilities
+            return capabilities.from_listing(listing_capabilities(await self._tinfoil().listing.fetch()))
+        if self.service == "chutes":
+            from .llm.chutes_client import list_chutes_models
+            from .llm.chutes_client import listing_capabilities as chutes_capabilities
+            return capabilities.from_listing(chutes_capabilities(await list_chutes_models(self._client(
+                "https://llm.chutes.ai/v1"))))
+        return await capabilities.fetch(self.provider, self.provider_url, self._client(self.provider_url))
+
+    def _tinfoil(self):
+        """What every request to Tinfoil's address shares in a session: its attested router (attested again when
+        old) with the prompt cache's secret, in memory only, and its keyless listing."""
+        if self._tinfoil_state is None:
+            from .llm.tinfoil_direct import TinfoilState
+            self._tinfoil_state = TinfoilState(self.provider_url,
+                                               on_attested=lambda att: self._attested(att, service="tinfoil"))
+        return self._tinfoil_state
 
     # ------------------------------------------------------------------ what is sent where
 
-    def tier(self, model: str) -> str:
-        """How a request for `model` travels: private (sealed), tee (attested, through NanoGPT) or standard."""
-        return tier_of(model, self.provider == "nanogpt")
+    def privacy(self, model: str) -> privacy.Privacy:
+        """How private `model` is as this session sends it, by the address its requests go to (providers.privacy_of):
+        when in doubt, sealed."""
+        return providers_mod.privacy_of(self.provider, self.provider_url, model)
 
-    def _provider_of(self, tier: str) -> str:
-        return self.provider if tier == "standard" else "nanogpt"
+    def tier(self, model: str) -> str:
+        """How a request for `model` travels: private (sealed, the highest privacy: NanoGPT's private/ models,
+        Tinfoil's), tee (partial: NanoGPT's attested TEE/ models, Chutes' sealed -TEE ones) or standard."""
+        return providers_mod.TIER_OF_LEVEL[self.privacy(model).level]
+
+    def _provider_of(self, model: str) -> str:
+        """Whose `model` is: NanoGPT's for its private/ and TEE/ models, else the profile's provider's."""
+        return "nanogpt" if self.privacy(model).service in (privacy.NANOGPT_PRIVATE, privacy.NANOGPT_TEE) \
+            else self.provider
 
     def gated(self) -> str:
         """Why nothing may be sent now ("": it may)."""
@@ -551,22 +627,30 @@ class Proxy:
         p = self.profile
         model = private_id(asked) if is_private_mode(asked) else (asked.strip() or p.model)
         tier = self.tier(model)
-        if tier == "private":
-            # from now on nothing of this session goes in the clear: set before anything is awaited, so
-            # a request alongside this one (Claude Code's quick model's) is held to it too
-            self.used_private = True
-            return private_id(model)
         name = model.lower()
-        # a provider that speaks Anthropic's API takes every model as Claude Code asked for it, its own names included
-        own = model in p.models or (tier == "standard" and self.spec.api == "anthropic")
-        if not own and name.startswith("claude-") and "haiku" in name:
-            return self.choose(p.fast_model)
-        if not own and (name.startswith("claude-") or RANK[tier] < RANK[p.kind]):
+        # a provider that speaks Anthropic's API takes every model as Claude Code asked, its own names included; a
+        # private/ model is the user's own choice wherever it is asked for (sealed through NanoGPT)
+        own = model in p.models or is_private_mode(model) or \
+            (p.kind == "standard" and tier == "standard" and self.spec.api == "anthropic")
+        if not own and name.startswith("claude-"):
+            # Claude Code's own names (its quick model's for titles and summaries, its subagents'): its quick work
+            # goes to the profile's quick model, of the profile's kind; any other is refused, never sent as it is
+            if "haiku" in name:
+                return self.choose(p.fast_model)
             raise Refused(400, self._not_here(model, tier), "invalid_request_error")
-        if self.used_private:
-            raise Refused(403, f"This session has used a private model, so {model} can't be used in it: everything "
-                               "said so far would go to it in the clear. Start a new session for it.")
-        return model
+        if RANK[tier] < RANK[p.kind]:
+            # whatever asked for it, nothing of a session goes to a model less private than its kind
+            raise Refused(400, self._not_here(model, tier), "invalid_request_error")
+        # a session moves only to a model as private as the most private it has used, or more: everything said so
+        # far is in every request. Held before anything is awaited, so a request alongside this one (Claude Code's
+        # quick model's) is held to it too
+        found = self.privacy(model)
+        refusal = privacy.move_refusal(self.held, found, model, what="this session",
+                                       way_out="or start a new session for it")
+        if refusal:
+            raise Refused(403, refusal)
+        self.held = privacy.more_private(self.held, found)
+        return private_id(model) if is_private_mode(model) else model
 
     def _not_here(self, model: str, tier: str) -> str:
         p = self.profile
@@ -604,8 +688,9 @@ class Proxy:
             return key
         if provider == "nanogpt":
             raise Refused(403, "No NanoGPT API key is stored. Run `daprivatecoder key set` in a terminal, then try again.")
+        tab = {"private": "Private", "tee": "TEE"}.get(self.profile.kind, "Standard")
         raise Refused(403, f"No {NAMES[provider]} API key is stored: add it in DA Private Coder's window (Models, "
-                           f"Standard), or run `daprivatecoder key set --provider {provider}`, then try again.")
+                           f"{tab}), or run `daprivatecoder key set --provider {provider}`, then try again.")
 
     def _private(self, model: str):
         if self.enclave is None:
@@ -613,17 +698,51 @@ class Proxy:
                                "nothing was sent.")
         return self._private_client(self.base_url, self._read_key(), self.enclave)
 
-    def _chat_client(self, model: str, tier: str):
-        """The client for a model's chat completions: sealed for a private one, plain otherwise (a TEE
-        one's enclave attested first, by the caller)."""
-        if tier == "private":
+    def _chat_client(self, model: str, tier: str = ""):
+        """The client for a model's chat completions, by who seals or attests it (privacy): NanoGPT's Private Mode,
+        Tinfoil direct and Chutes' end-to-end encryption sealed; NanoGPT's TEE/ models plain to NanoGPT (their
+        enclave attested first, by the caller); any other plain to the provider, never to an address that takes
+        only sealed requests, nor with a model only its own client sends (privacy.plain_refusal)."""
+        found = self.privacy(model)
+        if found.service == privacy.NANOGPT_PRIVATE:
             return self._private(model)
-        url, key = (self.base_url, self._read_key()) if tier == "tee" \
+        if found.service == privacy.TINFOIL:
+            return Opened(self._tinfoil_client(self.provider_url, self._read_key(self.provider), self._tinfoil()))
+        if found.service == privacy.CHUTES:
+            return Opened(self._chutes(model))
+        url, key = (self.base_url, self._read_key()) if found.service == privacy.NANOGPT_TEE \
             else (self.provider_url, self._read_key(self.provider))
+        refusal = privacy.plain_refusal(url, f"the request for {model}", model=model,
+                                        way_out="Choose another model with /model.")
+        if refusal:
+            raise Refused(403, refusal)
         client = self._plain.get((url, key or ""))
         if client is None:
             client = self._plain[(url, key or "")] = self._plain_client(url, key)
         return client
+
+    def _chutes(self, model: str):
+        """A client for Chutes' -TEE `model`, every request sealed to an attested instance. The key goes to
+        api.chutes.ai only when it was stored for one of Chutes' own hosts (llm/chutes_client.py not_chutes, the one
+        exception to a key going only to its own origin); the instances' attestations and nonces are the session's
+        (ChutesState), and each that checked an instance anew is logged for `model`."""
+        from .llm.chutes_client import ChutesState
+        from .llm.secure_http import make_client
+        if self._chutes_state is None:
+            self._chutes_state = ChutesState()
+            self._chutes_http = make_client("https://api.chutes.ai", follow_redirects=False)
+        key = self._read_key(self.provider)
+        held = "" if self._given_key else creds.held_origin(self.provider, self.provider_url)
+        return self._chutes_client(self.provider_url, key, held or creds.origin(self.provider_url),
+                                   self._chutes_state, lambda att: self._chutes_attested(model, att),
+                                   client=self._chutes_http)
+
+    def _chutes_attested(self, model: str, att) -> None:
+        """Chutes' instances of `model` attested anew: logged as a TEE model's attestation is (its "attested_tee"
+        line), with whose it was and that every request is sealed to what was attested."""
+        found = att.to_dict()
+        self._record("attested_tee", model=model, **{k: found.get(k) for k in ATTESTED}, service="chutes",
+                     encrypted=True, measurement=found.get("measurement", ""))
 
     def _client(self, url: str) -> httpx.AsyncClient:
         """The client for a request to `url`: the one the proxy was given (tests), else one of its own. A
@@ -659,6 +778,8 @@ class Proxy:
             close = getattr(client, "aclose", None)
             if close is not None:
                 await close()
+        if self._chutes_http is not None:
+            self._chutes_http.close()
 
     async def capabilities(self, provider: str = "nanogpt") -> dict | None:
         """The provider's model list, loaded once: None when it lists none (another provider), {} when
@@ -682,23 +803,29 @@ class Proxy:
         the vision helper. Without its provider's list it isn't known, and a model that sees mustn't be
         given descriptions, nor one that doesn't images: Claude Code is told to ask again. A provider
         that lists nothing of what its models do: described."""
-        caps = await self.capabilities(self._provider_of(tier))
+        caps = await self.capabilities(self._provider_of(model))
         if caps is None:
             return False
         if not caps:
-            raise Refused(503, f"{NAMES[self._provider_of(tier)]}'s list of models couldn't be read, so it isn't known "
+            raise Refused(503, f"{NAMES[self._provider_of(model)]}'s list of models couldn't be read, so it isn't known "
                                f"whether {model} sees images: nothing was sent. Claude Code asks again.", "api_error",
                           retry=True)
         return bool((capabilities.lookup(caps, model) or {}).get("vision"))
+
+    def _service_field(self, model: str) -> dict:
+        """Who sealed a request for `model`, where another than NanoGPT's Private Mode did ("tinfoil", "chutes"): for
+        the request log, and the window's mark."""
+        service = self.privacy(model).service
+        return {"service": service} if service in (privacy.TINFOIL, privacy.CHUTES) else {}
 
     def _record(self, kind: str, **fields) -> None:
         if self.log is not None:
             self.log.write(kind, **fields)
 
-    def _attested(self, att: Attestation) -> None:
+    def _attested(self, att: Attestation, service: str = "") -> None:
         self._record("attested", enclave=att.enclave, hardware=att.hardware, release=att.release_tag,
                      digest=att.release_digest, latest=att.latest_release, latest_checked=att.latest_checked,
-                     key_sha256=att.hpke_key_sha256, summary=att.summary)
+                     key_sha256=att.hpke_key_sha256, summary=att.summary, **({"service": service} if service else {}))
 
     async def _attest_tee(self, model: str) -> dict:
         """Nothing goes to a TEE model whose enclave hasn't attested (llm/tee.py); an attestation older
@@ -802,8 +929,9 @@ class Proxy:
     async def _priced(self, model: str, usage: dict, tier: str) -> dict:
         """The usage with what it cost: the provider's own bill when it gives one, else the listed prices'."""
         if "cost" not in usage:
-            caps = await self.capabilities(self._provider_of(tier)) or {}
-            estimate = capabilities.cost(capabilities.lookup(caps, model), usage, tier == "private")
+            caps = await self.capabilities(self._provider_of(model)) or {}
+            estimate = capabilities.cost(capabilities.lookup(caps, model), usage,
+                                         self.privacy(model).service == privacy.NANOGPT_PRIVATE)
             if estimate is not None:
                 usage = {**usage, "cost": round(estimate, 6), "cost_estimated": True}
         return usage
@@ -814,9 +942,12 @@ class Proxy:
         when not known (sent as asked)."""
         if model in self._efforts:
             return self._efforts[model]
-        if tier == "private":
+        found = self.privacy(model)
+        if found.service == privacy.NANOGPT_PRIVATE:
             return PRIVATE_EFFORTS
-        provider = self._provider_of(tier)
+        if found.service == privacy.CHUTES:
+            return None                     # its thinking is its template's: the lowest switch it off (chutes_body)
+        provider = self._provider_of(model)
         if providers_mod.get(provider).own_address:
             return CUSTOM_EFFORTS
         caps = await self.capabilities(provider) or {}
@@ -899,13 +1030,14 @@ class Proxy:
                         {"type": "text", "text": "What the assistant is doing: " + (context.strip() or "(not said)")},
                         {"type": "image_url", "image_url": {"url": data_url}}]}]
         started = time.monotonic()
-        attested = await self._attest_tee(model) if tier == "tee" else {}
+        nanogpt_tee = self.privacy(model).service == privacy.NANOGPT_TEE
+        attested = await self._attest_tee(model) if nanogpt_tee else {}
         # checked against the record its attested key signs, as the attestation just made has it
-        check = self._reply_check(model) if tier == "tee" else None
+        check = self._reply_check(model) if nanogpt_tee else None
         client = self._chat_client(model, tier)
         effort = await self._effort(model, tier, VISION_EFFORT)
         # what was attested goes with it (the window says "TEE gateway" for RedPill's gateway)
-        rec = {"model": model, "tier": tier, **({"attested": attested["attested"]} if attested.get("attested") else {})}
+        rec = {"model": model, "tier": tier, **self._service_field(model), **({"attested": attested["attested"]} if attested.get("attested") else {})}
         # a TEE model's reply is read as a stream, every byte hashed (LLMClient.complete, exact): the record
         # names the hash of a stream's bytes, and NanoGPT's records of replies not streamed can't be compared
         exact = {"exact": True} if check is not None else {}
@@ -930,7 +1062,7 @@ class Proxy:
             self._record("vision", model=model, tier=tier, status=502, error=shown_error(e)[:300])
             raise
         usage = getattr(client, "last_usage", None)
-        self._record("vision", **as_sent(rec, ended), sealed=tier == "private", status=200,
+        self._record("vision", **as_sent(rec, ended), sealed=self.privacy(model).sealed, status=200,
                      seconds=round(time.monotonic() - started, 2),
                      **({"usage": await self._priced(model, openai_usage(usage), tier)} if usage else {}))
         self._check_later(model, check, ended, rec)
@@ -956,11 +1088,16 @@ class Proxy:
                 await self.enclave.current()
             except Exception as e:  # noqa: BLE001 - the first request attests again, and says why it can't
                 self._record("attested", error=str(e)[:300])
-        if self.tier(self.profile.model) == "tee":
+        if self.privacy(self.profile.model).service == privacy.NANOGPT_TEE:
             try:
                 await self._attest_tee(self.profile.model)
             except Refused:
                 pass                                    # the first request attests again, and says why it can't
+        if self.service == "tinfoil":
+            try:
+                await self._tinfoil().enclave.current()     # keyless: Tinfoil's bundle, checked here
+            except Exception as e:  # noqa: BLE001 - the first request attests again, and says why it can't
+                self._record("attested", service="tinfoil", error=str(e)[:300])
         for provider in self._caps_loaders:
             await self.capabilities(provider)
 
@@ -1028,6 +1165,11 @@ class Proxy:
         try:
             if self.gated():
                 pass                          # nothing fetched: the profile's own models only
+            elif self.service in ("tinfoil", "chutes"):
+                # Tinfoil's models, or Chutes' (a TEE profile: its -TEE ones), that take tools
+                caps = await asyncio.wait_for(self.capabilities(self.provider), MODEL_LIST_SECONDS) or {}
+                listed = sorted(m for m, c in caps.items() if c.get("tools")
+                                and RANK[self.tier(m)] >= RANK[self.profile.kind])
             elif self.profile.private and self.enclave is not None:
                 listed = await asyncio.wait_for(self._private_ids(), MODEL_LIST_SECONDS)
             elif self.profile.kind == "tee":
@@ -1048,9 +1190,10 @@ class Proxy:
         if path == "/v1/messages/count_tokens":
             return JSONResponse({"input_tokens": estimate_tokens(data)})
         # raises Refused: nothing goes to a TEE model unattested
-        attested = await self._attest_tee(model) if tier == "tee" else {}
+        nanogpt_tee = self.privacy(model).service == privacy.NANOGPT_TEE
+        attested = await self._attest_tee(model) if nanogpt_tee else {}
         # a TEE model's reply is checked against the record its attested key signs, once it has gone on
-        check = self._reply_check(model) if tier == "tee" else None
+        check = self._reply_check(model) if nanogpt_tee else None
         client = self._chat_client(model, tier)            # raises Refused: no key, not NanoGPT
         started = time.monotonic()
         # raises Refused (asked again) when it isn't known whether the model sees: never guessed
@@ -1061,7 +1204,7 @@ class Proxy:
             raise
         except Exception as e:  # noqa: BLE001 - Claude Code shows the reason (an image's description failed, say)
             raise upstream_refusal(f"Couldn't prepare the request for {model}: {self.profile.vision_model}", e,
-                                   self._provider_of(self.tier(self.profile.vision_model or model))) from e
+                                   self._provider_of(self.profile.vision_model or model)) from e
         wanted = effort_of(data, self.profile.reasoning)
         effort = await self._effort(model, tier, wanted)
         params = with_effort(params, effort)
@@ -1071,7 +1214,8 @@ class Proxy:
         # the model's reasoning is shown as Claude Code shows Claude's, unless its thinking is off
         show = not (isinstance(data.get("thinking"), dict) and data["thinking"].get("type") == "disabled")
         rec = {"path": path, "model": model, "asked_for": asked if asked and asked.strip().lower() != model.lower() else "",
-               "sealed": tier == "private", "tier": tier, "provider": self._provider_of(tier), "sees": native,
+               "sealed": self.privacy(model).sealed, "tier": tier, "provider": self._provider_of(model),
+               **self._service_field(model), "sees": native,
                "effort": effort, **({"effort_asked": wanted} if wanted != effort else {}), "bytes_out": size,
                **({"route": routes.describe(self.provider, route)} if route else {}),
                # what was attested, for the window to say (RedPill's gateway is not the machine that runs the model)
@@ -1089,14 +1233,14 @@ class Proxy:
 
         try:
             # the provider's answer first: a request it refuses (no credit, its key, too long) is told by status
-            where = f"{tier}:{self._provider_of(tier)}"
+            where = f"{tier}:{self._provider_of(model)}"
             if where in self._no_reasoning_back and handed_back(messages):
                 messages = without_reasoning(messages)
                 rec["reasoning_back"] = False
             events = await answered(self._stream(client, model, messages, tools, params, rec, where,
                                                  exact=check is not None, ended=ended))
         except Exception as e:  # noqa: BLE001
-            refusal = upstream_refusal(model, e, self._provider_of(tier))
+            refusal = upstream_refusal(model, e, self._provider_of(model))
             await done({}, refusal.status, error=str(e)[:300])
             refusal.logged = True
             raise refusal from e
@@ -1106,7 +1250,7 @@ class Proxy:
             try:
                 reply = await message(events, model, estimate, stats=stats, thinking=show)
             except Exception as e:  # noqa: BLE001
-                refusal = upstream_refusal(model, e, self._provider_of(tier), answering=True)
+                refusal = upstream_refusal(model, e, self._provider_of(model), answering=True)
                 await done(stats, refusal.status, error=str(e)[:300])
                 refusal.logged = True
                 raise refusal from e
@@ -1134,6 +1278,11 @@ class Proxy:
         from starlette.responses import Response, StreamingResponse
 
         base = self.spec.anthropic_url(self.provider_url)
+        # never in the clear to an address that takes only sealed requests, nor a model only its own client sends
+        refusal = privacy.plain_refusal(base, f"the request for {model}", model=model,
+                                        way_out="Choose another model with /model.")
+        if refusal:
+            raise Refused(403, refusal)
         key = self._read_key(self.provider, at=base)
         # Claude Code's metadata is this computer's device id and the session's: the provider knows the
         # account by its key, and needs neither
@@ -1145,7 +1294,7 @@ class Proxy:
             data.pop("metadata", None)
             body = json.dumps(data).encode()
         headers = {k: v for k, v in request.headers.items() if k.lower() in PASS_HEADERS}
-        headers.update(providers_mod.auth_headers(self.provider, key))
+        headers.update(providers_mod.auth_headers(self.provider, key, base))     # Chutes' proxy: a bearer token
         url = upstream_url(base, path, request.url.query)
         client = self._client(url)
         started = time.monotonic()

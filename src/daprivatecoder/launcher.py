@@ -31,7 +31,14 @@ from pathlib import Path
 
 from . import config
 from .config import PROVIDERS, Config, Profile, made, state_dir
-from .llm.client import RANK, tier_of
+from . import providers
+from .llm.client import RANK
+
+
+def tier_of(profile: Profile, model: str) -> str:
+    """How `model` travels in `profile`'s sessions, by the address its requests go to (providers.tier_of)."""
+    return providers.tier_of(profile.provider, providers.get(profile.provider).address(config.NANOGPT_BASE_URL,
+                                                                                         profile.base_url), model)
 
 # Claude Code's own model names that resolve through the tier variables set below
 TIER_ALIASES = frozenset({"opus", "sonnet", "haiku", "fable", "opusplan", "default", "inherit"})
@@ -121,9 +128,14 @@ def split_wrapper_args(argv: list[str]) -> tuple[str | None, list[str]]:
 
 def _describe(profile: Profile, model: str) -> str:
     """What /model says of a model: how its requests travel."""
-    tier = tier_of(model, profile.provider == "nanogpt")
+    tier = tier_of(profile, model)
+    service = providers.service_at(providers.get(profile.provider).address(config.NANOGPT_BASE_URL, profile.base_url))
+    if tier == "private" and service == "tinfoil":
+        return "Private: sealed on this computer to Tinfoil's attested router (preliminary)"
     if tier == "private":
         return "Private: sealed on this computer to an attested enclave"
+    if tier == "tee" and service == "chutes":
+        return "Partial privacy: sealed on this computer to an attested Chutes instance (preliminary)"
     if tier == "tee":
         return "TEE: an attested enclave, but NanoGPT's gateway reads it (not end-to-end encrypted)"
     named = PROVIDERS[profile.provider]
@@ -215,7 +227,7 @@ def _model_ok(profile: Profile, model: str) -> bool:
     """Whether Claude Code may be given `model` (as --model) in this profile: one no less protected than
     the profile's kind, or one of Claude Code's own aliases, which resolve to the profile's models."""
     return model.strip().lower() in TIER_ALIASES or \
-        RANK[tier_of(model, profile.provider == "nanogpt")] >= RANK[profile.kind]
+        RANK[tier_of(profile, model)] >= RANK[profile.kind]
 
 
 # what DA Private Coder's search server (search.py) needs of the environment Claude Code starts it with:

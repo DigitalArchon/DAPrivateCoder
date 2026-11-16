@@ -34,13 +34,16 @@ class UserError(Exception):
 
 
 def _sent(record: dict) -> str:
-    """How a logged request or search left this computer: "sealed", "tee" (to an attested enclave,
-    through NanoGPT's gateway), "clear", or "" (it didn't: refused here first). A request the proxy
+    """How a logged request or search left this computer: "sealed", "chutes" (sealed to an attested Chutes instance,
+    partial privacy), "tee" (to an attested enclave, through NanoGPT's gateway), "clear", or "" (it didn't: refused
+    here first). A request the proxy
     sent says which (its tier, or before there were TEE sessions, "sealed"); one it refused doesn't."""
     kind = record.get("kind")
     if kind == "search":
         return "" if record.get("status") == "refused" else "clear"
     tier = record.get("tier")
+    if record.get("service") == "chutes" and tier == "tee":
+        return "chutes"                       # sealed end to end to an attested Chutes instance: partial privacy
     if tier in ("private", "tee", "standard"):
         return {"private": "sealed", "tee": "tee", "standard": "clear"}[tier]
     if kind == "vision":
@@ -172,6 +175,10 @@ class Manager:
         out["usage"] = self.usage()
         out["tee_upstreams_note"] = config.TEE_UPSTREAMS_NOTE          # beside its switch, in Enclave checks
         out["attestation"] = self.last_attestation()
+        out["tinfoil_attestation"] = self.last_attestation("tinfoil")
+        # the service each window profile's address is ("tinfoil", "chutes", ""), whichever provider names it
+        out["services"] = {name: providers.service_at(cfg.provider_url(p)) for name, p in cfg.profiles.items()
+                           if name in SESSIONS} if cfg else {}
         out["tee_attestations"] = self.tee_attestations()
         # whether a session of each kind can start: Claude Code, and the key its models need
         base = bool(cfg) and bool(out["claude"]["path"])
@@ -205,7 +212,8 @@ class Manager:
                          "provider": r.get("provider") if kind != "search" else "",
                          "what": SEARCH_NAMES.get(r.get("provider"), r.get("provider") or "") if kind == "search"
                          else r.get("model", ""),
-                         "asked_for": r.get("asked_for", ""), "sent": sent, "sealed": sent == "sealed",
+                         "asked_for": r.get("asked_for", ""), "sent": sent, "sealed": sent in ("sealed", "chutes"),
+                         "service": r.get("service", ""),
                          "status": r.get("status", ""),
                          # no usage (refused, failed, a search): no tokens, rather than none
                          "input": u.get("input", 0) + u.get("cache_read", 0) if u else None,
@@ -217,10 +225,12 @@ class Manager:
         return {"today": round(spent_today, 4), "month": round(spent_month, 4), "requests_today": asked_today,
                 "last": rows[-SHOWN:][::-1], "log": str(config.state_dir() / "requests.log")}
 
-    def last_attestation(self) -> dict | None:
+    def last_attestation(self, service: str = "") -> dict | None:
+        """The last attestation of NanoGPT's Private Mode enclave that held (or with `service` "tinfoil", of
+        Tinfoil's router, reached directly)."""
         found = None
         for r in usagelog.read(config.state_dir() / "requests.log"):
-            if r.get("kind") == "attested" and not r.get("error"):
+            if r.get("kind") == "attested" and not r.get("error") and (r.get("service") or "") == service:
                 found = r
         if not found:
             return None
@@ -235,7 +245,8 @@ class Manager:
         last: dict[str, dict] = {}
         for r in usagelog.read(config.state_dir() / "requests.log"):
             if r.get("kind") == "attested_tee" and r.get("model"):
-                found = {k: r.get(k) for k in ("t", "model", "level", "summary", "shortfalls", "attested", "error")}
+                found = {k: r.get(k) for k in ("t", "model", "level", "summary", "shortfalls", "attested", "error",
+                                               "service")}
                 if not r.get("error"):
                     # and what each shortfall costs, for its tooltip (llm/tee.py SHORTFALL_COSTS: the standard every
                     # DA app keeps), read now, so an attestation logged before has its words too
@@ -379,6 +390,7 @@ class Manager:
                         "last": {"t": r.get("t", "")[:19].replace("T", " "), "model": r.get("model", ""),
                                  "asked_for": r.get("asked_for", ""), "sent": _sent(r), "status": r.get("status"),
                                  "error": str(r.get("error") or "")[:300], "provider": r.get("provider", ""),
+                                 "service": r.get("service", ""),
                                  # what the TEE model's attestation was of ("gateway": RedPill's), for the window
                                  "attested": r.get("attested", ""), **_reply_of(r, checks)} if r else None,
                         "stops": gate.Gate(info.get("profile", ""), editors, info.get("folder", "")).why()})
@@ -402,6 +414,15 @@ class Manager:
         if change.get("provider", profile.provider) != profile.provider or \
                 change.get("base_url", profile.base_url) != profile.base_url:
             change["routes"] = {}           # one provider's hosts mean nothing to another
+        new = providers.PROVIDERS.get(change.get("provider", profile.provider))
+        if new is not None and new.id != profile.provider:
+            # another provider's models: its own for this kind, unless chosen with it (a model of NanoGPT's private/
+            # isn't one of Tinfoil's, nor a TEE/ one Chutes'); NanoGPT's are the settings' own defaults
+            own = config.DEFAULTS.profiles.get(profile.kind)
+            models = new.defaults.get(profile.kind) or (
+                (own.model, own.opus_model, own.fast_model, own.vision_model) if new.id == "nanogpt" and own and profile.kind != "standard" else None)
+            for key, value in zip(("model", "opus_model", "fast_model", "vision_model"), models or ()):
+                change.setdefault(key, value)
         config.save(cfg.with_profile(replace(profile, **change)))
 
     def save_route(self, name: str, model: str, route) -> None:
@@ -454,10 +475,17 @@ class Manager:
         hit = self._models.get(cache)
         if hit and not fresh and time.monotonic() - hit[0] < MODELS_FOR:
             return hit[1]
-        if p.kind != "standard" and not offers_private_mode(cfg.base_url):
+        service = providers.service_at(url)
+        if p.kind != "standard" and not service and not offers_private_mode(cfg.base_url):
             raise UserError(f"{shown(cfg.base_url)} isn't NanoGPT, so it has no Private Mode or TEE models.")
         caps: dict | None
-        if p.kind == "private":
+        if service:
+            # Tinfoil's or Chutes' public list (no key is sent): every model at Tinfoil's address is sealed to its
+            # attested router, a -TEE one at Chutes' to an attested instance; a profile lists those of its kind
+            caps = await self._sealed_listing(service, url)
+            ids = sorted(m for m, c in caps.items() if c.get("tools")
+                         and config.RANK[providers.tier_of(p.provider, url, m)] >= config.RANK[p.kind])
+        elif p.kind == "private":
             ids = await list_private_models(cfg.base_url)
             try:
                 caps = await capabilities.fetch_nanogpt(cfg.base_url)
@@ -478,15 +506,34 @@ class Manager:
             caps, ids = None, await self._listed(url, key, p.provider)
         out = []
         for m in ids:
-            c = capabilities.lookup(caps, m) or {} if caps else {}
+            c = (caps.get(m) if service else capabilities.lookup(caps, m)) or {} if caps else {}
             price = c.get("pricing")
-            markup = capabilities.PRIVATE_MARKUP if p.kind == "private" else 1.0
+            found = providers.privacy_of(p.provider, url, m)
+            # NanoGPT's Private Mode costs its TEE twin's listed prices and 5%; Tinfoil's are its own
+            markup = capabilities.PRIVATE_MARKUP if found.service == "nanogpt-private" and not service else 1.0
             out.append({"id": m, "vision": bool(c.get("vision")) if c else None, "tools": bool(c.get("tools")) if c else None,
+                        # how private it is where its requests go (llm/privacy.py): its level, words and mark
+                        "privacy": found.to_dict(),
                         "context": c.get("context"), "included": bool(c.get("included")) and p.provider == "nanogpt",
                         "routable": routes.routable(p.provider, m),
                         "price": {k: round(price[k] * markup, 4) for k in ("input", "cache_read", "output")} if price else None})
         self._models[cache] = (time.monotonic(), out)
         return out
+
+    @staticmethod
+    async def _sealed_listing(service: str, url: str) -> dict:
+        """Tinfoil's or Chutes' public list of models, what each can do and costs (no key is sent)."""
+        try:
+            if service == "tinfoil":
+                from .llm.tinfoil_direct import Listing, listing_capabilities
+                listed = listing_capabilities(await Listing(url).fetch())
+            else:
+                from .llm.chutes_client import list_chutes_models
+                from .llm.chutes_client import listing_capabilities as chutes_capabilities
+                listed = chutes_capabilities(await list_chutes_models())
+        except Exception as e:  # noqa: BLE001 - said as it is
+            raise UserError(f"{providers.name(service)}'s list of models couldn't be read: {e}") from None
+        return capabilities.from_listing(listed)
 
     @staticmethod
     async def _listed(url: str, key: str | None, provider: str = "custom") -> list[str]:
@@ -526,10 +573,15 @@ class Manager:
         except Exception as e:  # noqa: BLE001 - said as it is
             raise UserError(f"The list of hosts for {model} couldn't be read: {e}") from None
 
-    async def check(self, model: str = "") -> dict:
-        """Attest the private enclave now (or with `model`, a TEE model's), as a session does before it
-        sends anything."""
+    async def check(self, model: str = "", service: str = "") -> dict:
+        """Attest the private enclave now (or with `model`, a TEE model's; with `service` "tinfoil", Tinfoil's router,
+        reached directly; with "chutes" and `model`, Chutes' instances of that -TEE model, as far as is shown without
+        the key), as a session does before it sends anything."""
         cfg = config.load()
+        if service == "tinfoil":
+            return await self.check_tinfoil()
+        if service == "chutes":
+            return await self.check_chutes(model)
         if model:
             return await self.check_tee(cfg, model)
         if not offers_private_mode(cfg.base_url):
@@ -543,6 +595,41 @@ class Manager:
                        digest=att.release_digest, latest=att.latest_release, latest_checked=att.latest_checked,
                        key_sha256=att.hpke_key_sha256, summary=att.summary)
         return self.last_attestation() or {}
+
+    async def check_tinfoil(self) -> dict:
+        """Tinfoil's router attested now, from Tinfoil's own bundle and Sigstore's record (no key is sent), as a
+        session on Tinfoil does before it sends anything (llm/tinfoil_direct.py)."""
+        from .llm.tinfoil_direct import TinfoilState
+        try:
+            att = (await TinfoilState(providers.TINFOIL_BASE_URL).enclave.current()).attestation
+        except Exception as e:  # noqa: BLE001 - said as it is
+            self.log.write("attested", service="tinfoil", error=str(e)[:300])
+            raise UserError(f"Tinfoil's router couldn't be verified: {e}") from None
+        self.log.write("attested", service="tinfoil", enclave=att.enclave, hardware=att.hardware,
+                       release=att.release_tag, digest=att.release_digest, latest=att.latest_release,
+                       latest_checked=att.latest_checked, key_sha256=att.hpke_key_sha256, summary=att.summary)
+        return self.last_attestation("tinfoil") or {}
+
+    async def check_chutes(self, model: str) -> dict:
+        """What can be checked of Chutes' instances of -TEE `model` without the key (llm/chutes_client.py
+        attest_public: Chutes' public evidence for a nonce of ours, Intel's and NVIDIA's checks, the published
+        images; each instance's key binding is shown only to a session, which has the key)."""
+        from .llm.chutes_client import ChutesE2EEClient
+        from .llm.privacy import CHUTES_BASE_URL, is_tee_id
+        from .proxy import ATTESTED
+        if not is_tee_id(model):
+            raise UserError(f"{model} isn't one of Chutes' end-to-end encrypted models (…-TEE).")
+        client = ChutesE2EEClient(CHUTES_BASE_URL, None)
+        try:
+            att = await in_thread(client.attest_public, model)
+        except Exception as e:  # noqa: BLE001 - said as it is
+            self.log.write("attested_tee", model=model, service="chutes", error=str(e)[:300])
+            raise UserError(f"Chutes' instances of {model} couldn't be checked: {e}") from None
+        finally:
+            client.close()
+        found = att.to_dict()
+        self.log.write("attested_tee", model=model, service="chutes", **{k: found.get(k) for k in ATTESTED})
+        return next(a for a in self.tee_attestations() if a["model"] == model)
 
     async def check_tee(self, cfg, model: str) -> dict:
         """A TEE model's enclave, attested now (llm/tee.py): NanoGPT asks for the key to answer."""

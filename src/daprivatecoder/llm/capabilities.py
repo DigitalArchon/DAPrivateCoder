@@ -159,3 +159,19 @@ def cost(caps: dict | None, usage: dict, private: bool) -> float | None:
         return None
     total = sum(usage.get(k, 0) * price[k] for k in ("input", "cache_read", "output")) / 1_000_000
     return total * (PRIVATE_MARKUP if private else 1.0)
+
+
+def from_listing(listed: dict[str, dict]) -> dict[str, dict]:
+    """Tinfoil's or Chutes' listing as the shared clients give it (tinfoil_direct.listing_capabilities,
+    chutes_client.listing_capabilities: capabilities.parse's shape, prices per million tokens as the listing
+    names them) in this module's own: prices as input, cache_read and output; efforts None when none are
+    listed; whether Chutes lists it as confidential compute kept."""
+    out = {}
+    for model_id, c in listed.items():
+        p = c.get("pricing") if isinstance(c.get("pricing"), dict) else None
+        inp, outp = (p or {}).get("prompt"), (p or {}).get("completion")
+        priced = isinstance(inp, (int, float)) and isinstance(outp, (int, float))
+        out[model_id] = {**c, "included": False, "efforts": list(c.get("efforts") or []) or None,
+                         "pricing": {"input": float(inp), "output": float(outp),
+                                     "cache_read": float(p.get("input_cache_read", inp))} if priced else None}
+    return out

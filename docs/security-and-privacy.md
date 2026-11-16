@@ -13,8 +13,11 @@ part; this says what each part does, and what it doesn't. To report a vulnerabil
 - [The network rules](#the-network-rules)
 - [Keys and passwords](#keys-and-passwords)
 - [How a session runs: the proxy](#how-a-session-runs-the-proxy)
+- [Three levels of privacy, and the move rule](#three-levels-of-privacy-and-the-move-rule)
 - [Private sessions](#private-sessions)
+  - [On Tinfoil, directly (preliminary)](#on-tinfoil-directly-preliminary)
 - [TEE sessions](#tee-sessions)
+  - [On Chutes (preliminary)](#on-chutes-preliminary)
   - [What is attested](#what-is-attested)
   - [Each reply's check, and its mark](#each-replys-check-and-its-mark)
   - [Naming the provider behind a reply](#naming-the-provider-behind-a-reply)
@@ -31,10 +34,12 @@ part; this says what each part does, and what it doesn't. To report a vulnerabil
 **What leaves your computer:**
 
 - **What Claude Code sends its model**: your prompts, the files and command output it reads, and
-  images. In a **private** session it is sealed on this computer for an attested enclave, and
-  NanoGPT relays what it can't read. In a **TEE** session it goes to NanoGPT in the clear, and on to
-  an attested enclave. In a **standard** session it goes in the clear to your provider and the
-  company that runs the model.
+  images. In a **private** session it is sealed on this computer for an attested enclave: NanoGPT
+  relays what it can't read, or, on Tinfoil, it goes straight to Tinfoil. In a **TEE** session on
+  NanoGPT it goes to NanoGPT in the clear, and on to an attested enclave; on Chutes it is sealed on
+  this computer to an attested Chutes instance (partial privacy). In a **standard** session it goes
+  in the clear to your provider and the company that runs the model (on Chutes, a `-TEE` model's
+  is sealed all the same).
 - **Web searches**, through NanoGPT to a search provider, in the clear, whatever the session.
 - **The app's checks of an enclave**, before anything is sent to it: to NanoGPT, Intel, NVIDIA,
   Tinfoil and Sigstore, and to RedPill only if you turn that on.
@@ -102,6 +107,39 @@ in `x-api-key`. One that speaks OpenAI's gets Claude Code's requests translated,
 OpenRouter do. Either way its key is its server's, by host and port: the same key whichever API
 you choose for that server, and no other server's.
 
+### Tinfoil (inference.tinfoil.sh), directly: private sessions on Tinfoil (preliminary)
+
+Only for a private profile set to Tinfoil, or a provider of your own whose address is Tinfoil's
+(the app recognises Tinfoil's host however its address was entered, and treats it as Tinfoil's,
+whatever the provider is called). Every request is sealed on this computer to Tinfoil's attested
+router and sent to `https://inference.tinfoil.sh/v1/chat/completions` with your Tinfoil key, over a
+connection pinned to the TLS key the attestation proved ([below](#on-tinfoil-directly-preliminary)).
+Without a key: its list of models (`/v1/models`: prices, context windows, reasoning efforts), and
+the router's attestation, from Tinfoil's own attestation service (`https://atc.tinfoil.sh`), checked
+against Sigstore's record as for NanoGPT's private models
+([Tinfoil, Sigstore and GitHub](#tinfoil-sigstore-and-github-private-models)). Tinfoil sees your
+account, the model, when, how much and what it costs, never what was said.
+
+### Chutes (llm.chutes.ai, api.chutes.ai, claude.chutes.ai): sessions on Chutes (preliminary)
+
+Only for a TEE or standard profile set to Chutes, or a provider of your own whose address is one of
+Chutes' (recognised by its host, as Tinfoil's is). Without a key: its list of models
+(`https://llm.chutes.ai/v1/models`: which run in a TEE, their prices), the VM images it publishes
+as measured (`api.chutes.ai/servers/tdx/measurements`), and a model's evidence for the whole chute,
+for a number of ours (`api.chutes.ai/chutes/…/evidence`). With your Chutes key:
+
+- for a **`-TEE` model**, always sealed whatever the session: the list of its instances and their
+  keys and one-time numbers (`api.chutes.ai/e2e/instances/…`), an instance's own evidence when it is
+  new since the chute's, and the sealed request itself (`api.chutes.ai/e2e/invoke`)
+  ([On Chutes](#on-chutes-preliminary));
+- for **any other model**, in a standard session only: the request in the clear, translated, to
+  `https://llm.chutes.ai/v1`, or as Claude Code wrote it to Chutes' proxy of Anthropic's API
+  (`https://claude.chutes.ai`, a provider of your own with that address), where the key goes as a
+  bearer token, the one way it takes it.
+
+Chutes reads what is sent to its other models; of a `-TEE` model's it sees your account, the model,
+when, how much and what it costs, and the instance's operator only ciphertext.
+
 ### The companies that run the models
 
 Each provider passes a request on to whoever runs the model: one of many hosts for an open model
@@ -121,7 +159,7 @@ its record through Tinfoil's proxy of GitHub (github-proxy.tinfoil.sh), and for 
 processor's certificate through Tinfoil's proxy (kds-proxy.tinfoil.sh) or, for Intel, Intel's
 records ([below](#intel-tee-models)). These are public records: nothing of yours goes, and no key.
 
-### Intel (TEE models)
+### Intel (TEE models, and Chutes' instances)
 
 When a TEE model is attested: Intel's public certificates, revocation lists and its ratings of the
 platform's firmware (api.trustedservices.intel.com, certificates.trustedservices.intel.com), to
@@ -129,7 +167,7 @@ check the enclave's quote up to Intel's root. The request names the platform fam
 from; nothing of yours goes, and no key. What comes back is kept for an hour once it has been read
 and its signatures checked (an answer that isn't Intel's is asked for again the next time).
 
-### NVIDIA (TEE models)
+### NVIDIA (TEE models, and Chutes' instances)
 
 When a TEE model is attested: the GPU evidence in its attestation, made for the app's fresh random
 number, goes to NVIDIA's attestation service (nras.attestation.nvidia.com), and its signed verdict
@@ -208,7 +246,8 @@ as usual (plain `claude`, or a folder not chosen for DA Private Coder) is Anthro
 
 ## Keys and passwords
 
-- **Your API keys** (NanoGPT's, OpenRouter's, Anthropic's, a provider of your own's, each server its own) are
+- **Your API keys** (NanoGPT's, Chutes', Tinfoil's, OpenRouter's, Anthropic's, a provider of your own's, each
+  server its own) are
   kept in your system's keyring (GNOME Keyring or KWallet), never in a file. Without a secure
   keyring the app keeps no key at all, rather than one in a plain file, and says what to install.
   Once read, a key is kept in memory while that part of the app runs, so that a keyring that locks
@@ -218,9 +257,15 @@ as usual (plain `claude`, or a folder not chosen for DA Private Coder) is Anthro
   and an address edited since to another (NanoGPT's `base_url` changed in the settings file, a
   provider of your own's moved from `https://` to `http://`) gets no key; the window, the commands
   and Claude Code are told why, and to store the key again for the new address if that is where it
-  should go. A key stored before this rule takes the address it is first used with. OpenRouter's
-  and Anthropic's keys go to their own address alone (`https://openrouter.ai`,
-  `https://api.anthropic.com`), whatever is stored beside them. No key is deleted for it. It isn't in any log,
+  should go. A key stored before this rule takes the address it is first used with. OpenRouter's,
+  Anthropic's and Tinfoil's keys go to their own address alone (`https://openrouter.ai`,
+  `https://api.anthropic.com`, `https://inference.tinfoil.sh`), whatever is stored beside them. A
+  Chutes key goes to Chutes' three hosts alone (`llm.chutes.ai`, `api.chutes.ai`, `claude.chutes.ai`),
+  over https: the one exception to a key going only to the address it was stored for, since
+  Chutes' end-to-end encryption is api.chutes.ai's. A Chutes key stored for a provider of your own
+  goes there only if it was stored for one of those three. The checks of an attestation (Tinfoil's
+  bundle, Sigstore, Intel, NVIDIA, Chutes' chute-wide evidence) carry no key. No key is deleted for
+  it. It isn't in any log,
   message or error. A key with a space, a line break or a character no key has in it is refused
   when it is stored and whenever it is read, without being repeated back.
 - **A password written into an address** (`https://user:password@host/v1`, for a provider of your
@@ -271,6 +316,33 @@ starts with it on 127.0.0.1 and which ends with it:
   status, tokens, cost and timing, and for a TEE model what its reply's check found; never its
   content.
 
+## Three levels of privacy, and the move rule
+
+How private a model is follows from the address its requests go to, never from what its provider
+is called: whichever way Tinfoil's or Chutes' address got into the settings (chosen, typed as a
+provider of your own's, or in an old settings file), the same sealing, keys and marks follow. When
+in doubt, sealed: every model at Tinfoil's address is Tinfoil's, a model whose name ends `-TEE` (in
+any case, before a `:variant`) at Chutes' is sealed, and a `private/` model goes through NanoGPT's
+Private Mode on any provider. A `TEE/` model is attested only on NanoGPT, whose enclaves the app
+checks; elsewhere a model so named is sent like any other.
+
+- **Highest privacy**: end-to-end encrypted to an attested enclave whose software is measured.
+  NanoGPT's `private/` models, and every model on Tinfoil. A private session's.
+- **Partial privacy**: attested, with a gap in what is proved. NanoGPT's `TEE/` models (the text
+  passes NanoGPT's gateway in the clear), and Chutes' `-TEE` models (encrypted all the way, to a
+  key that rests on software Chutes signs: [below](#on-chutes-preliminary)). A TEE session's.
+- **Not private**: every other model, Chutes' others included. A standard session's.
+
+A session moves only to a model at its own level or higher, whatever asks for it: the profile's
+models, one you pick with `/model`, and the models Claude Code asks for of its own accord (its quick
+work under a Haiku name goes to the profile's quick model, of the profile's level; any other name
+of Claude's is refused). Every request carries what was said so far, so once a session has used a
+model with the highest privacy, a request for one with less (Chutes' `-TEE` models included) is
+refused, saying why, and nothing is sent; once it has used one with partial privacy, nothing more
+goes in the clear. A private session never sends anything below the highest privacy, nor a TEE
+session below partial: what a profile names is checked when the settings are read. The window marks
+each model and request with what it is.
+
 ## Private sessions
 
 NanoGPT's `private/` models (Private GLM-5.3, Kimi K3.1 Pro, DeepSeek V4.1 Flash) run in Tinfoil's
@@ -293,6 +365,27 @@ enclaves, and are end-to-end encrypted:
   tasks, and the images it reads, which a private model describes for one that can't see them.
 - **The prompt cache** is the session's own: its key is made on this computer, sealed with each
   request, and kept in memory only, so nobody else, NanoGPT included, can probe it.
+
+### On Tinfoil, directly (preliminary)
+
+A private profile can be set to **Tinfoil** instead: the same router NanoGPT's `private/` models
+go through, reached directly, with your Tinfoil key. Built after SealedLore's, and preliminary.
+
+- **Attested before anything is sent**, from Tinfoil's own attestation service, asked for this
+  host's own bundle, which must name it; checked against Sigstore's record of the router's release
+  as for NanoGPT's private models, and made again when it is old. Nothing of the SDK's own router
+  lookup is used.
+- **The connection is pinned** to the TLS key the attestation binds: as the handshake completes,
+  before a byte of the request leaves, the certificate's key must be the attested one, behind a
+  proxy too, or nothing is sent and the router is attested again.
+- **Sealed on this computer** (EHBP, as for NanoGPT's private models); a reply counts only sealed
+  and complete. The listing is the one request to Tinfoil's host that isn't sealed, and it goes
+  without the key. A reasoning effort is sent only as one the model lists.
+- **The prompt cache's secret** is the session's own, kept in memory only.
+
+What isn't proved here: that the router hands a request only to attested model enclaves (that is
+its published code, whose build the attestation checks). **Enclave checks** in the window can
+check Tinfoil's router now, without a key, as can `daprivatecoder check` for such a profile.
 
 ## TEE sessions
 
@@ -406,10 +499,43 @@ asked of RedPill. What the record says is RedPill's word: the app doesn't check 
 names. A record that can't be fetched or believed names nobody, and the mark's tooltip says why;
 the reply's mark never changes.
 
+### On Chutes (preliminary)
+
+A TEE profile can be set to **Chutes** instead, for its `-TEE` models, which are end-to-end
+encrypted, with **partial privacy**. Built after SealedLore's, with a client of the app's own
+(Chutes' own `chutes-e2ee` package checks nothing), and preliminary.
+
+- **Each instance attested before anything is sealed to it**: its Intel TDX quote, for a number of
+  ours, checked as a TEE model's is (Intel's certificate chain, no debug TD, NVIDIA's verdict on its
+  GPUs for that number); the quote's report data must begin with sha256(our number + the instance's
+  key), so the hardware vouches for the very key a request is sealed to; and its measurements must
+  be a set Chutes publishes. An instance whose GPUs NVIDIA didn't vouch for, or that fails any of
+  this, is left out, said, and never sealed to; with none left, nothing is sent. Each is attested
+  again after 15 minutes, or when a reply's seal doesn't hold.
+- **Sealed on this computer** with ML-KEM-768 and ChaCha20-Poly1305, from the cryptography library the app
+  already uses; where that library has no ML-KEM-768, nothing is sent, in words. Each one-time
+  number is used once.
+- **Every request streams, each piece held to its number**: a piece that is out of order, missing
+  or repeated, or a stream that ends before its sealed end, is refused in words, and nothing of the
+  refused piece is shown.
+- **Why partial**: that only the model can read your text rests on software Chutes signs. The
+  program that makes and holds the key (Chutes' `chutes-aegis.so`, a closed binary) is admitted by
+  Chutes' signature, not measured, and the list of measured images is Chutes' own. Beside NanoGPT's
+  `TEE/` models: your text is encrypted all the way here, where theirs passes NanoGPT's gateway in
+  the clear, but what they attest is the enclave as measured, where here the program holding the
+  key is outside the measurement. The order of a reply's pieces is numbered by that same closed
+  library.
+
+A Chutes `-TEE` model is never sent any other way, in a standard session on Chutes too, nor ever
+taken for one of NanoGPT's `TEE/` models (it isn't attested through NanoGPT). **Enclave checks** in
+the window, and `daprivatecoder check`, can check a Chutes model's instances without a key, from
+Chutes' public evidence; each instance's key binding is checked by a session, which has the key.
+
 ## Standard sessions
 
-A standard session runs any model of its provider (NanoGPT, OpenRouter, Anthropic, or an
-OpenAI-compatible or Anthropic-compatible provider of your own), **in the clear**: the provider and the company that runs the model read every
+A standard session runs any model of its provider (NanoGPT, Chutes, OpenRouter, Anthropic, or an
+OpenAI-compatible or Anthropic-compatible provider of your own), **in the clear**, but a Chutes
+`-TEE` model's, which is sealed as in a TEE session on Chutes: the provider and the company that runs the model read every
 prompt, file and reply, and keep them under their own policies. A provider's host you choose under
 **Runs on** is asked for by name; NanoGPT and OpenRouter may still fall back to another host if
 it's down.
@@ -524,8 +650,8 @@ place.
   were. DA Private Coder doesn't change that.
 
 Kept only in memory, and gone when the part of the app that holds them stops: your keys once read
-from the keyring, the window's token, the private sessions' cache keys, the enclaves' attestations
-themselves (the log keeps what was found), Intel's records and NVIDIA's keys the checks fetched, and
+from the keyring, the window's token, the private sessions' cache keys (Tinfoil's too), the enclaves'
+attestations themselves, Chutes' instances' and their one-time numbers (the log keeps what was found), Intel's records and NVIDIA's keys the checks fetched, and
 RedPill's session records.
 
 A crash writes none of it to disk: each of the app's own processes (the window, the commands, a
@@ -551,6 +677,9 @@ write would lose it.
 - **What isn't sealed is read.** NanoGPT reads everything sent to a TEE model, and NanoGPT or your
   other provider, and the company running the model, everything sent to a standard one. Even a
   private model's requests show NanoGPT when, how much and what they cost.
+- **Chutes' `-TEE` models rest on Chutes' word for the program that holds the key**, and Tinfoil's
+  router on its published code for where it hands a request; both are preliminary here
+  ([Private sessions](#on-tinfoil-directly-preliminary), [TEE sessions](#on-chutes-preliminary)).
 - **A TEE attestation shows hardware, not software.** It shows genuine, current hardware holding a
   live key, bound to the app's fresh number; not which software that machine runs, and for a model
   RedPill serves, the machine that runs the model is RedPill's word. (A private model's attestation

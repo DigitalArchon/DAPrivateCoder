@@ -141,6 +141,8 @@ const KINDS = {
 // what its models cost, and for a provider of your own (own), what its address is
 const PROVIDERS = {
   nanogpt: { label: "NanoGPT", name: "NanoGPT", kinds: ["private", "tee", "standard"], prices: true },
+  chutes: { label: "Chutes", name: "Chutes", kinds: ["tee", "standard"], prices: true },
+  tinfoil: { label: "Tinfoil", name: "Tinfoil", kinds: ["private"], prices: true },
   openrouter: { label: "OpenRouter", name: "OpenRouter", kinds: ["standard"], prices: true },
   anthropic: { label: "Anthropic", name: "Anthropic", kinds: ["standard"] },
   custom: { label: "Another provider (OpenAI-compatible)", name: "your provider", kinds: ["standard"], own: true,
@@ -155,7 +157,19 @@ const providerSaid = (id) => (PROVIDERS[id] ? PROVIDERS[id].name : id || "NanoGP
 // whose key a key field asks for, after "Paste your" ("Paste your provider's API key" for one of your own)
 const keyName = (id) => (PROVIDERS[id] && PROVIDERS[id].own ? "provider's" : providerSaid(id));
 
-const chipOf = (kind) => h("span", { class: `chip ${KINDS[kind].chip[0]}` }, KINDS[kind].chip[1]);
+// the service a session of `kind` is sealed or attested by, by its address (manager.py's services: "tinfoil",
+// "chutes", or "" for NanoGPT's own), whichever provider names it
+const serviceOf = (st, kind) => ((st && st.services) || {})[kind] || "";
+// what a kind of session is, on the service its address is: Tinfoil's private sessions are end-to-end encrypted
+// straight to Tinfoil; Chutes' TEE sessions end-to-end encrypted to a Chutes instance, with partial privacy
+const SEALED_KINDS = {
+  "private:tinfoil": { chip: ["private", "end-to-end encrypted (Tinfoil)"], models: "Tinfoil's models (end-to-end encrypted)" },
+  "tee:chutes": { chip: ["tee", "end-to-end encrypted (Chutes, partial)"],
+    models: "Chutes' -TEE models (end-to-end encrypted, partial privacy)" },
+};
+const kindOn = (st, kind) => ({ ...KINDS[kind], ...(SEALED_KINDS[`${kind}:${serviceOf(st, kind)}`] || {}) });
+const kindModels = (kind) => kindOn(S.state, kind).models;
+const chipOf = (kind) => { const k = kindOn(S.state, kind); return h("span", { class: `chip ${k.chip[0]}` }, k.chip[1]); };
 
 // a provider of your own by its address, without the user name and password one may have in it
 function providerName(st, profile) {
@@ -167,6 +181,13 @@ function providerName(st, profile) {
 
 // what a session of `kind` is, in a sentence; and for one that isn't private, what it gives away
 function leadOf(st, kind) {
+  if (kind === "private" && serviceOf(st, kind) === "tinfoil") return "Requests are encrypted on this computer so that "
+    + "only Tinfoil's verified router enclave can read them, and sent straight to Tinfoil, over a connection pinned to the "
+    + "enclave's verified key (preliminary). Tinfoil sees your account, the model, timing and sizes, never the text.";
+  if (kind === "tee" && serviceOf(st, kind) === "chutes") return "Chutes' -TEE models (preliminary). Each request is "
+    + "encrypted on this computer to the key of one Chutes instance whose Intel TDX attestation, for our nonce, binds that "
+    + "key, whose GPUs NVIDIA vouches for, and whose VM image is one Chutes publishes. Replies stream, each piece held to "
+    + "its number.";
   if (kind === "private") return "Requests are encrypted on this computer so that only a verified enclave can read them. "
     + "NanoGPT passes them on but can't read them.";
   if (kind === "tee") return "NanoGPT's TEE models, which run in secure enclaves (Intel TDX with NVIDIA GPUs). "
@@ -177,6 +198,11 @@ function leadOf(st, kind) {
 }
 
 function warningOf(st, kind) {
+  if (kind === "tee" && serviceOf(st, kind) === "chutes") return h("div", { class: "warnbox" }, h("b", {}, "Partial privacy. "),
+    "That only the model can read your text rests on software Chutes signs: the program that makes and holds the key "
+    + "(Chutes' aegis library, a closed binary) is admitted by Chutes' signature, not measured, and the list of measured "
+    + "images is Chutes' own. Chutes sees your account, the model, timing and sizes. A session that began with the "
+    + "highest privacy (Private) never moves here.");
   if (kind === "tee") return h("div", { class: "warnbox" }, h("b", {}, "Not end-to-end encrypted. "),
     "NanoGPT can read every prompt, file and reply. The enclave only hides them from the company running the model. "
     + "To hide them from NanoGPT too, choose Private.");
@@ -226,10 +252,10 @@ function startSection(st) {
   const why = notReady(st, kind);
   const opening = Object.keys(S.busy).some((k) => k.startsWith("open"));
   const open = (f) => once("open", () => act("POST", "/api/open", { folder: f, profile: kind },
-    `Starting Claude Code in a terminal, on ${KINDS[kind].models}.`));
+    `Starting Claude Code in a terminal, on ${kindModels(kind)}.`));
   // the folder in the editor, its Claude Code on this kind of session; other folders stay as they are
   const openIn = (e, f) => once(`open:${e.name}`, () => act("POST", "/api/open-editor", { name: e.name, folder: f, profile: kind },
-    `Opening in ${e.name}. Claude Code in this folder now uses ${KINDS[kind].models}. `
+    `Opening in ${e.name}. Claude Code in this folder now uses ${kindModels(kind)}. `
     + "If a conversation was already open there, start a new one."));
   const editorsHere = (st.editors || []).filter((e) => e.opens && e.state !== "other");
   const folder = h("input", { type: "text", class: "mono folder", value: S.folder,
@@ -258,7 +284,7 @@ function startSection(st) {
     h("div", { class: "row" },
       h("button", { class: kind, disabled: Boolean(why) || opening, onclick: () => open(S.folder) }, "Open in a terminal"),
       ...editorsHere.map((e) => h("button", { class: kind, disabled: Boolean(why) || opening,
-        title: `Opens the folder in ${e.name}, with Claude Code there on ${KINDS[kind].models}. `
+        title: `Opens the folder in ${e.name}, with Claude Code there on ${kindModels(kind)}. `
           + `This turns DA Private Coder on in ${e.name}; other folders aren't affected.`,
         onclick: () => openIn(e, S.folder) }, `Open in ${e.name}`))),
     why ? h("div", { class: "small muted" }, why) : null,
@@ -368,7 +394,9 @@ const ROUTE_LABELS = { speed: "Fastest overall", latency: "Fastest to start answ
 function modelLabel(m, kind) {
   const p = m.price ? ` · $${price(m.price.input)} / $${price(m.price.cache_read)} / $${price(m.price.output)}` : "";
   const id = kind === "private" ? m.id.replace(/^private\//, "") : kind === "tee" ? m.id.replace(/^TEE\//i, "") : m.id;
-  return `${id}${p}${m.vision ? " · sees images" : ""}${m.tools === false ? " · no tool calls" : ""}${m.included ? " · subscription" : ""}`;
+  // a model sealed where the others of its list aren't (Chutes' -TEE ones in a standard session): marked so
+  const sealed = kind === "standard" && m.privacy && m.privacy.kind === "sealed" ? "🔐 " : "";
+  return `${sealed}${id}${p}${m.vision ? " · sees images" : ""}${m.tools === false ? " · no tool calls" : ""}${m.included ? " · subscription" : ""}`;
 }
 
 async function loadHosts(profile, model) {
@@ -544,12 +572,18 @@ function modelsSection(st) {
     return out;
   });
   const prices = "Prices per million tokens: input / cached input / output";
-  const lead = tab === "private" ? `${prices}, including NanoGPT's 5% Private Mode markup.`
+  const sealedBy = serviceOf(st, tab);
+  const lead = sealedBy === "tinfoil" ? `Tinfoil's models, every one end-to-end encrypted. ${prices}, as Tinfoil lists them.`
+    : sealedBy === "chutes" && tab === "tee" ? `Chutes' -TEE models, every one end-to-end encrypted (partial privacy). ${prices}.`
+    : sealedBy === "chutes" ? `Chutes' models that support tool calls: its -TEE ones (marked 🔐) end-to-end encrypted with `
+      + `partial privacy, the others in the clear. ${prices}.`
+    : tab === "private" ? `${prices}, including NanoGPT's 5% Private Mode markup.`
     : tab === "tee" ? `${prices}.`
       : `${providerName(st, tab)}'s models that support tool calls.${PROVIDERS[p.provider] && PROVIDERS[p.provider].prices ? ` ${prices}.` : ""}`
         + (p.provider === "nanogpt" ? " When NanoGPT chooses the host, your subscription covers the models it includes; "
           + "a host you choose is always paid per use." : "");
-  const reading = tab === "standard" ? `Loading ${providerName(st, tab)}'s models…` : `Loading NanoGPT's ${tab === "tee" ? "TEE" : "private"} models…`;
+  const reading = tab === "standard" || sealedBy ? `Loading ${providerName(st, tab)}'s models…`
+    : `Loading NanoGPT's ${tab === "tee" ? "TEE" : "private"} models…`;
   return h("div", { class: "section" }, h("h3", {}, "Models and web search", chipOf(tab)),
     h("p", { class: "lead" }, "Each kind of session has its own settings."),
     seg(tab, (pick) => { S.tab = pick; S.customUrl = ""; if (!S.models[pick]) loadModels(pick); render(); }),
@@ -606,7 +640,8 @@ function sentChip(r) {
       replyTip(r) + (r.reply_detail ? ` (${r.reply_detail})` : "") + (up && up.words ? `\n\n${up.words}` : "")];
   }
   const [chip, how] = SENT[r.sent] || SENT[""];
-  return [chip, how, r.sent === "tee" ? TEE_UNPROVEN : ""];
+  return [chip, how + (r.sent === "sealed" && r.service === "tinfoil" ? " (Tinfoil)" : ""),
+    r.sent === "tee" ? TEE_UNPROVEN : r.sent === "chutes" ? chutesTip() : ""];
 }
 
 // A TEE reply's tooltip, by whether its receipt was read under the attested keys and held (r.reply_receipt:
@@ -630,7 +665,9 @@ function replyTip(r) {
 // check shows (SealedLore's, Nov 11 2026): NanoGPT routes each request, and only a record the attested key signed
 // shows that enclave received it. For most TEE models the enclave attested is RedPill's gateway ("attested")
 function whereItWent(last) {
-  if (last.sent === "sealed") return "end-to-end encrypted, to the verified enclave";
+  if (last.sent === "sealed") return last.service === "tinfoil" ? "end-to-end encrypted, straight to Tinfoil's verified router"
+    : "end-to-end encrypted, to the verified enclave";
+  if (last.sent === "chutes") return "end-to-end encrypted, to an attested Chutes instance (partial privacy)";
   if (last.sent === "tee") {
     if (["verified", "signed"].includes(last.reply)) {
       // signed by a key of RedPill's gateway: a model it serves, or one Chutes serves (whose instances sign no
@@ -703,11 +740,11 @@ function editorSection(st) {
     h("span", { class: "path", title: x.folder }, h("bdi", { dir: "ltr" }, x.folder)),
     SESSIONS.includes(x.profile) ? chipOf(x.profile) : null,
     h("select", { class: "inline", onchange: (e) => set({ folder: x.folder, profile: e.target.value },
-      `Saved. New conversations in this folder use ${KINDS[e.target.value].models}.`) },
+      `Saved. New conversations in this folder use ${kindModels(e.target.value)}.`) },
       SESSIONS.map((k) => h("option", { value: k, selected: k === x.profile }, KINDS[k].label))),
     h("button", { class: "small ghost", title: `Remove from the list. This folder then uses ${f.other ? KINDS[f.other].label : "normal Claude Code"}, like all other folders.`,
       onclick: () => set({ folder: x.folder, profile: "" },
-        `Removed. New conversations there use ${f.other ? KINDS[f.other].models : "normal Claude Code"}, like all other folders.`) }, "×")));
+        `Removed. New conversations there use ${f.other ? kindModels(f.other) : "normal Claude Code"}, like all other folders.`) }, "×")));
 
   // a folder typed or chosen here goes on the list as Private: the safe choice, changed in its row
   const add = () => set({ folder: S.drafts.editorFolder || "", profile: "private" },
@@ -725,7 +762,7 @@ function editorSection(st) {
 
   const other = h("div", { class: "model-row" }, h("label", {}, "All other folders"),
     h("select", { onchange: (e) => set({ other: e.target.value },
-      `Saved. New conversations in all other folders use ${e.target.value ? KINDS[e.target.value].models : "normal Claude Code"}.`) },
+      `Saved. New conversations in all other folders use ${e.target.value ? kindModels(e.target.value) : "normal Claude Code"}.`) },
       [["", NORMAL], ...SESSIONS.map((k) => [k, KINDS[k].label])].map(([v, l]) => h("option", { value: v, selected: v === f.other }, l))));
 
   const on = st.editors.some((e) => e.state === "on" && e.mode === PER_FOLDER);
@@ -779,15 +816,30 @@ function attestedAs(t) {
 function verifySection(st) {
   const a = st.attestation;
   const tee = st.config && st.config.profiles.tee;
-  const run = (model) => guarded(async () => {
-    S.checking = model || "private"; render();
+  // `service`: "tinfoil" (Tinfoil's router, reached directly) or "chutes" (with `model`, its instances, without the key)
+  const run = (model, service = "") => guarded(async () => {
+    S.checking = model || service || "private"; render();
     try {
-      const { attestation } = await api("POST", "/api/check", model ? { model } : {});
+      const { attestation } = await api("POST", "/api/check", { ...(model ? { model } : {}), ...(service ? { service } : {}) });
       const n = ++S.asked;
       take(n, await api("GET", "/api/state"));
-      toast(model ? `${model}: ${attestedAs(attestation)}.` : "The enclave is verified.", "ok", 4000);
+      toast(model ? `${model}: ${attestedAs(attestation)}.` : service === "tinfoil" ? "Tinfoil's router is verified."
+        : "The enclave is verified.", "ok", 4000);
     } finally { S.checking = ""; render(); }
   });
+  const ta = st.tinfoil_attestation;
+  const tinfoil = serviceOf(st, "private") === "tinfoil" || ta ? [h("div", { class: "small muted spaced" }, "Tinfoil (preliminary)"),
+    ta ? h("div", { class: "attest" }, h("div", {}, h("span", { class: "chip ok" }, "verified"), " ", ta.summary),
+      h("div", { class: "small muted" }, `Last checked ${ta.t ? ta.t.slice(0, 16).replace("T", " ") : ""}. A session on Tinfoil `
+        + "checks it before sending anything, from Tinfoil's own bundle, and pins the connection to its attested key."),
+      ta.key_sha256 ? h("div", { class: "fingerprint" }, `Router key fingerprint (SHA-256): ${ta.key_sha256}`) : null)
+      : h("p", { class: "lead" }, "Not checked yet. A session on Tinfoil checks it before sending anything. You can also check it now (free, no key)."),
+    h("div", { class: "row" }, h("button", { disabled: Boolean(S.checking), onclick: () => run("", "tinfoil") },
+      S.checking === "tinfoil" ? "Checking…" : "Check Tinfoil now"), S.checking === "tinfoil" ? h("span", { class: "spinner" }) : null)] : [];
+  // a TEE profile on Chutes: what its model's instances show without the key (a session checks each one's key too)
+  const chutes = serviceOf(st, "tee") === "chutes" && tee ? h("div", { class: "row" }, h("button", { disabled: Boolean(S.checking),
+    onclick: () => run(tee.model, "chutes"), title: "Chutes' public evidence for a nonce of ours, checked here: no key is sent" },
+    S.checking === tee.model ? "Checking…" : `Check ${tee.model}`), S.checking === tee.model ? h("span", { class: "spinner" }) : null) : null;
   // each TEE model's last attestation: what was attested ("TEE gateway attested": RedPill's gateway, not the
   // machine that runs the model), then what that leaves to someone's word, then what was found
   const teeRows = (st.tee_attestations || []).slice(0, 4).map((t) => h("div", { class: "attest" },
@@ -806,11 +858,13 @@ function verifySection(st) {
       : h("p", { class: "lead" }, "Not checked yet. Every session checks it before sending anything. You can also check it now (free)."),
     h("div", { class: "row" }, h("button", { disabled: Boolean(S.checking), onclick: () => run("") },
       S.checking === "private" ? "Checking…" : "Check now"), S.checking === "private" ? h("span", { class: "spinner" }) : null),
+    ...tinfoil,
     h("div", { class: "small muted spaced" }, "TEE models"),
     teeRows.length ? teeRows : h("p", { class: "lead" }, "None checked yet. A TEE session checks each model's enclave before sending it anything, and every 15 minutes after that. You can also check one now (this needs your NanoGPT key)."),
     tee && /^tee\//i.test(tee.model) ? h("div", { class: "row" }, h("button", { disabled: Boolean(S.checking) || !st.key.stored, onclick: () => run(tee.model),
       title: st.key.stored ? "" : "NanoGPT only shows a TEE model's attestation to someone with an API key" },
       S.checking === tee.model ? "Checking…" : `Check ${tee.model}`), S.checking === tee.model ? h("span", { class: "spinner" }) : null) : null,
+    chutes,
     // Name the provider behind each TEE reply (config.py tee_name_upstreams): off by default, and what it does said
     // beside it (SealedLore's, the author's, Nov 11 2026): the one request that goes to RedPill directly, not through
     // NanoGPT. Running sessions follow it from their next reply
@@ -826,7 +880,16 @@ function verifySection(st) {
 // through NanoGPT, in the clear (a search, a standard session's models), or not at all (refused here first).
 // A TEE request shows its reply's check (REPLY); one with no reply to check isn't shown to have reached the
 // attested enclave, and says so rather than "TEE" (SealedLore's, Nov 11 2026)
-const SENT = { sealed: ["private", "sealed"], tee: ["warn", "TEE ⚠ not shown to reach the enclave"], clear: ["warn", "clear"], "": ["", "not sent"] };
+const SENT = {
+  sealed: ["private", "sealed"], chutes: ["tee", "sealed (Chutes, partial)"],
+  tee: ["warn", "TEE ⚠ not shown to reach the enclave"], clear: ["warn", "clear"], "": ["", "not sent"],
+};
+// what a request sealed to a Chutes instance was (llm/privacy.py CHUTES_NOTE, in short)
+function chutesTip() {
+  return "End-to-end encrypted to one Chutes instance (preliminary), whose Intel TDX attestation, for our nonce, binds the "
+    + "key it was sealed to. Partial privacy: that only the model can read it rests on software Chutes signs (its closed "
+    + "aegis library, admitted by Chutes' signature, not measured). Its reply streamed, each piece held to its number.";
+}
 
 function usageSection(st) {
   const u = st.usage;

@@ -219,7 +219,7 @@ def _editor(args) -> int:
 # ---------------------------------------------------------------------- looking
 
 def _status(args) -> int:
-    from . import creds, editor, launcher
+    from . import creds, editor, launcher, providers
     cfg = config.load()
     print(f"DA Private Coder {__version__}\nSettings: {cfg.path}\nNanoGPT: {shown(cfg.base_url)}")
     searches = {"zero-retention": "Linkup (keeps nothing)", "best": "Perplexity and Kagi (not zero retention)",
@@ -227,6 +227,12 @@ def _status(args) -> int:
     for p in cfg.profiles.values():
         kind = {"private": "private", "tee": "TEE, not end-to-end encrypted"}.get(
             p.kind, f"standard, not private, on {config.PROVIDERS[p.provider]}")
+        service = providers.service_at(cfg.provider_url(p))
+        if service == "tinfoil":
+            kind = "private, end-to-end encrypted straight to Tinfoil (preliminary)"
+        elif service == "chutes":
+            kind = ("TEE, end-to-end encrypted to attested Chutes instances, partial privacy (preliminary)"
+                    if p.kind == "tee" else "standard on Chutes: its -TEE models end-to-end encrypted, the others not private")
         print(f"  [{p.name}] {kind}: {p.model} (opus {p.opus_model}, quick {p.fast_model}); "
               f"vision {p.vision_model or 'none'}; reasoning {p.reasoning}; web search {searches[p.web_search]}")
     try:
@@ -251,9 +257,11 @@ def _check(args) -> int:
     from .llm import capabilities
     from .llm.client import is_tee
     from .llm.private_mode import Enclave, list_private_models, offered, offers_private_mode, relay_url
+    from . import providers
     cfg = config.load()
     profile = cfg.profile(args.profile)
-    if profile.kind != "standard" and not offers_private_mode(cfg.base_url):
+    service = providers.service_at(cfg.provider_url(profile))
+    if profile.kind != "standard" and not service and not offers_private_mode(cfg.base_url):
         raise CliError(f"{shown(cfg.base_url)} isn't NanoGPT, so it has no Private Mode or TEE models.")
 
     def line(m: str, c: dict, markup: float = 1.0) -> str:
@@ -317,7 +325,52 @@ def _check(args) -> int:
         for m in dict.fromkeys(x for x in (*profile.models, profile.vision_model) if x):
             print(line(m, capabilities.lookup(caps, m) or {}) + ("  (not offered now)" if m in missing else ""))
         return 1 if missing else 0
-    return asyncio.run({"private": private, "tee": tee}.get(profile.kind, standard)())
+    async def tinfoil() -> int:
+        # Tinfoil direct (preliminary): its keyless list, then its router attested from Tinfoil's own bundle
+        from .llm.tinfoil_direct import TinfoilState, listing_capabilities
+        state = TinfoilState(cfg.provider_url(profile))
+        caps = capabilities.from_listing(listing_capabilities(await state.listing.fetch()))
+        print("Tinfoil's models now, every one end-to-end encrypted (preliminary; prices per million tokens, input / "
+              "cached input / output):")
+        for m in sorted(caps):
+            print(line(m, caps[m]))
+        missing = [m for m in (*profile.models, profile.vision_model) if m and m not in caps]
+        for m in dict.fromkeys(missing):
+            print(f"Profile [{profile.name}] uses {m}, which Tinfoil doesn't list now: change it in {cfg.path}")
+        print("Attesting Tinfoil's router...")
+        att = (await state.enclave.current()).attestation
+        print(f"Verified: {att.summary}\n  key fingerprint (sha256) {att.hpke_key_sha256}")
+        return 1 if missing else 0
+
+    async def chutes() -> int:
+        # Chutes (preliminary): its keyless list, then what its -TEE models' instances show without the key
+        from .llm.chutes_client import ChutesE2EEClient, list_chutes_models
+        from .llm.chutes_client import listing_capabilities as chutes_capabilities
+        from .llm.privacy import CHUTES_BASE_URL, chutes_tee
+        from .proxy import attested_as, what_attested
+        caps = capabilities.from_listing(chutes_capabilities(await list_chutes_models()))
+        print("Chutes' models now (prices per million tokens, input / cached input / output). Its -TEE models are end-"
+              "to-end encrypted to an attested instance (partial privacy); the others go in the clear.")
+        for m in sorted(caps):
+            print(line(m, caps[m]) + ("  (end-to-end encrypted)" if chutes_tee(m, CHUTES_BASE_URL) else ""))
+        failed = 0
+        client = ChutesE2EEClient(CHUTES_BASE_URL, None)
+        try:
+            for m in dict.fromkeys(x for x in (*profile.models, profile.vision_model) if x and chutes_tee(x, CHUTES_BASE_URL)):
+                print(f"Checking {m}'s instances (Chutes' public evidence, no key)...")
+                try:
+                    att = (await asyncio.to_thread(client.attest_public, m)).to_dict()
+                except Exception as e:  # noqa: BLE001 - said as it is
+                    print(f"  NOT verified: {e}")
+                    failed += 1
+                    continue
+                att["service"] = "chutes"
+                print(f"  {attested_as(att)}. {what_attested(att)}".rstrip() + f"\n  {att.get('summary')}")
+        finally:
+            client.close()
+        return 1 if failed else 0
+    run = {"tinfoil": tinfoil, "chutes": chutes}.get(service) or {"private": private, "tee": tee}.get(profile.kind, standard)
+    return asyncio.run(run())
 
 
 def _log(args) -> int:

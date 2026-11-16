@@ -43,11 +43,17 @@ def test_the_window_offers_the_tables_providers_in_its_order_for_the_kinds_they_
 
 
 def test_a_profile_takes_only_a_provider_that_serves_its_kind():
-    for kind in ("private", "tee"):
-        assert providers.for_kind(kind) == ["nanogpt"]
-        with pytest.raises(ConfigError, match=f"a {kind} profile's models are NanoGPT's, so its provider is nanogpt"):
-            parse(f'[profiles.{kind}]\nkind = "{kind}"\nprovider = "openrouter"\nmodel = "{kind}/x"\n')
-    assert set(providers.for_kind("standard")) == set(providers.PROVIDERS)
+    """A private profile is NanoGPT's private/ models or Tinfoil's, a TEE one NanoGPT's TEE/ ones or Chutes' -TEE
+    ones (the highest privacy, and partial)."""
+    assert providers.for_kind("private") == ["nanogpt", "tinfoil"]
+    assert providers.for_kind("tee") == ["nanogpt", "chutes"]
+    with pytest.raises(ConfigError, match="a private profile's models are NanoGPT's or Tinfoil's, so its provider is "
+                                          "nanogpt or tinfoil"):
+        parse('[profiles.private]\nkind = "private"\nprovider = "openrouter"\nmodel = "private/x"\n')
+    with pytest.raises(ConfigError, match="a tee profile's models are NanoGPT's or Chutes', so its provider is "
+                                          "nanogpt or chutes"):
+        parse('[profiles.tee]\nkind = "tee"\nprovider = "tinfoil"\nmodel = "TEE/x"\n')
+    assert set(providers.for_kind("standard")) == set(providers.PROVIDERS) - {"tinfoil"}
 
 
 def test_a_key_for_a_provider_whose_address_is_fixed_goes_there_alone_whatever_is_stored_beside_it(ring):

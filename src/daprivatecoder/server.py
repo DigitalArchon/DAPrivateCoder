@@ -201,7 +201,7 @@ def create_app(token: str, manager: Manager, desktop=None, on_quit: Callable[[],
         return await in_thread(manager.state)
 
     async def check(request, body):
-        return {"attestation": await manager.check(str(body.get("model") or ""))}
+        return {"attestation": await manager.check(str(body.get("model") or ""), str(body.get("service") or ""))}
 
     async def open_folder(request, body):
         await in_thread(manager.open, str(body.get("folder") or ""), str(body.get("profile") or "private"))

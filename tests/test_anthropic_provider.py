@@ -62,7 +62,7 @@ async def test_a_private_model_picked_on_anthropic_is_still_sealed_and_nothing_a
     r = await call(p, "POST", "/v1/messages", message("private/glm-5-3"))
     assert r.status_code == 200 and fake.calls[-1][0] == "private/glm-5-3" and not seen
     r = await call(p, "POST", "/v1/messages", message("claude-sonnet-5"))
-    assert r.status_code == 403 and "has used a private model" in r.text and not seen
+    assert r.status_code == 403 and "this session is kept to the highest privacy" in r.text and not seen
 
 
 async def test_the_anthropic_key_is_read_from_the_keyring_for_anthropics_address_alone(ring):
@@ -88,7 +88,7 @@ def test_an_anthropic_profile_is_standard_and_its_address_is_anthropics_whatever
     assert "\nbase_url = " not in config.render(cfg).split("[profiles.s]")[1]
     assert '"anthropic" (Anthropic\'s own API' in config.render(cfg)
     for kind in ("private", "tee"):
-        with pytest.raises(ConfigError, match=f"a {kind} profile's models are NanoGPT's"):
+        with pytest.raises(ConfigError, match=f"a {kind} profile's models are NanoGPT's or "):
             parse(f'[profiles.{kind}]\nkind = "{kind}"\nprovider = "anthropic"\nmodel = "{kind}/x"\n')
 
 

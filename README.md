@@ -16,10 +16,17 @@ cost, never what was said. **Claude Code runs on DA Private Coder only while it 
 quit it, nothing more is sent. Closing its window keeps it open in the tray (see
 [While it's open](#while-its-open)).
 
-For convenience it also runs Claude Code on models that **aren't** end-to-end encrypted, and says so
-wherever you choose them: NanoGPT's TEE models, each enclave attested before anything is sent to it,
-and standard models of NanoGPT, OpenRouter, Anthropic or another OpenAI-compatible provider, in the
-clear (see [TEE and standard sessions](#tee-and-standard-sessions)). `claude-private` is only ever private.
+A private session can also run on **Tinfoil** directly, with your Tinfoil key: the same kind of
+attested router, every request sealed on your computer and sent straight to Tinfoil over a
+connection pinned to the enclave's attested key (preliminary; see
+[Tinfoil and Chutes](#tinfoil-and-chutes-preliminary)).
+
+For convenience it also runs Claude Code on models with less privacy, and says so wherever you
+choose them: NanoGPT's TEE models, each enclave attested before anything is sent to it; Chutes'
+`-TEE` models, end-to-end encrypted to an attested Chutes instance, with partial privacy
+(preliminary); and standard models of NanoGPT, Chutes, OpenRouter, Anthropic or another
+OpenAI-compatible provider, in the clear (see [TEE and standard sessions](#tee-and-standard-sessions)).
+`claude-private` is only ever private.
 
 ## What is private, and what isn't
 
@@ -164,10 +171,39 @@ never goes to a Claude model: Anthropic's API takes only its own thinking.
 A model that sees images (Kimi K3.1 Pro, DeepSeek V4.1 Flash) gets them as they are. Only one that
 doesn't (GLM-5.3) has them described, by the **Images** model, also a private one.
 
+## Tinfoil and Chutes (preliminary)
+
+Both are built after SealedLore's, and labelled preliminary.
+
+- **Tinfoil** (Models → Private → Provider: Tinfoil, and your Tinfoil key): every model on Tinfoil
+  is end-to-end encrypted, with the highest privacy. Its router is attested from Tinfoil's own
+  attestation service against Sigstore's record before anything is sent, the connection is pinned
+  to the TLS key it proves, and each request is sealed (EHBP) to the router's attested key. Its
+  list of models and its attestation need no key; **Enclave checks** can check it now.
+- **Chutes** (Models → TEE → Provider: Chutes, and your Chutes key): its `-TEE` models are
+  end-to-end encrypted to one Chutes instance, with **partial privacy**: each instance's Intel TDX
+  quote, for a number of ours, must bind the key the request is sealed to (ML-KEM-768), NVIDIA must
+  vouch for its GPUs, and its VM image must be one Chutes publishes; the reply streams, each piece
+  held to its number. Why partial: the program that makes and holds the key (Chutes'
+  `chutes-aegis.so`, a closed binary) is admitted by Chutes' signature, not measured. In a standard
+  session on Chutes, its other models go in the clear, and its `-TEE` ones are still sealed.
+- **Recognised by the address**: a provider of your own typed with Tinfoil's or Chutes' address is
+  treated as Tinfoil or Chutes, with the same sealing and the same key rules.
+- **Three levels**: highest (NanoGPT's `private/` models, Tinfoil's), partial (NanoGPT's `TEE/`
+  models, Chutes' `-TEE` ones), none (every other). A session moves only to a model at its own level
+  or higher, whatever asks for it (Claude Code's own background models included): once it has used
+  a `private/` model, a Chutes model is refused, in words.
+- **Keys**: Tinfoil's key goes to `inference.tinfoil.sh` alone; a Chutes key to Chutes' three hosts
+  alone (`llm`, `api` and `claude.chutes.ai`), the one exception to a key going only to the address
+  it was stored for.
+
+More in [Security and privacy](docs/security-and-privacy.md#three-levels-of-privacy-and-the-move-rule).
+
 ## TEE and standard sessions
 
-Neither is end-to-end encrypted. The window warns of it where you choose one, and **Usage** marks
-each request: sealed, TEE (with its reply's check), or clear.
+Neither is end-to-end encrypted on NanoGPT (a Chutes `-TEE` model's requests are: above). The
+window warns of it where you choose one, and **Usage** marks each request: sealed, sealed (Chutes,
+partial), TEE (with its reply's check), or clear.
 
 **TEE** sessions run NanoGPT's `TEE/` models (by default GLM-5.3, Kimi K3 for `/model opus`, and
 GLM-5.3 Flash for quick tasks and images). Before anything is sent to one, its enclave is attested,
@@ -251,7 +287,8 @@ the switch from their next reply. How each check works, and what each leaves to 
 **Standard** sessions run any model of their provider, **in the clear** to it and to the host that
 runs the model:
 
-- **NanoGPT** (with your NanoGPT key), **OpenRouter** (with an OpenRouter key), **Anthropic** (with
+- **NanoGPT** (with your NanoGPT key), **Chutes** (with a Chutes key; its `-TEE` models still
+  sealed), **OpenRouter** (with an OpenRouter key), **Anthropic** (with
   an Anthropic key: every request goes to api.anthropic.com as Claude Code wrote it, never
   translated, Claude Code's own model names included), or **another provider** with an
   OpenAI-compatible API or an Anthropic-compatible one (its address: https, or http only on this
@@ -322,7 +359,7 @@ session needs DA Private Coder open.
 | `daprivatecoder claude [--profile NAME] [args]` | Claude Code on a profile: `tee` and `standard` aren't end-to-end encrypted |
 | `daprivatecoder editor on\|off\|status [vscodium\|code] [--profile NAME\|usual]` | The switch for Claude Code in the editor; with `--profile`, how any folder not chosen runs |
 | `daprivatecoder editor folder PATH private\|tee\|standard\|usual` | How Claude Code in the editor runs in a folder (and the folders in it) |
-| `daprivatecoder key set\|clear\|status [--provider openrouter\|anthropic\|custom]` | An API key, in your keyring (GNOME Keyring or KWallet): NanoGPT's unless said |
+| `daprivatecoder key set\|clear\|status [--provider chutes\|tinfoil\|openrouter\|anthropic\|custom]` | An API key, in your keyring (GNOME Keyring or KWallet): NanoGPT's unless said |
 | `daprivatecoder check [--profile NAME]` | Attest the enclaves (a TEE profile's models too); list the models, their prices, and any your profile uses that are gone |
 | `daprivatecoder log [-n N]` | The last requests and searches: model, sealed or not, tokens, cost |
 | `daprivatecoder status` | What is set up here |

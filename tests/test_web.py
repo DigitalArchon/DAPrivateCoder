@@ -52,7 +52,8 @@ def test_a_tee_attestation_is_named_by_what_was_attested():
 
 def sent_chip() -> str:
     """How a request left this computer, as Usage and Running now mark it (sentChip): [colour, words, tooltip]."""
-    return script("TEE_CLEAR", "REPLY", "TEE_UNPROVEN", "SENT", "replyTip", "sentChip") + "\nconst test = (r) => sentChip(r);"
+    return script("TEE_CLEAR", "REPLY", "TEE_UNPROVEN", "SENT", "chutesTip", "replyTip", "sentChip") + \
+        "\nconst test = (r) => sentChip(r);"
 
 
 def test_a_tee_replys_mark_says_what_is_the_gateways_word_and_that_it_passed_in_the_clear():
@@ -173,3 +174,20 @@ const S = { drafts: {}, replacing: "" };
 const test = (provider) => keyControls("x", { stored: false }, provider, keyName(provider), "").controls[0].attrs.placeholder;"""
     assert run(code, ["nanogpt", "openrouter", "custom"]) == [
         "Paste your NanoGPT API key", "Paste your OpenRouter API key", "Paste your provider's API key"]
+
+
+def test_a_private_session_offers_nanogpt_or_tinfoil_and_a_tee_one_nanogpt_or_chutes_each_marked_as_it_is():
+    """Tinfoil direct and Chutes (preliminary): the Provider list of a kind holds the providers that serve it, and a
+    session's mark says what its service makes it: end-to-end encrypted to Tinfoil, or to Chutes with partial
+    privacy, never "TEE: not end-to-end encrypted" for Chutes."""
+    code = script("PROVIDERS", "KINDS", "providersFor", "serviceOf", "SEALED_KINDS", "kindOn") + """
+const test = ([kind, service]) => [providersFor(kind), kindOn({ services: { [kind]: service } }, kind).chip[1]];"""
+    assert run(code, [["private", "tinfoil"], ["tee", "chutes"], ["tee", ""], ["standard", "chutes"]]) == [
+        [["nanogpt", "tinfoil"], "end-to-end encrypted (Tinfoil)"],
+        [["nanogpt", "chutes"], "end-to-end encrypted (Chutes, partial)"],
+        [["nanogpt", "chutes"], "TEE: not end-to-end encrypted"],
+        [["nanogpt", "chutes", "openrouter", "anthropic", "custom", "custom-anthropic"], "not private"]]
+    cases = [{"sent": "chutes"}, {"sent": "sealed", "service": "tinfoil"}]
+    chutes, tinfoil = run(sent_chip(), cases)
+    assert chutes[:2] == ["tee", "sealed (Chutes, partial)"] and "Partial privacy" in chutes[2]
+    assert "aegis" in chutes[2] and tinfoil[:2] == ["private", "sealed (Tinfoil)"]

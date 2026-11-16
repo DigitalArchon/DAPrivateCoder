@@ -231,6 +231,17 @@ def get_key(provider: str = "nanogpt", base_url: str = "", *, sending: bool = Tr
     return key
 
 
+def held_origin(provider: str, base_url: str) -> str:
+    """The origin the provider's key is held to, for `base_url` (origin's form; "" when none is kept): one of a fixed
+    address's own, else the one it was stored for. Chutes' end-to-end encryption sends the key to api.chutes.ai only
+    when it was stored for one of Chutes' own hosts (llm/chutes_client.py not_chutes)."""
+    spec = PROVIDERS.get(provider)
+    here = origin(base_url)
+    if spec is not None and spec.key_origins:
+        return here if here in spec.key_origins else ""
+    return _get(SERVICE, ORIGIN.format(account(provider, base_url))) or ""
+
+
 def has_password(url: str) -> bool:
     from urllib.parse import urlparse
     try:

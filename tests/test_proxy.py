@@ -503,11 +503,11 @@ async def test_once_a_private_model_is_used_nothing_more_goes_in_the_clear():
     assert r.status_code == 200 and fake.calls[-1][0] == "private/kimi-k3"          # sealed, in a nano session too
     for asked in ("z-ai/glm-5.3", None):
         r = await call(p, "POST", "/v1/messages", message(asked))
-        assert r.status_code == 403 and "Start a new session" in r.text and r.headers["x-should-retry"] == "false"
+        assert r.status_code == 403 and "is kept to the highest privacy" in r.text and "start a new session" in r.text and r.headers["x-should-retry"] == "false"
     p, fake = make(TEE, plain=FakePlain())                               # nor to a TEE model, read by NanoGPT
     await call(p, "POST", "/v1/messages", message("private/kimi-k3"))
     r = await call(p, "POST", "/v1/messages", message("TEE/glm-5.3"))
-    assert r.status_code == 403 and "Start a new session" in r.text
+    assert r.status_code == 403 and "is kept to the highest privacy" in r.text and "start a new session" in r.text
 
 
 async def test_the_model_list_offers_every_private_model_in_a_private_session():
@@ -692,7 +692,7 @@ async def test_a_private_model_asked_for_holds_the_session_to_it_before_anything
     p, fake = make(NANO, provider_url="https://nano-gpt.com/api/v1")
     p.choose("private/kimi-k3")
     assert p.used_private
-    with pytest.raises(proxy_mod.Refused, match="has used a private model"):
+    with pytest.raises(proxy_mod.Refused, match="this session is kept to the highest privacy"):
         p.choose("z-ai/glm-5.3")
 
 
