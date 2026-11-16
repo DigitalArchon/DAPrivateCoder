@@ -179,9 +179,16 @@ code { font-family: var(--mono); font-size: 12.5px; background: var(--code); pad
 .model-row select { width: 100%; }
 .totals { display: flex; gap: 18px; flex-wrap: wrap; margin-bottom: 6px; }
 .totals .big { font-size: 18px; font-weight: 600; }
-.usage-box { overflow-x: auto; }
+.usage-box { overflow: auto; max-height: 45vh; }
+details.fold > summary { cursor: pointer; list-style: none; }
+details.fold > summary::-webkit-details-marker { display: none; }
+details.fold > summary h3::before { content: "▸"; color: var(--muted); }
+details.fold[open] > summary h3::before { content: "▾"; }
+details.fold:not([open]) > summary h3 { margin-bottom: 0; }
+.fold-said { font-weight: 400; margin-left: auto; }
+details.fold[open] .fold-said { display: none; }
 table.usage { width: 100%; border-collapse: collapse; font-size: 12px; }
-table.usage th { text-align: left; font-weight: 600; color: var(--muted); padding: 3px 4px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+table.usage th { text-align: left; font-weight: 600; color: var(--muted); padding: 3px 4px; border-bottom: 1px solid var(--border); white-space: nowrap; position: sticky; top: 0; background: var(--panel); }
 table.usage td { padding: 3px 4px; border-bottom: 1px solid var(--border); white-space: nowrap; }
 table.usage td.num { text-align: right; font-variant-numeric: tabular-nums; }
 table.usage tr.bad td { color: var(--danger); }

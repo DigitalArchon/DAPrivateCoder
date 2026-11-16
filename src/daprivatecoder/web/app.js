@@ -42,7 +42,8 @@ const $ = (sel) => document.querySelector(sel);
 // whether its hosts below FP8 are left out), what is typed and not yet saved (drafts: a key, an address),
 // the actions under way (busy: not sent twice), what is being checked
 const S = { state: null, folder: "", tab: "", models: {}, modelsError: {}, hosts: {}, routeHost: {}, routeFp8: {},
-  customUrl: "", setupOwn: "", replacing: "", checking: "", drafts: {}, busy: {}, asked: 0, shown: 0 };
+  customUrl: "", setupOwn: "", replacing: "", checking: "", drafts: {}, busy: {}, asked: 0, shown: 0,
+  setupFirst: null, usageOpen: false };
 // what the editor's switch runs when it runs each folder as chosen (editor.PER_FOLDER)
 const PER_FOLDER = ":folders";
 
@@ -947,6 +948,12 @@ function chutesTip() {
     + "aegis library, admitted by Chutes' signature, not measured). Its reply streamed, each piece held to its number.";
 }
 
+// Usage's line while it is folded: what today and this month cost, and how many requests today
+function usageSaid(u) {
+  const n = u.requests_today;
+  return `${money(u.today) || "$0.00"} today (${n} request${n === 1 ? "" : "s"}) · ${money(u.month) || "$0.00"} this month`;
+}
+
 function usageSection(st) {
   const u = st.usage;
   const rows = u.last.flatMap((r) => {
@@ -967,7 +974,10 @@ function usageSection(st) {
     // what went wrong, under it and wrapped: a column of its own would be off the window's edge
     return r.error ? [row, h("tr", { class: "bad note" }, h("td", { colspan: "7" }, r.error))] : [row];
   });
-  return h("div", { class: "section" }, h("h3", {}, "Usage"),
+  // folded until opened (and kept open or shut as the page is drawn again every 20 s): its list of requests and
+  // their errors took up the middle of the window
+  return h("details", { class: "section fold", open: S.usageOpen, ontoggle: (e) => { S.usageOpen = e.target.open; } },
+    h("summary", {}, h("h3", {}, "Usage", h("span", { class: "small muted fold-said" }, usageSaid(u)))),
     h("div", { class: "totals" },
       h("div", {}, h("div", { class: "big" }, money(u.today) || "$0.00"), h("div", { class: "small muted" }, `today, ${u.requests_today} requests`)),
       h("div", {}, h("div", { class: "big" }, money(u.month) || "$0.00"), h("div", { class: "small muted" }, "this month"))),
@@ -1014,11 +1024,20 @@ function render() {
   applyTheme(st.theme);
   renderTop(st);
   const scroll = $("#page").scrollTop;
-  // Setup comes first while something there is still needed, and near the end once it's done
-  const first = needsSetup(st);
-  $("#page").replaceChildren(...[first && setupSection(st), startSection(st), sessionsSection(st), editorSection(st),
-    modelsSection(st), verifySection(st), usageSection(st), !first && setupSection(st), appSection(st)].flat().filter(Boolean));
+  // where Setup goes is settled once, as the window opens: choosing a provider there whose key isn't stored yet
+  // (Tinfoil, say) made it needed again and moved the whole section to the top, and back on choosing NanoGPT
+  if (S.setupFirst === null) S.setupFirst = needsSetup(st);
+  const sections = { setup: setupSection, start: startSection, sessions: sessionsSection, editor: editorSection,
+    models: modelsSection, verify: verifySection, app: appSection, usage: usageSection };
+  $("#page").replaceChildren(...pageOrder(S.setupFirst).map((name) => sections[name](st)).flat().filter(Boolean));
   $("#page").scrollTop = scroll;
+}
+
+// The window's sections, in order: Setup first if it was still needed when the window opened, else near the end;
+// Usage, whose list of requests grows long, last of all, folded until opened
+function pageOrder(setupFirst) {
+  return [setupFirst && "setup", "start", "sessions", "editor", "models", "verify", !setupFirst && "setup", "app",
+    "usage"].filter(Boolean);
 }
 
 async function refresh() {

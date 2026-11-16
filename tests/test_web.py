@@ -204,3 +204,38 @@ const test = (st) => st.what ? setupWhat(st.what) : st.search ? searchNeedsNanog
     assert "end-to-end encrypted straight to Tinfoil" in tinfoil and "partial privacy" in chutes
     assert "Standard sessions run on Anthropic, not private" in anthropic and "Only if your provider needs a key" in own
     assert "without one, sessions start with web search off" in search
+
+
+def test_setup_stays_where_the_window_opened_it_and_usage_comes_last():
+    """Choosing a provider in Setup whose key isn't stored yet (Tinfoil) made setup needed again, and the whole
+    section moved to the top of the window; choosing NanoGPT put it back near the end. Where it goes is settled as the
+    window opens, and Usage, whose list grows long, is last."""
+    stubs = """
+const S = { setupFirst: null };
+const drawn = [];
+const page = { scrollTop: 0, replaceChildren: (...c) => drawn.push(c) };
+const $ = () => page;
+const applyTheme = () => {}, renderTop = () => {};
+const [setupSection, startSection, sessionsSection, editorSection, modelsSection, verifySection, appSection,
+  usageSection] = ["setup", "start", "sessions", "editor", "models", "verify", "app", "usage"].map((n) => () => n);
+"""
+    code = script("needsSetup", "pageOrder", "render") + stubs + """
+const ready = { config_error: "", claude: { path: "/usr/bin/claude" }, setup_ready: true };
+const test = (opened) => {
+  S.setupFirst = null; drawn.length = 0;
+  for (const st of opened) { S.state = st; render(); }
+  return drawn.slice();
+};"""
+    done = {"config_error": "", "claude": {"path": "/usr/bin/claude"}, "setup_ready": True}
+    tinfoil = {**done, "setup_ready": False}       # Setup's provider changed to one with no key stored
+    opened_done, opened_new = run(code, [[done, tinfoil, done], [tinfoil, done, tinfoil]])
+    later = ["start", "sessions", "editor", "models", "verify", "setup", "app", "usage"]
+    assert opened_done == [later] * 3
+    assert opened_new == [["setup", "start", "sessions", "editor", "models", "verify", "app", "usage"]] * 3
+
+
+def test_usage_folded_says_what_today_and_this_month_cost():
+    code = script("money", "usageSaid") + "\nconst test = (u) => usageSaid(u);"
+    assert run(code, [{"today": 0.1234, "month": 2.5, "requests_today": 3},
+                      {"today": None, "month": None, "requests_today": 1}]) == [
+        "$0.12 today (3 requests) · $2.50 this month", "$0.00 today (1 request) · $0.00 this month"]
