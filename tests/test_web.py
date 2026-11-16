@@ -280,8 +280,8 @@ const test = (c) => c.summary ? kindSummary({ config: { profiles } }, c.summary)
         {"st": {"start": "standard", "folders": {"other": "", "list": [{"profile": "tee"}]}, "sessions": []}},
         {"st": {"start": "standard", "folders": {}, "sessions": [{"kind": "private"}]}},
         {"st": {"start": "private"}}])
-    assert standard == ("NanoGPT · z-ai/glm-5.3 · Opus: moonshotai/kimi-k3 · Quick: z-ai/glm-5.3-flash · effort high · "
-                        "web search Perplexity and Kagi")
+    assert standard == ("NanoGPT · z-ai/glm-5.3 · Opus: moonshotai/kimi-k3 · Quick: z-ai/glm-5.3-flash · effort high, "
+                        "checks low · web search Perplexity and Kagi")      # a profile without check_effort: low
     assert private.startswith("NanoGPT · glm-5-3 · Opus: kimi-k3-1-pro · Quick: deepseek-v4-1-flash · effort low")
     assert drawn[0] == "seg" and drawn[1] == "tabs" and drawn[2]["role"] == "tab" and drawn[2]["aria-selected"] == "true"
     assert use == [False, True, True, True]

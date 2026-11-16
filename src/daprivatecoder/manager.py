@@ -20,7 +20,8 @@ from .llm.private_mode import Enclave, list_private_models, offers_private_mode,
 from .netpolicy import shown
 from .search import NAMES as SEARCH_NAMES
 
-PROFILE_FIELDS = ("model", "opus_model", "fast_model", "vision_model", "reasoning", "web_search", "provider", "base_url")
+PROFILE_FIELDS = ("model", "opus_model", "fast_model", "vision_model", "reasoning", "check_effort", "web_search",
+                  "provider", "base_url")
 # the window's three kinds of session, each a profile of that name (config.DEFAULTS)
 SESSIONS = ("private", "tee", "standard")
 # the kind of session a provider chosen in Setup runs (setup_provider): Tinfoil's private sessions, Chutes' TEE ones
@@ -233,6 +234,7 @@ class Manager:
                          "what": SEARCH_NAMES.get(r.get("provider"), r.get("provider") or "") if kind == "search"
                          else r.get("model", ""),
                          "asked_for": r.get("asked_for", ""), "sent": sent, "sealed": sent in ("sealed", "chutes"),
+                         "check": bool(r.get("check")), "effort": r.get("effort", ""),
                          "service": r.get("service", ""),
                          "status": r.get("status", ""),
                          # no usage (refused, failed, a search): no tokens, rather than none

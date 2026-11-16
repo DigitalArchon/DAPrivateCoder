@@ -161,14 +161,20 @@ cache, at the cached price. **Usage** in the window shows each request's tokens 
 Claude Code's own `/cost`: it doesn't know these models' prices.
 
 **Effort** in the window (`reasoning` in the file) is how hard the models think as each session
-starts: low, medium, high or max; high by default, and none of them recommended — for coding, how
-much thinking a step is worth is up to each use case. In a session, Claude Code's own effort
+starts: low, medium, high or max; low by default. In a test of GLM-5.3 on four coding tasks (November
+2026, each twice at each level, scored by tests the model never saw), low and high passed every test,
+and high took about four times as long. In a session, Claude Code's own effort
 changes it: the Effort control of the editor's Claude Code, or `/effort` (and `--effort`) in a
 terminal. The model runs at the level Claude Code shows, or
 the nearest it takes, the higher of two as near: the private models take only low, high and max, so
 medium runs as high and xhigh as max (a private model refuses any other level, and GLM-5.3 ignores
 one and reasons at its own default, the most). A TEE or standard model gets the nearest of the levels
 its provider lists for it; one that refuses a level, naming those it takes, is asked again with one.
+
+**Checks** in the window (`check_effort` in the file) is how hard the default model thinks when it
+checks an action in auto mode, apart from the session's effort, which doesn't reach those checks:
+low by default. (On an Anthropic-compatible provider, Claude Code's requests go as they are, and it
+isn't used.)
 
 **Context** in the window (`context` in the file) is where Claude Code compacts the conversation
 (summarises it, and goes on): 200K by default, which is what Claude Code assumes for models it

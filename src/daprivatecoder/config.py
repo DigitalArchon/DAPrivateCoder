@@ -137,13 +137,17 @@ class Profile:
     opus_model: str
     fast_model: str
     vision_model: str = ""
-    reasoning: str = "high"         # no level is called recommended: for coding it's up to the use case
+    # how hard the models reason as a session starts: low by default, since high took about four times as long for
+    # the same result in a live test of GLM-5.3 (Nov 2026: four coding tasks, every hidden test passed at both)
+    reasoning: str = "low"
     web_search: str = "off"
     provider: str = "nanogpt"       # where its models are (providers.py): a standard profile's any one
     base_url: str = ""              # a provider of your own's (providers.Provider.own_address): its endpoint
     # which of the provider's hosts runs a model (llm/routes.py): model -> route; none for its own choice
     routes: dict = field(default_factory=dict, hash=False)
     context: int = CONTEXTS[0]      # the conversation's size where Claude Code compacts it (CONTEXTS)
+    # how hard the model reasons when it checks an action in auto mode (proxy.is_auto_mode_check), apart from the rest
+    check_effort: str = "low"
 
     @property
     def private(self) -> bool:
@@ -195,11 +199,11 @@ DEFAULTS = Config(profiles={
     # keeps the model it names, never changed for another: one naming private/kimi-k3 is told it's no longer
     # offered (the window's Models, `daprivatecoder check`, and a session's refusal: private_mode.ModelRetired)
     "private": Profile("private", "private", "private/glm-5-3", "private/kimi-k3-1-pro", "private/deepseek-v4-1-flash",
-                       "private/deepseek-v4-1-flash", "high", "zero-retention"),
-    "tee": Profile("tee", "tee", "TEE/glm-5.3", "TEE/kimi-k3", "TEE/glm-5.3-flash", "TEE/glm-5.3-flash", "high",
+                       "private/deepseek-v4-1-flash", "low", "zero-retention"),
+    "tee": Profile("tee", "tee", "TEE/glm-5.3", "TEE/kimi-k3", "TEE/glm-5.3-flash", "TEE/glm-5.3-flash", "low",
                    "zero-retention"),
     "standard": Profile("standard", "standard", "z-ai/glm-5.3", "moonshotai/kimi-k3", "z-ai/glm-5.3-flash",
-                        "z-ai/glm-5.3-flash", "high", "best"),
+                        "z-ai/glm-5.3-flash", "low", "best"),
 })
 
 # ---------------------------------------------------------------------- the file, written
@@ -234,6 +238,8 @@ _NOTES = {
     "vision_model": "describes images for a model that can't see them; empty: such a model is told it can't see",
     "reasoning": ("how hard the model reasons before it answers, as each session starts: low, medium, high or max.\n"
                   "# In a session, Claude Code's Effort (the editor's, or /effort) changes it"),
+    "check_effort": ("how hard the model reasons when it checks an action in auto mode: low, medium, high or max\n"
+                     "# (Claude Code's own effort doesn't reach these checks)"),
     "context": ("the conversation's size, in tokens, where Claude Code compacts it (summarises it, and goes on):\n"
                 "# 200000 (what it assumes for models it doesn't know), 400000 or 1000000 (what NanoGPT lists for these).\n"
                 "# Every request sends the whole conversation, so a bigger one costs more each time, even from the cache"),
@@ -301,7 +307,7 @@ def render(cfg: Config) -> str:
             out += [*note("provider"), f"provider = {_q(p.provider)}"]
             if _own(p.provider):
                 out.append(f"base_url = {_q(p.base_url)}")
-        for key in ("model", "opus_model", "fast_model", "vision_model", "reasoning", "web_search"):
+        for key in ("model", "opus_model", "fast_model", "vision_model", "reasoning", "check_effort", "web_search"):
             out += [*note(key), f"{key} = {_q(getattr(p, key))}"]
         out += [*note("context"), f"context = {p.context}"]
         if p.routes:
@@ -448,9 +454,12 @@ def _profile(name: str, table: dict, where: str, settings_url: str = NANOGPT_BAS
     opus = _text(table, "opus_model", where) or model
     fast = _text(table, "fast_model", where) or model
     vision = _text(table, "vision_model", where)
-    reasoning = _text(table, "reasoning", where, "high").lower()
+    reasoning = _text(table, "reasoning", where, "low").lower()
     if reasoning not in REASONING:
         raise ConfigError(f"{where}: reasoning must be one of {', '.join(REASONING)} (not {reasoning!r}).")
+    check_effort = _text(table, "check_effort", where, "low").lower()
+    if check_effort not in REASONING:
+        raise ConfigError(f"{where}: check_effort must be one of {', '.join(REASONING)} (not {check_effort!r}).")
     # a profile searches with Linkup unless told otherwise (a standard one, with the best results): of the
     # searches, Linkup alone keeps nothing
     web_search = _text(table, "web_search", where, "best" if kind == "standard" else "zero-retention").lower()
@@ -480,7 +489,8 @@ def _profile(name: str, table: dict, where: str, settings_url: str = NANOGPT_BAS
     if isinstance(context, bool) or not isinstance(context, int) or not CONTEXT_RANGE[0] <= context <= CONTEXT_RANGE[1]:
         raise ConfigError(f"{where}: context must be a number of tokens from {CONTEXT_RANGE[0]} to {CONTEXT_RANGE[1]}, "
                           f"such as 200000 (not {context!r}).")
-    return Profile(name, kind, model, opus, fast, vision, reasoning, web_search, provider, base_url, checked, context)
+    return Profile(name, kind, model, opus, fast, vision, reasoning, web_search, provider, base_url, checked, context,
+                   check_effort)
 
 
 def parse(text: str, path: Path | None = None) -> Config:

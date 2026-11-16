@@ -14,7 +14,9 @@ def test_the_defaults_are_written_on_first_use_and_read_back():
     assert cfg.path == config.config_path() and cfg.path.read_text() == config.DEFAULT_TEXT
     private, tee, standard = cfg.profile("private"), cfg.profile("tee"), cfg.profile("standard")
     assert private.private and private.models == ("private/glm-5-3", "private/kimi-k3-1-pro", "private/deepseek-v4-1-flash")
-    assert private.vision_model == "private/deepseek-v4-1-flash" and private.reasoning == "high"
+    # low: high took about four times as long for the same result (a live test of GLM-5.3, Nov 2026)
+    assert private.vision_model == "private/deepseek-v4-1-flash" and private.reasoning == "low"
+    assert {p.reasoning for p in (tee, standard)} == {p.check_effort for p in (private, tee, standard)} == {"low"}
     assert tee.kind == "tee" and tee.models == ("TEE/glm-5.3", "TEE/kimi-k3", "TEE/glm-5.3-flash")
     assert not standard.private and standard.model == "z-ai/glm-5.3" and standard.provider == "nanogpt"
     assert cfg.base_url == "https://nano-gpt.com/api/v1" and cfg.claude == ""
@@ -334,3 +336,20 @@ def test_webkit_keeps_nothing_of_the_window_on_disk():
     backend = inspect.getsource(gtk)
     assert re.search(r"if _state\['private_mode'\]:\s+(#[^\n]*\n\s+)?web_context = webkit\.WebContext\.new_ephemeral\(\)",
                      backend)
+
+
+def test_auto_modes_checks_have_an_effort_of_their_own(tmp_path):
+    """check_effort: how hard the model reasons when it checks an action in auto mode, apart from the session's;
+    written out with the rest, low unless the file says otherwise, and only one of the four levels."""
+    cfg = config.load()
+    cfg = cfg.with_profile(replace(cfg.profile("standard"), reasoning="high", check_effort="medium"))
+    config.save(cfg)
+    text = cfg.path.read_text()
+    assert 'check_effort = "medium"' in text and "how hard the model reasons when it checks an action in auto mode" in text
+    standard = config.load().profile("standard")
+    assert (standard.reasoning, standard.check_effort) == ("high", "medium")
+    cfg.path.write_text(text.replace('check_effort = "medium"', 'check_effort = "turbo"'))
+    with pytest.raises(config.ConfigError, match="check_effort must be one of low, medium, high, max"):
+        config.load()
+    cfg.path.write_text(text.replace('check_effort = "medium"\n', ""))
+    assert config.load().profile("standard").check_effort == "low"

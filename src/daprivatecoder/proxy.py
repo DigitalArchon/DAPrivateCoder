@@ -203,6 +203,22 @@ def effort_of(data: dict, default: str) -> str:
     return asked if asked in LEVELS else default
 
 
+# how auto mode's check of an action begins (Claude Code 2.1.322): its system prompt, a request of its own, no tools
+AUTO_MODE_CHECK = "You are a security monitor for autonomous AI coding agents"
+
+
+def is_auto_mode_check(data: dict) -> bool:
+    """Whether a request is Claude Code's check of an action in auto mode, which it sends with no effort of its own:
+    it gets the profile's check_effort, apart from the session's. Should Claude Code word it otherwise, the check
+    takes the session's effort, as any request does."""
+    if data.get("tools"):
+        return False
+    system = data.get("system")
+    if isinstance(system, list):
+        system = next((b.get("text") for b in system if isinstance(b, dict) and isinstance(b.get("text"), str)), "")
+    return isinstance(system, str) and system.lstrip().startswith(AUTO_MODE_CHECK)
+
+
 def effort_for(asked: str, takes) -> str:
     """The effort a model that takes `takes` (None: not known) is sent for `asked`: itself if it takes
     it, else the nearest it does, the higher of two as near (medium as high where there's no medium,
@@ -1205,7 +1221,8 @@ class Proxy:
         except Exception as e:  # noqa: BLE001 - Claude Code shows the reason (an image's description failed, say)
             raise upstream_refusal(f"Couldn't prepare the request for {model}: {self.profile.vision_model}", e,
                                    self._provider_of(self.profile.vision_model or model)) from e
-        wanted = effort_of(data, self.profile.reasoning)
+        checking = is_auto_mode_check(data)
+        wanted = effort_of(data, self.profile.check_effort if checking else self.profile.reasoning)
         effort = await self._effort(model, tier, wanted)
         params = with_effort(params, effort)
         route = self.profile.routes.get(model) if tier == "standard" else None
@@ -1217,6 +1234,7 @@ class Proxy:
                "sealed": self.privacy(model).sealed, "tier": tier, "provider": self._provider_of(model),
                **self._service_field(model), "sees": native,
                "effort": effort, **({"effort_asked": wanted} if wanted != effort else {}), "bytes_out": size,
+               **({"check": True} if checking else {}),
                **({"route": routes.describe(self.provider, route)} if route else {}),
                # what was attested, for the window to say (RedPill's gateway is not the machine that runs the model)
                **({"attested": attested["attested"]} if attested.get("attested") else {})}

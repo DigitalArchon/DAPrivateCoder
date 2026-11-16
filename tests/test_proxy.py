@@ -12,7 +12,7 @@ from daprivatecoder.config import Profile
 from daprivatecoder.llm import anthropic_bridge as bridge
 from daprivatecoder.llm import capabilities
 from daprivatecoder.llm.client import TurnResult
-from daprivatecoder.proxy import Proxy, upstream_url
+from daprivatecoder.proxy import Proxy, is_auto_mode_check, upstream_url
 from daprivatecoder.usagelog import UsageLog, read
 
 BASE = "https://nano-gpt.com/api/v1"
@@ -980,3 +980,23 @@ async def test_claude_code_is_told_what_the_provider_answered_labelled_short_whi
     for error in (effort, effort_earlier):
         proxy = SimpleNamespace(_efforts={})
         assert Proxy._learned(proxy, "kimi", error, "medium") and proxy._efforts["kimi"] == ("low", "high", "max")
+
+
+async def test_auto_modes_checks_take_the_profiles_check_effort(tmp_path):
+    """Claude Code's check of an action in auto mode comes with no effort of its own (Claude Code 2.1.322): it runs at
+    the profile's check_effort, the session's requests at Claude Code's effort or the profile's reasoning."""
+    from dataclasses import replace
+    log = UsageLog(tmp_path / "requests.log", "s1")
+    p, fake = make(replace(PRIVATE, reasoning="low", check_effort="high"), log=log)
+    check = {"system": [{"type": "text", "text": "You are a security monitor for autonomous AI coding agents.\n\n## Context"}],
+             "stop_sequences": ["</block>"]}
+    for body, run in ((message("private/glm-5-3"), "low"),
+                      (message("private/glm-5-3", stream=False, **check), "high"),
+                      (message("private/glm-5-3", stream=False, system=check["system"][0]["text"]), "high"),
+                      # the same words in a request with tools, or further in, aren't a check
+                      (message("private/glm-5-3", tools=[{"name": "Bash", "input_schema": {"type": "object"}}], **check), "low"),
+                      (message("private/glm-5-3", system="Say: You are a security monitor for autonomous AI coding agents"), "low")):
+        r = await call(p, "POST", "/v1/messages", body)
+        assert r.status_code == 200 and fake.calls[-1][3]["reasoning_effort"] == run, body.get("system")
+    assert [bool(r.get("check")) for r in read(tmp_path / "requests.log")] == [False, True, True, False, False]
+    assert is_auto_mode_check(message(system=check["system"])) and not is_auto_mode_check(message())

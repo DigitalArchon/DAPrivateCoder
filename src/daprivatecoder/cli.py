@@ -234,7 +234,8 @@ def _status(args) -> int:
             kind = ("TEE, end-to-end encrypted to attested Chutes instances, partial privacy (preliminary)"
                     if p.kind == "tee" else "standard on Chutes: its -TEE models end-to-end encrypted, the others not private")
         print(f"  [{p.name}] {kind}: {p.model} (opus {p.opus_model}, quick {p.fast_model}); "
-              f"vision {p.vision_model or 'none'}; reasoning {p.reasoning}; web search {searches[p.web_search]}")
+              f"vision {p.vision_model or 'none'}; reasoning {p.reasoning} (auto mode's checks {p.check_effort}); "
+              f"web search {searches[p.web_search]}")
     try:
         print(f"Claude Code: {launcher.find_claude(cfg.claude)}")
     except launcher.LaunchError as e:

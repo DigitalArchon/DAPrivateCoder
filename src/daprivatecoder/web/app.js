@@ -208,8 +208,10 @@ function kindSummary(st, kind) {
   const p = st.config && st.config.profiles[kind];
   if (!p) return "";
   const m = (x) => shortModel(x || "", kind);
+  const e = (x) => (EFFORTS[x] || x || "").toLowerCase();
+  const checks = (p.check_effort || "low") !== p.reasoning ? `, checks ${e(p.check_effort || "low")}` : "";
   return `${providerName(st, kind)} · ${m(p.model)} · Opus: ${m(p.opus_model)} · Quick: ${m(p.fast_model)} · `
-    + `effort ${(EFFORTS[p.reasoning] || p.reasoning || "").toLowerCase()} · web search ${SEARCHES[p.web_search] || p.web_search}`;
+    + `effort ${e(p.reasoning)}${checks} · web search ${SEARCHES[p.web_search] || p.web_search}`;
 }
 
 function warningOf(st, kind) {
@@ -702,8 +704,18 @@ function modelsSection(st) {
           .map(([v, l]) => h("option", { value: v, selected: p.reasoning === v }, l)))),
     h("div", { class: "model-row" }, h("span", {}), h("div", { class: "small muted" },
       "How much the models think at the start of each session. During a session, Claude Code's own Effort setting (or ",
-      h("code", {}, "/effort"), ") changes it. A model without the chosen level uses the nearest one it has: ",
+      h("code", {}, "/effort"), ") changes it. Low is the default: in a test of GLM-5.3 on four coding tasks, High gave the "
+      + "same results and took about four times as long. A model without the chosen level uses the nearest one it has: ",
       tab === "private" ? "private models have no medium (it runs as high) or xhigh (it runs as max)." : "as its provider lists them.")),
+    // auto mode's checks of each action: their own effort (proxy.is_auto_mode_check), Claude Code's doesn't reach them
+    h("div", { class: "model-row" }, h("label", {}, "Checks"),
+      h("select", { onchange: (e) => save({ check_effort: e.target.value }) },
+        [["low", "Low (fastest)"], ["medium", "Medium"], ["high", "High (slow)"], ["max", "Max (slowest)"]]
+          .map(([v, l]) => h("option", { value: v, selected: (p.check_effort || "low") === v }, l)))),
+    h("div", { class: "model-row" }, h("span", {}), h("div", { class: "small muted" },
+      "How much the Default model thinks when it checks an action in auto mode, before the action runs. Claude Code's own "
+      + "Effort doesn't change it." + (["anthropic", "custom-anthropic"].includes(p.provider) ? " On an Anthropic-compatible provider, Claude Code's "
+        + "requests go as they are, and this setting isn't used." : ""))),
     contextRows(tab, p, save),
     S.modelsError[tab] ? h("div", { class: "warnbox" }, `The list of models couldn't be loaded: ${S.modelsError[tab]}`) : null,
     S.models[tab] ? null : h("div", { class: "small muted row" }, h("span", { class: "spinner" }), reading),
@@ -1046,7 +1058,7 @@ function usageSection(st) {
     const where = r.provider && r.provider !== "nanogpt" ? ` · ${providerSaid(r.provider)}` : "";
     const what = r.kind === "search"
       ? `web search${r.what ? `, ${r.what}` : ""}${r.results !== null && r.results !== undefined ? ` · ${r.results} results` : ""}`
-      : r.what + (r.kind === "vision" ? " (image)" : "") + where;
+      : r.what + (r.kind === "vision" ? " (image)" : "") + (r.check ? " (auto mode check)" : "") + where;
     const row = h("tr", { class: r.error ? "bad has-note" : "" },
       h("td", {}, r.t.slice(5, 16)),
       h("td", { title: r.asked_for ? `Claude Code asked for ${r.asked_for}` : "" }, what),
