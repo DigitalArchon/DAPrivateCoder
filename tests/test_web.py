@@ -239,3 +239,49 @@ def test_usage_folded_says_what_today_and_this_month_cost():
     assert run(code, [{"today": 0.1234, "month": 2.5, "requests_today": 3},
                       {"today": None, "month": None, "requests_today": 1}]) == [
         "$0.12 today (3 requests) · $2.50 this month", "$0.00 today (1 request) · $0.00 this month"]
+
+
+def test_running_now_says_what_a_session_runs_and_its_refused_requests_apart():
+    """A request refused here (Claude Code's ask for the Claude model a conversation began on, when it summarised
+    itself) was shown as the session's last request, and read as calls to Claude (Nov 2026)."""
+    code = script("PROVIDERS", "providerSaid", "shortModel", "sessionRuns", "refusedSaid") + """
+const test = ([s, kind]) => [sessionRuns(s, kind), refusedSaid(s)];"""
+    refused = {"t": "2026-11-16 21:36:30", "count": 2, "models": ["claude-opus-5-5"]}
+    began, other, plain = run(code, [
+        [{"provider": "nanogpt", "models": ["z-ai/glm-5.3", "moonshotai/kimi-k3", "z-ai/glm-5.3-flash"],
+          "refused": refused, "began_on": "claude-opus-5-5"}, "standard"],
+        [{"provider": "nanogpt", "models": ["private/glm-5-3", "private/glm-5-3", "private/glm-5-3"],
+          "refused": {**refused, "count": 1, "models": ["claude-sonnet-5-5"]}}, "private"],
+        [{"provider": "nanogpt", "models": []}, "standard"]])
+    assert began[0] == "Runs on NanoGPT: z-ai/glm-5.3 (Opus: moonshotai/kimi-k3, Quick: z-ai/glm-5.3-flash)"
+    assert began[1].startswith("Refused 21:36: claude-opus-5-5 (2 requests), nothing sent. This conversation began in "
+                               "Claude Code as usual, on claude-opus-5-5")
+    assert other == ["Runs on NanoGPT: glm-5-3", "Refused 21:36: claude-sonnet-5-5, nothing sent."]
+    assert plain == ["", ""]
+
+
+def test_start_says_what_its_kind_runs_and_settings_are_tabs_not_its_toggle():
+    """Start said "Any model from NanoGPT. Choose them under Models, below.", and Models had a Private / TEE / Standard
+    toggle drawn as Start's, which only chose the settings shown. Start says what the kind runs; Settings has tabs."""
+    code = script("KINDS", "PROVIDERS", "providerSaid", "providerName", "shortModel", "EFFORTS", "SEARCHES",
+                  "kindSummary", "SESSIONS", "seg", "tabs", "sealedInUse") + """
+const h = (tag, attrs, ...children) => ({ tag, attrs, children });
+const profiles = {
+  standard: { provider: "nanogpt", model: "z-ai/glm-5.3", opus_model: "moonshotai/kimi-k3", fast_model: "z-ai/glm-5.3-flash",
+    reasoning: "high", web_search: "best" },
+  private: { provider: "nanogpt", model: "private/glm-5-3", opus_model: "private/kimi-k3-1-pro",
+    fast_model: "private/deepseek-v4-1-flash", reasoning: "low", web_search: "zero-retention" } };
+const test = (c) => c.summary ? kindSummary({ config: { profiles } }, c.summary)
+  : c.drawn ? [seg("tee", () => {}).attrs.class, tabs("tee", () => {}).attrs.class, tabs("tee", () => {}).children[0][1].attrs]
+  : sealedInUse(c.st);"""
+    standard, private, drawn, *use = run(code, [
+        {"summary": "standard"}, {"summary": "private"}, {"drawn": True},
+        {"st": {"start": "standard", "folders": {"other": "", "list": [{"profile": "standard"}]}, "sessions": []}},
+        {"st": {"start": "standard", "folders": {"other": "", "list": [{"profile": "tee"}]}, "sessions": []}},
+        {"st": {"start": "standard", "folders": {}, "sessions": [{"kind": "private"}]}},
+        {"st": {"start": "private"}}])
+    assert standard == ("NanoGPT · z-ai/glm-5.3 · Opus: moonshotai/kimi-k3 · Quick: z-ai/glm-5.3-flash · effort high · "
+                        "web search Perplexity and Kagi")
+    assert private.startswith("NanoGPT · glm-5-3 · Opus: kimi-k3-1-pro · Quick: deepseek-v4-1-flash · effort low")
+    assert drawn[0] == "seg" and drawn[1] == "tabs" and drawn[2]["role"] == "tab" and drawn[2]["aria-selected"] == "true"
+    assert use == [False, True, True, True]

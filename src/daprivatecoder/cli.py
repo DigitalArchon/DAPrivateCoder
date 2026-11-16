@@ -465,7 +465,8 @@ def _serve(args) -> int:
     editors = [(name, Path(path)) for name, path in args.editor]
     log.write("session", profile=profile.name, profile_kind=profile.kind, private=profile.private, models=list(profile.models),
               vision=profile.vision_model, provider=profile.provider, base_url=shown(cfg.provider_url(profile)), pid=os.getpid(),
-              folder=os.getcwd(), editor=", ".join(name for name, _ in editors))
+              folder=os.getcwd(), editor=", ".join(name for name, _ in editors),
+              **({"began_on": args.began_on} if args.began_on else {}))
     # only while DA Private Coder is open, and the editor that started it (if one did) still runs its profile
     p = proxy.Proxy(profile, cfg.base_url, token, log=log, provider_url=cfg.provider_url(profile),
                     gate=gate.Gate(profile.name, editors).why,
@@ -485,7 +486,8 @@ def _serve(args) -> int:
         config.made(about.parent)
         config.write_private(about, json.dumps({
             "session": log.session, "profile": profile.name, "kind": profile.kind, "folder": os.getcwd(),
-            "editors": [[name, str(path)] for name, path in editors], "started": time.time()}))
+            "editors": [[name, str(path)] for name, path in editors], "started": time.time(),
+            "began_on": args.began_on}))
 
     def gone() -> None:
         settings.unlink(missing_ok=True)
@@ -538,6 +540,8 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("--config", help=argparse.SUPPRESS)
     # the editor whose switch started the session (its name and settings file): it stops once that's off
     s.add_argument("--editor", nargs=2, action="append", default=[], help=argparse.SUPPRESS)
+    # the Claude model a conversation taken up again began on, in Claude Code as usual (launcher.began_elsewhere)
+    s.add_argument("--began-on", default="", help=argparse.SUPPRESS)
     s.set_defaults(func=_serve)
     w = sub.add_parser("search-server", help="the web search tool for Claude Code (claude-private adds it)")
     w.add_argument("--profile", default=PRIVATE)

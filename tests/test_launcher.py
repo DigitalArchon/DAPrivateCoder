@@ -394,3 +394,48 @@ def test_an_address_is_checked_as_a_search_is():
     out = io.StringIO()
     identity.fetch_hook(io.StringIO("not json"), out)
     assert json.loads(out.getvalue())["hookSpecificOutput"]["permissionDecision"] == "deny"   # unread: not let through
+
+
+def test_auto_modes_check_runs_here_on_the_sessions_own_model():
+    """Logged in to claude.ai, a Standard session (Claude Code's experimental betas on) waited for Anthropic's server
+    to judge each action in auto mode and turned its own check off: no verdict came from NanoGPT, so every action was
+    refused (Nov 2026). Every session's check runs on this computer, by its default model, through the proxy."""
+    for profile in (PRIVATE, NANO):
+        env = claude_env(profile, 1234, "tok")
+        assert env["CLAUDE_CODE_AUTO_MODE_SERVER"] == "0" and env["CLAUDE_CODE_AUTO_MODE_MODEL"] == profile.model
+
+
+def transcript(path: Path, models: list[str]) -> Path:
+    """A conversation's transcript as Claude Code keeps it: a reply's model in each assistant line, and other lines."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [{"type": "user", "message": {"role": "user", "content": 'say "model":"claude-fable-5-2"'}}]
+    lines += [{"type": "assistant", "message": {"model": m, "content": []}} for m in models]
+    path.write_text("\n".join(json.dumps(x) for x in lines) + "\nnot json\n")
+    return path
+
+
+def test_a_conversation_taken_up_again_says_the_claude_model_it_began_on(tmp_path):
+    """A conversation begun in Claude Code as usual and taken up again on DA Private Coder: when it compacts, Claude
+    Code asks for the model it began on first (refused here, nothing sent), then summarises on the session's own.
+    Only each reply's model is read, never what was said."""
+    home = tmp_path / "claude"
+    env = {"CLAUDE_CONFIG_DIR": str(home)}
+    cid = "e7ceb8c4-b93b-4165-81f1-0317b0b64238"
+    folder = "/home/me/Project.x"
+    t = transcript(home / "projects" / "-home-me-Project-x" / f"{cid}.jsonl",
+                   ["claude-opus-5-5", "<synthetic>", "claude-opus-5-5", "z-ai/glm-5.3"])
+    assert launcher.models_answered(t) == ["claude-opus-5-5", "z-ai/glm-5.3"]
+    for args in (["--resume", cid], [f"--resume={cid}"], ["-r", cid, "--verbose"], ["--continue"], ["-c"]):
+        assert launcher.resumed_transcript(args, env, folder) == t, args
+        assert launcher.began_elsewhere(NANO, args, env, folder) == "claude-opus-5-5", args
+        assert launcher.began_elsewhere(PRIVATE, args, env, folder) == "claude-opus-5-5", args
+    # nothing to say: a new conversation, one not found, one named by its title or a path, one that began here
+    for args in ([], ["--resume", "0f21d3c3-0000-4000-8000-000000000000"], ["--resume", "my title"],
+                 ["--resume", "../../etc/passwd"], ["--resume"]):
+        assert launcher.began_elsewhere(NANO, args, env, folder) == "", args
+    transcript(t, ["z-ai/glm-5.3"])
+    assert launcher.began_elsewhere(NANO, ["--resume", cid], env, folder) == ""
+    # a Standard session on Anthropic sends Claude's models as they are: nothing is refused
+    anthropic = Profile("a", "standard", "claude-opus-5-5", "claude-opus-5-5", "claude-haiku-5-5", "", "low",
+                        provider="anthropic")
+    assert launcher.began_on(anthropic, ["claude-opus-5-5"]) == "" and launcher.began_on(NANO, ["claude-opus-5-5"])

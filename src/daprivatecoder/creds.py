@@ -225,7 +225,7 @@ def get_key(provider: str = "nanogpt", base_url: str = "", *, sending: bool = Tr
         raise KeyInTheClear(
             f"The {what} for {NAMES.get(provider, provider)} would go unencrypted, over plain http, to "
             f"{shown(base_url)}, another machine on your network, where anyone on it can read it, so nothing was "
-            "sent. Use the server's https:// address, or say Yes where DA Private Coder's window asks (Models, "
+            "sent. Use the server's https:// address, or say Yes where DA Private Coder's window asks (Settings, "
             "Standard, API key), or store the key again with `daprivatecoder key set --provider custom` in a "
             "terminal, which asks.")
     return key

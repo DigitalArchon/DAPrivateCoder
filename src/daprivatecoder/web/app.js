@@ -43,7 +43,7 @@ const $ = (sel) => document.querySelector(sel);
 // the actions under way (busy: not sent twice), what is being checked
 const S = { state: null, folder: "", tab: "", models: {}, modelsError: {}, hosts: {}, routeHost: {}, routeFp8: {},
   customUrl: "", setupOwn: "", replacing: "", checking: "", drafts: {}, busy: {}, asked: 0, shown: 0,
-  setupFirst: null, usageOpen: false };
+  setupFirst: null, usageOpen: false, verifyOpen: null };
 // what the editor's switch runs when it runs each folder as chosen (editor.PER_FOLDER)
 const PER_FOLDER = ":folders";
 
@@ -195,7 +195,21 @@ function leadOf(st, kind) {
     + "DA Private Coder verifies each enclave before sending it anything, and again every 15 minutes. For most of "
     + "them, the enclave verified is RedPill's gateway, which passes requests on to the machine that runs the model: "
     + "that machine is the gateway's word.";
-  return `Any model from ${providerName(st, "standard")}. Choose them under Models, below.`;
+  return "";
+}
+
+// a model as a kind's own lists show it: without "private/" or "TEE/" there, where every model is one
+const shortModel = (m, kind) => kind === "private" ? m.replace(/^private\//, "") : kind === "tee" ? m.replace(/^TEE\//i, "") : m;
+const EFFORTS = { low: "Low", medium: "Medium", high: "High", max: "Max" };
+const SEARCHES = { "zero-retention": "Linkup (keeps nothing)", best: "Perplexity and Kagi", off: "off" };
+
+// what a session of `kind` runs, in one line: its provider, its models, its effort and web search
+function kindSummary(st, kind) {
+  const p = st.config && st.config.profiles[kind];
+  if (!p) return "";
+  const m = (x) => shortModel(x || "", kind);
+  return `${providerName(st, kind)} · ${m(p.model)} · Opus: ${m(p.opus_model)} · Quick: ${m(p.fast_model)} · `
+    + `effort ${(EFFORTS[p.reasoning] || p.reasoning || "").toLowerCase()} · web search ${SEARCHES[p.web_search] || p.web_search}`;
 }
 
 function warningOf(st, kind) {
@@ -218,7 +232,7 @@ function notReady(st, kind) {
   if (st.ready[kind]) return "";
   if (!st.claude.path) return "Can't start yet: Claude Code wasn't found. See Setup.";
   if ((st.provider_keys || {})[kind]) {
-    return `Can't start yet: add your ${providerName(st, kind)} API key under Models (the ${KINDS[kind].label} tab).`;
+    return `Can't start yet: add your ${providerName(st, kind)} API key under Settings (the ${KINDS[kind].label} tab).`;
   }
   return "Can't start yet: add your NanoGPT API key in Setup.";
 }
@@ -227,6 +241,14 @@ function notReady(st, kind) {
 function seg(current, pick) {
   return h("div", { class: "seg" }, SESSIONS.map((k) => h("button", {
     class: `seg-btn kind-${k}${k === current ? " on" : ""}`, "aria-pressed": k === current ? "true" : "false",
+    onclick: () => pick(k) }, KINDS[k].label)));
+}
+
+// tabs, one selected: which kind's settings are shown (Settings), drawn unlike seg's buttons, which choose
+// what new sessions start as: the two were alike, and one of them changed nothing but the view
+function tabs(current, pick) {
+  return h("div", { class: "tabs", role: "tablist" }, SESSIONS.map((k) => h("button", {
+    class: `tab kind-${k}${k === current ? " on" : ""}`, role: "tab", "aria-selected": k === current ? "true" : "false",
     onclick: () => pick(k) }, KINDS[k].label)));
 }
 
@@ -275,7 +297,13 @@ function startSection(st) {
   return h("div", { class: `section start ${kind}` },
     h("h3", {}, "Start Claude Code", chipOf(kind)),
     seg(kind, (pick) => { if (pick !== kind) act("POST", "/api/start", { session: pick }); }),
-    h("p", { class: "lead" }, leadOf(st, kind)),
+    leadOf(st, kind) ? h("p", { class: "lead" }, leadOf(st, kind)) : null,
+    // what it runs, where it starts: changed in its settings, below
+    h("div", { class: "summary row" }, h("span", { class: "small" }, kindSummary(st, kind)),
+      h("button", { class: "small ghost", onclick: () => {
+        S.tab = kind; if (!S.models[kind]) loadModels(kind); render();
+        const at = document.getElementById("settings"); if (at) at.scrollIntoView({ behavior: "smooth", block: "start" });
+      } }, "Change…")),
     warningOf(st, kind),
     h("div", { class: "row" }, folder,
       st.can_choose_folder ? h("button", { onclick: () => guarded(async () => {
@@ -363,6 +391,16 @@ function searchNeedsNanogpt() {
 
 function setupSection(st) {
   const k = st.key;
+  // set up: each kind's provider and its key are in its settings (Settings); here, NanoGPT's key, which web search
+  // and NanoGPT's sessions use, and what isn't a provider's. Setup's Provider is for the first start only
+  if (!needsSetup(st) && !S.setupOwn) {
+    const nano = keyControls("nanogpt", k, "nanogpt", "NanoGPT", "The key is stored in your keyring.");
+    const keyRow = check(nano.stored || "optional", "NanoGPT API key",
+      nano.stored ? `Stored in your keyring (ending ${k.ending}). Used by web search and by sessions on NanoGPT.`
+        : k.error || `${searchNeedsNanogpt()} Sessions on NanoGPT need it too.`, ...nano.controls);
+    if (nano.extra) keyRow.querySelector(".body").append(nano.extra);
+    return h("div", { class: "section" }, h("h3", {}, "Setup"), keyRow, ...setupRest(st));
+  }
   const chosen = st.setup || "nanogpt";
   const pickRow = h("div", { class: "model-row" }, h("label", {}, "Provider"),
     h("select", { onchange: (e) => {
@@ -405,7 +443,11 @@ function setupSection(st) {
     rows.push(keyRow);
     keyRow = searchRow;
   }
+  return h("div", { class: "section" }, h("h3", {}, "Setup"), ...rows, keyRow, ...setupRest(st));
+}
 
+// Setup's rows that aren't a key: Claude Code, the terminal commands, and an editor not found
+function setupRest(st) {
   const claude = check(Boolean(st.claude.path), "Claude Code",
     st.claude.path ? h("span", { class: "mono" }, st.claude.path) : st.claude.error);
 
@@ -427,13 +469,13 @@ function setupSection(st) {
   const noEditor = st.editors.length ? null
     : check("optional", "Claude Code in your editor", "VSCodium and VS Code weren't found. Use a terminal instead.");
 
-  return h("div", { class: "section" }, h("h3", {}, "Setup"), ...rows, keyRow, claude, commandsRow, noEditor);
+  return [claude, commandsRow, noEditor];
 }
 
 // ------------------------------------------------------------------ each profile's models, and the hosts that run them
 
 const ROLES = [
-  ["model", "Default", "What sessions start with, and what /model sonnet picks"],
+  ["model", "Default", "What sessions start with, what /model sonnet picks, and what checks each action in auto mode"],
   ["opus_model", "Opus", "What /model opus picks"],
   ["fast_model", "Quick", "What /model haiku picks, and what runs Claude Code's background tasks"],
   ["vision_model", "Images", "Describes images for a model that can't see them (a model that can sees them itself)"],
@@ -448,7 +490,7 @@ const ROUTE_LABELS = { speed: "Fastest overall", latency: "Fastest to start answ
 // without "private/" or "TEE/" in their own lists: every model there is one, and the label then fits
 function modelLabel(m, kind) {
   const p = m.price ? ` · $${price(m.price.input)} / $${price(m.price.cache_read)} / $${price(m.price.output)}` : "";
-  const id = kind === "private" ? m.id.replace(/^private\//, "") : kind === "tee" ? m.id.replace(/^TEE\//i, "") : m.id;
+  const id = shortModel(m.id, kind);
   // a model sealed where the others of its list aren't (Chutes' -TEE ones in a standard session): marked so
   const sealed = kind === "standard" && m.privacy && m.privacy.kind === "sealed" ? "🔐 " : "";
   return `${sealed}${id}${p}${m.vision ? " · sees images" : ""}${m.tools === false ? " · no tool calls" : ""}${m.included ? " · subscription" : ""}`;
@@ -639,15 +681,18 @@ function modelsSection(st) {
           + "a host you choose is always paid per use." : "");
   const reading = tab === "standard" || sealedBy ? `Loading ${providerName(st, tab)}'s models…`
     : `Loading NanoGPT's ${tab === "tee" ? "TEE" : "private"} models…`;
-  return h("div", { class: "section" }, h("h3", {}, "Models and web search", chipOf(tab)),
-    h("p", { class: "lead" }, "Each kind of session has its own settings."),
-    seg(tab, (pick) => { S.tab = pick; S.customUrl = ""; if (!S.models[pick]) loadModels(pick); render(); }),
-    warningOf(st, tab),
+  // tabs, not the kind of session new ones start as (Start's): which kind's settings are shown here
+  return h("div", { class: "section", id: "settings" }, h("h3", {}, "Settings for each kind of session"),
+    tabs(tab, (pick) => { S.tab = pick; S.customUrl = ""; if (!S.models[pick]) loadModels(pick); render(); }),
+    h("div", { class: "tab-body" },
+    h("div", { class: "row" }, chipOf(tab), tab === st.start ? h("span", { class: "small muted" }, "New sessions start as this kind.") : null),
+    // what this kind gives away, said here only when Start, above, doesn't already
+    tab === st.start ? null : warningOf(st, tab),
     providerRows(st, tab, p, save),
     h("p", { class: "lead" }, lead),
-    h("p", { class: "lead small" }, "Default is what sessions start with. Opus and Quick are what ", h("code", {}, "/model opus"),
-      " and ", h("code", {}, "/model haiku"), " pick; Quick also runs Claude Code's background tasks. Images describes images "
-      + "for a model that can't see them."),
+    h("p", { class: "lead small" }, "Default is what sessions start with, and what checks each action in auto mode. Opus and "
+      + "Quick are what ", h("code", {}, "/model opus"), " and ", h("code", {}, "/model haiku"), " pick; Quick also runs "
+      + "Claude Code's background tasks. Images describes images for a model that can't see them."),
     rows,
     // where each session's effort starts: Claude Code's own (the editor's Effort, /effort) changes it
     // in a session, and the model runs at whatever Claude Code says (proxy.py)
@@ -662,7 +707,7 @@ function modelsSection(st) {
     contextRows(tab, p, save),
     S.modelsError[tab] ? h("div", { class: "warnbox" }, `The list of models couldn't be loaded: ${S.modelsError[tab]}`) : null,
     S.models[tab] ? null : h("div", { class: "small muted row" }, h("span", { class: "spinner" }), reading),
-    searchPart(st, tab, p));
+    searchPart(st, tab, p)));
 }
 
 // ------------------------------------------------------------------ what runs on it now
@@ -738,26 +783,54 @@ function whereItWent(last) {
 }
 
 // each session on DA Private Coder now: what it runs, where, and where its last request went
+// what a session runs, in a line: its provider and the models it started with (default, Opus, Quick)
+function sessionRuns(s, kind) {
+  const [model, opus, quick] = (s.models || []).map((m) => shortModel(m, kind));
+  if (!model) return "";
+  const more = [opus && opus !== model ? `Opus: ${opus}` : "", quick && quick !== model ? `Quick: ${quick}` : ""].filter(Boolean);
+  return `Runs on ${providerSaid(s.provider)}: ${model}${more.length ? ` (${more.join(", ")})` : ""}`;
+}
+
+// requests refused here since the session's last answer, which went nowhere: said apart from where its answers come
+// from (a refusal shown as its "last request" read as calls to Claude, Nov 2026). For a conversation that began in
+// Claude Code as usual, why its summaries ask for that model first
+function refusedSaid(s) {
+  const r = s.refused;
+  if (!r) return "";
+  const n = r.count > 1 ? ` (${r.count} requests)` : "";
+  const why = s.began_on && r.models.includes(s.began_on)
+    ? ` This conversation began in Claude Code as usual, on ${s.began_on}: when it summarises itself, Claude Code asks `
+      + "for that model first, then makes the summary on this session's own."
+    : "";
+  return `Refused ${r.t.slice(11, 16)}: ${r.models.join(", ")}${n}, nothing sent.${why}`;
+}
+
 function sessionsSection(st) {
   const list = st.sessions || [];
   const rows = list.map((s) => {
     const kind = SESSIONS.includes(s.kind) ? s.kind : "standard";
-    const last = s.last;
-    const [chip, how, means] = last ? sentChip(last) : ["", "", ""];
+    const ok = s.answered;
+    const [chip, how, means] = ok ? sentChip(ok) : ["", "", ""];
+    const runs = sessionRuns(s, kind);
     return h("div", { class: "session" },
       h("div", { class: "row" }, chipOf(kind),
         h("span", { class: "path", title: s.folder }, h("bdi", { dir: "ltr" }, s.folder || "?")),
         h("span", { class: "small muted" }, s.editor ? `in ${s.editor}` : "in a terminal")),
-      last ? h("div", { class: "small" }, `Last request ${last.t.slice(11, 16)}: `, h("b", { class: "mono" }, last.model || "?"),
-        last.asked_for ? ` (a background task; Claude Code asked for ${last.asked_for})` : "", " ", h("span", { class: `chip ${chip}`, title: means || null }, how), " ",
-        whereItWent(last), last.error ? h("div", { class: "small bad-text" }, last.error) : null)
-        : h("div", { class: "small muted" }, "No requests yet."),
+      runs ? h("div", { class: "small muted" }, runs) : null,
+      ok ? h("div", { class: "small" }, `Last answer ${ok.t.slice(11, 16)}: `, h("b", { class: "mono" }, ok.model || "?"),
+        ok.asked_for ? ` (a background task; Claude Code asked for ${ok.asked_for})` : "", " ", h("span", { class: `chip ${chip}`, title: means || null }, how), " ",
+        whereItWent(ok))
+        : h("div", { class: "small muted" }, "No answers yet."),
+      s.refused ? h("div", { class: "small refused", title: s.refused.error || null }, refusedSaid(s)) : null,
+      // an error the provider gave, after the last answer (out of credit, say): said as it came
+      s.last && s.last.error && s.last.sent ? h("div", { class: "small bad-text" }, s.last.error) : null,
+      s.began_on && !s.refused ? h("div", { class: "small muted" }, `Began in Claude Code as usual, on ${s.began_on}.`) : null,
       s.stops ? h("div", { class: "warnbox" }, h("b", {}, "Will stop at its next request: "), s.stops) : null);
   });
   return h("div", { class: "section" }, h("h3", {}, "Running now"),
     h("p", { class: "lead" }, list.length
-      ? "Claude Code sessions using DA Private Coder, and where each one's last request went. The model shown is the one "
-        + "that actually answered. Claude Code not listed here is normal Claude Code, on Anthropic's servers."
+      ? "Claude Code sessions using DA Private Coder, what each runs on, and where its last answer came from. Claude Code "
+        + "not listed here is normal Claude Code, on Anthropic's servers."
       : "No Claude Code sessions are using DA Private Coder. Any Claude Code you have open is normal Claude Code, "
         + "on Anthropic's servers."),
     rows);
@@ -870,6 +943,13 @@ function attestedAs(t) {
   return t.attested_as || (t.level === "full" ? "TEE attested" : "TEE attested, only in part");
 }
 
+// whether a Private or TEE session is in use: new sessions start as one, a folder runs as one, or one is running
+function sealedInUse(st) {
+  const f = st.folders || {};
+  const kinds = [st.start, f.other, ...(f.list || []).map((x) => x.profile), ...(st.sessions || []).map((s) => s.kind)];
+  return kinds.some((k) => k === "private" || k === "tee");
+}
+
 function verifySection(st) {
   const a = st.attestation;
   const tee = st.config && st.config.profiles.tee;
@@ -906,7 +986,12 @@ function verifySection(st) {
     // what each shortfall costs, as its tooltip (manager.tee_attestations: llm/tee.py SHORTFALL_COSTS)
     t.error ? null : h("div", { class: "small muted", title: (t.costs || []).join("\n\n") || null }, t.summary),
     h("div", { class: "small muted" }, `Checked ${t.t ? t.t.slice(0, 16).replace("T", " ") : ""}.`)));
-  return h("div", { class: "section" }, h("h3", {}, "Enclave checks"),
+  // folded while no Private or TEE session is in use: its checks are theirs (open or shut as the user leaves it)
+  const open = S.verifyOpen === null ? sealedInUse(st) : S.verifyOpen;
+  const said = a ? `Private: verified ${a.t ? a.t.slice(0, 10) : ""}` : "Private: not checked yet";
+  return h("details", { class: "section fold", open, ontoggle: (e) => { S.verifyOpen = e.target.open; } },
+    h("summary", {}, h("h3", {}, "Enclave checks", h("span", { class: "small muted fold-said" },
+      `${said} · TEE: ${(st.tee_attestations || []).length ? "checked" : "none checked"}`))),
     h("div", { class: "small muted" }, "Private models"),
     a ? h("div", { class: "attest" },
       h("div", {}, h("span", { class: "chip ok" }, "verified"), " ", a.summary),

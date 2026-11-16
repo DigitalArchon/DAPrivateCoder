@@ -142,6 +142,17 @@ def _describe(profile: Profile, model: str) -> str:
     return f"{named[0].upper()}{named[1:]}, in the clear: not private"
 
 
+def auto_mode_env(profile: Profile) -> dict[str, str]:
+    """Where auto mode's safety check runs: on this computer, by the session's default model, through the
+    proxy like every other request. Logged in to claude.ai with Claude Code's experimental betas on (a
+    Standard session's), Claude Code otherwise waits for Anthropic's server to judge each action and turns
+    its own check off; no verdict comes back from another provider, so every action was refused (Nov 2026,
+    Claude Code 2.1.322: "the server-side classifier does not run for this session ... and no local one
+    judges in its place"). The model is named so the check never falls to one Claude Code picks itself.
+    Both variables are Claude Code's own, undocumented."""
+    return {"CLAUDE_CODE_AUTO_MODE_SERVER": "0", "CLAUDE_CODE_AUTO_MODE_MODEL": profile.model}
+
+
 def claude_env(profile: Profile, port: int, token: str) -> dict[str, str]:
     """The variables that point Claude Code at the proxy, with the profile's models."""
     env = {
@@ -163,6 +174,7 @@ def claude_env(profile: Profile, port: int, token: str) -> dict[str, str]:
     # where Claude Code compacts the conversation: for model names it doesn't know (these), it would
     # assume 200K and say so at every start; Claude's own models (a standard profile's anthropic/…) keep theirs
     env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = str(profile.context)
+    env.update(auto_mode_env(profile))
     if profile.kind != "standard":
         # no pre-release features (Anthropic's server-side context editing, tool search): nothing here runs them
         env["CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"] = "1"
@@ -402,8 +414,81 @@ def write_settings(args: list[str], pid: int) -> list[str]:
     return out
 
 
+# ------------------------------------------------------------- a conversation that began elsewhere
+
+# a conversation's id, as Claude Code names its transcript (and nothing that could name another path)
+CONVERSATION_ID = re.compile(r"^[0-9A-Fa-f][0-9A-Fa-f-]{7,63}$")
+
+
+def claude_config_dir(env: dict[str, str]) -> Path:
+    """Where Claude Code keeps its settings and conversations."""
+    return Path(env.get("CLAUDE_CONFIG_DIR") or "~/.claude").expanduser()
+
+
+def resumed_transcript(args: list[str], env: dict[str, str], cwd: str) -> Path | None:
+    """The transcript of the conversation Claude Code's `args` take up again, if one can be found: --resume ID
+    (-r ID, --resume=ID) wherever it was, or --continue (-c), the folder's latest. A conversation named by its
+    title, or chosen from Claude Code's own list, isn't looked for."""
+    projects = claude_config_dir(env) / "projects"
+    for i, arg in enumerate(args):
+        name, eq, inline = arg.partition("=")
+        if name in ("--resume", "-r"):
+            value = inline if eq else (args[i + 1] if i + 1 < len(args) else "")
+            if not CONVERSATION_ID.match(value):
+                return None
+            found = sorted(projects.glob(f"*/{value}.jsonl"))
+            return found[0] if found else None
+        if arg in ("--continue", "-c"):
+            # Claude Code's name for the folder: every character but a letter or digit made "-"
+            here = projects / re.sub(r"[^A-Za-z0-9]", "-", cwd)
+            found = sorted(here.glob("*.jsonl"), key=lambda p: p.stat().st_mtime) if here.is_dir() else []
+            return found[-1] if found else None
+    return None
+
+
+def models_answered(transcript: Path, limit: int = 256 << 20) -> list[str]:
+    """The models that answered in a transcript, in the order each first did. Only each reply's model is
+    read, never what was said; a transcript past `limit` bytes is read only that far."""
+    seen: list[str] = []
+    read = 0
+    with open(transcript, encoding="utf-8", errors="replace") as f:
+        for line in f:
+            read += len(line)
+            if read > limit:
+                break
+            if '"assistant"' not in line or '"model"' not in line:
+                continue
+            try:
+                record = json.loads(line)
+            except ValueError:
+                continue
+            message = record.get("message") if isinstance(record, dict) and record.get("type") == "assistant" else None
+            model = message.get("model") if isinstance(message, dict) else None
+            if isinstance(model, str) and model and not model.startswith("<") and model not in seen:
+                seen.append(model)
+    return seen
+
+
+def began_on(profile: Profile, models: list[str]) -> str:
+    """The first of `models` that is one of Claude's own and this session won't send to ("": none). Such a
+    conversation began in Claude Code as usual: its compaction asks for that model first (refused, nothing sent),
+    then makes its summary on the session's own model."""
+    if profile.kind == "standard" and providers.get(profile.provider).api == "anthropic":
+        return ""
+    return next((m for m in models if m.lower().startswith("claude-")), "")
+
+
+def began_elsewhere(profile: Profile, args: list[str], env: dict[str, str], cwd: str) -> str:
+    """began_on for the conversation `args` take up again, if any; "" when none, or it can't be read."""
+    try:
+        transcript = resumed_transcript(args, env, cwd)
+        return began_on(profile, models_answered(transcript)) if transcript else ""
+    except OSError:
+        return ""
+
+
 def start_proxy(profile: Profile, sock: socket.socket, token: str, config_path: Path | None,
-                editors: list[tuple[str, Path]] = ()) -> subprocess.Popen:
+                editors: list[tuple[str, Path]] = (), began: str = "") -> subprocess.Popen:
     errors = state_dir() / "proxy-errors.log"
     made(errors.parent)
     try:
@@ -416,6 +501,8 @@ def start_proxy(profile: Profile, sock: socket.socket, token: str, config_path: 
         command += ["--config", str(config_path)]
     for name, path in editors:
         command += ["--editor", name, str(path)]
+    if began:
+        command += ["--began-on", began]
     with open(errors, "ab") as log:
         return subprocess.Popen(command, pass_fds=(sock.fileno(),), stdin=subprocess.DEVNULL, stdout=log, stderr=log,
                                 start_new_session=True, env={**os.environ, "DAPRIVATECODER_TOKEN": token})
@@ -490,7 +577,7 @@ def run(cfg: Config, profile_name: str, argv: list[str]):
         raise LaunchError(f"Your managed Claude Code settings ({MANAGED_SETTINGS}) set {', '.join(clash)}, which would "
                           "override DA Private Coder's, so Claude Code wasn't started.")
     full_args = claude_args(profile, env, args, mcp_config(profile, cfg.path, dict(os.environ), editors, os.getcwd()))
-    proxy = start_proxy(profile, sock, token, cfg.path, editors)
+    proxy = start_proxy(profile, sock, token, cfg.path, editors, began_elsewhere(profile, args, dict(os.environ), os.getcwd()))
     sock.close()                                  # the proxy has it now
     full_args = write_settings(full_args, proxy.pid)
     notice = search_notice(profile) or (NO_SEARCH_KEY if asked.web_search != profile.web_search else "")

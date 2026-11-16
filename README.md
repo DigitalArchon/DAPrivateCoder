@@ -75,14 +75,25 @@ Tinfoil's, Chutes', Anthropic's or another provider's.
    terminal**. **Private** is chosen; **TEE** and **Standard** aren't end-to-end encrypted. To type
    `claude-private` in a terminal yourself instead, **Install** the terminal commands (optional).
 4. **Running now** lists each Claude Code session on DA Private Coder: its folder, the editor or
-   terminal it's in, its kind, and the model its last request went to and how (sealed to the
-   enclave, or not). Claude Code not listed there runs as usual, on Anthropic's models.
+   terminal it's in, its kind, the provider and models it runs on, the model its last answer came
+   from and how (sealed to the enclave, or not), and, apart, any request refused on this computer
+   (nothing sent). Claude Code not listed there runs as usual, on Anthropic's models.
 
 In a session, `/status` shows the base URL as `http://127.0.0.1:…`: that is DA Private Coder.
 `/model` offers the profile's models (Sonnet is GLM-5.3, Opus Kimi K3.1 Pro, Haiku DeepSeek V4.1 Flash) and
 the other models NanoGPT's Private Mode offers now. The model Claude Code shows is the one that runs:
 one a session won't send to (a Claude model in a private session, say) is refused, saying why, and
 never swapped for another; Claude Code then keeps the model it had.
+
+**Auto mode** works in every session. Claude Code checks each action that needs it with the session's
+default model (GLM-5.3 unless you chose another), on this computer and through DA Private Coder like
+every other request of the session, never on Anthropic's servers. A check is a request of its own
+(mostly from the prompt cache) and takes a few seconds.
+
+A conversation you began in Claude Code as usual and take up again on DA Private Coder (`--resume`,
+or reopening it in the editor) goes on with the session's models. When it summarises itself, Claude
+Code first asks for the Claude model it began on: that is refused, nothing is sent, and the summary
+is made by the session's own model. **Running now** says so.
 
 ## In your editor
 
@@ -130,7 +141,7 @@ it a temporary server-side issue); a busy or failing provider, it does.
 
 ## Models and cost
 
-Chosen in the window (**Models**, Private), or in `~/.config/daprivatecoder/config.toml`:
+Chosen in the window (**Settings**, Private), or in `~/.config/daprivatecoder/config.toml`:
 
 | Role | Model | Input | Cached input | Output |
 |---|---|---|---|---|
@@ -143,7 +154,7 @@ shows today's. Kimi K3.1 Pro and DeepSeek V4.1 Flash see images, while GLM-5.3 h
 Kimi K3.1 Pro took the place of Kimi K3 (`private/kimi-k3`), which NanoGPT stopped offering on
 November 11 2026. A settings file that names a model keeps it: if yours says `private/kimi-k3`, the
 window shows it as no longer listed, and a session refuses it before anything is sent, naming the
-models NanoGPT offers. Choose another under **Models**.
+models NanoGPT offers. Choose another under **Settings**.
 
 Claude Code sends the whole conversation with every request; what repeats comes from the prompt
 cache, at the cached price. **Usage** in the window shows each request's tokens and cost. Ignore
@@ -179,12 +190,12 @@ doesn't (GLM-5.3) has them described, by the **Images** model, also a private on
 
 Both are built after SealedLore's, and labelled preliminary.
 
-- **Tinfoil** (Models → Private → Provider: Tinfoil, and your Tinfoil key): every model on Tinfoil
+- **Tinfoil** (Settings → Private → Provider: Tinfoil, and your Tinfoil key): every model on Tinfoil
   is end-to-end encrypted, with the highest privacy. Its router is attested from Tinfoil's own
   attestation service against Sigstore's record before anything is sent, the connection is pinned
   to the TLS key it proves, and each request is sealed (EHBP) to the router's attested key. Its
   list of models and its attestation need no key; **Enclave checks** can check it now.
-- **Chutes** (Models → TEE → Provider: Chutes, and your Chutes key): its `-TEE` models are
+- **Chutes** (Settings → TEE → Provider: Chutes, and your Chutes key): its `-TEE` models are
   end-to-end encrypted to one Chutes instance, with **partial privacy**: each instance's Intel TDX
   quote, for a number of ours, must bind the key the request is sealed to (ML-KEM-768), NVIDIA must
   vouch for its GPUs, and its VM image must be one Chutes publishes; the reply streams, each piece
@@ -303,7 +314,7 @@ runs the model:
   and password written into the address (`https://user:password@host/v1`) are kept in your keyring
   too, not in the settings file, and nothing the app shows or logs names them. Over plain http to
   another machine on your network, where anyone on it could read them, neither goes until you say
-  yes where the window asks (Models, Standard; No is the default, and a No is kept): a key that
+  yes where the window asks (Settings, Standard; No is the default, and a No is kept): a key that
   went there with an earlier version is held back too, until you do.
 - **Runs on** (per model, NanoGPT and OpenRouter): the provider's own choice of host (on NanoGPT,
   what a subscription covers), or the fastest, the cheapest, the quickest to answer, or a host you
@@ -316,8 +327,8 @@ runs the model:
   on NanoGPT attested; once a private model has been used, nothing more of that session goes in the
   clear.
 
-Both kinds have their own models, effort and web search (**Models and web search** in the window,
-with the same Private, TEE, Standard choice), and start from the window, a folder chosen for them in
+Both kinds have their own models, effort and web search (**Settings for each kind of session** in
+the window, a tab for each), and start from the window, a folder chosen for them in
 the editor, or `daprivatecoder claude --profile tee` (or `standard`) in a terminal.
 
 ## Web search

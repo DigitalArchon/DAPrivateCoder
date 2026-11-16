@@ -283,7 +283,7 @@ as usual (plain `claude`, or a folder not chosen for DA Private Coder) is Anthro
 - **Nothing secret goes over plain `http://` to another machine on your network without your
   say.** A provider of your own may have such an address; its key, and a password written into its
   address, would then go unencrypted, where anyone on that network (a café's or a hotel's Wi-Fi too)
-  can read them. The window asks first, where its address and key are (Models, Standard), No the
+  can read them. The window asks first, where its address and key are (Settings, Standard), No the
   default: until you say yes nothing is sent there, and a No is kept for that address, not asked
   again (Ask me again takes it back); `daprivatecoder key set --provider custom` asks in a terminal.
   A key that was already going there before this version is held back too, until you say yes. To this computer
@@ -563,8 +563,16 @@ copy of the settings file beside it. A folder you chose then runs its Claude Cod
 Coder; any other folder's Claude Code is started exactly as the editor would start it, with nothing
 of DA Private Coder's in it, whether DA Private Coder is open or not. A conversation keeps the kind
 it started with: if its folder's choice changes, or the switch is turned off, it stops at its next
-request, saying why. **Running now** lists each session on DA Private Coder, where its last request
-went and how, and which will stop.
+request, saying why. **Running now** lists each session on DA Private Coder, what it runs on, where its
+last answer came from and how, the requests refused on this computer since (nothing sent), and which
+will stop.
+
+In auto mode, Claude Code checks each action that needs it by sending the conversation so far, and the
+action, to a model. DA Private Coder has every session make that check on this computer, with the
+session's default model, through its proxy: it is sealed, attested or in the clear exactly as the
+session's other requests are, and Anthropic's servers never see it. (Logged in to claude.ai, Claude
+Code would otherwise wait for Anthropic's server to check each action, which no other provider does,
+and refuse every one.)
 
 ## Web searches and the pages Claude Code reads
 

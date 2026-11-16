@@ -234,3 +234,18 @@ label.tick input { margin: 0; }
 .bad-text { color: var(--danger); }
 .recent .item .path.link { cursor: pointer; }
 .recent .item .path.link:hover { text-decoration: underline; }
+/* Settings: tabs for which kind's settings are shown, drawn unlike Start's toggle (which chooses what new sessions are) */
+.tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); margin: 0 0 10px; }
+.tab { border: 1px solid transparent; border-bottom: none; border-radius: 8px 8px 0 0; background: transparent;
+  color: var(--muted); padding: 4px 16px; margin-bottom: -1px; }
+.tab:hover:not(:disabled) { color: var(--text); border-color: transparent; }
+.tab.on { color: var(--text); background: var(--panel-2); border-color: var(--border); border-bottom: 1px solid var(--panel-2); }
+.tab.kind-private.on { box-shadow: inset 0 2px 0 var(--private); }
+.tab.kind-tee.on { box-shadow: inset 0 2px 0 var(--tee); }
+.tab.kind-standard.on { box-shadow: inset 0 2px 0 var(--warn); }
+.tab-body > .row:first-child { margin-bottom: 6px; }
+/* Start: what a kind of session runs, in a line */
+.start .summary { margin: 0 0 6px; align-items: center; }
+.start .summary > span { overflow-wrap: anywhere; flex: 1 1 260px; }
+/* Running now: requests refused here, which went nowhere */
+.session .refused { color: var(--warn); }

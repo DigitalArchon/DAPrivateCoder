@@ -685,3 +685,32 @@ async def test_where_claude_code_compacts_is_saved_from_the_window(window):
     assert st["config"]["profiles"]["private"]["context"] == 400000 and config.load().profile("private").context == 400000
     status, said = await call(app, "POST", "/api/profile", {"profile": "private", "fields": {"context": 123}})
     assert status == 400 and "200000, 400000, 1000000" in said["error"]
+
+
+async def test_a_sessions_refused_requests_are_said_apart_from_its_answers(window, tmp_path, monkeypatch):
+    """A request refused here went nowhere: shown as a session's "last request", Claude Code's ask for the model a
+    conversation began on (when it summarised itself) read as calls to Claude (Nov 2026). Running now says what the
+    session runs, its last answer, and the requests refused since, apart; one answered after clears them."""
+    from daprivatecoder import launcher
+    from daprivatecoder.usagelog import UsageLog
+    app, *_ = window
+    me = os.getpid()
+    monkeypatch.setattr(launcher, "proxy_alive", lambda pid: pid == me)
+    launcher.sessions_dir().mkdir(parents=True)
+    launcher.session_file(me).write_text(json.dumps({"session": "s1", "profile": "standard", "kind": "standard",
+                                                     "folder": str(tmp_path), "editors": [], "started": 1,
+                                                     "began_on": "claude-opus-5-5"}))
+    log = UsageLog(config.state_dir() / "requests.log", "s1")
+    log.write("session", profile="standard", provider="nanogpt",
+              models=["z-ai/glm-5.3", "moonshotai/kimi-k3", "z-ai/glm-5.3-flash"])
+    log.write("request", model="z-ai/glm-5.3", tier="standard", provider="nanogpt", status=200)
+    for _ in range(2):
+        log.write("request", model="claude-opus-5-5", status=400, error="claude-opus-5-5 is one of Claude's own models")
+    [s] = (await call(app, "GET", "/api/state"))[1]["sessions"]
+    assert s["provider"] == "nanogpt" and s["models"] == ["z-ai/glm-5.3", "moonshotai/kimi-k3", "z-ai/glm-5.3-flash"]
+    assert s["began_on"] == "claude-opus-5-5" and s["answered"]["model"] == "z-ai/glm-5.3"
+    assert s["refused"]["count"] == 2 and s["refused"]["models"] == ["claude-opus-5-5"] and s["refused"]["sent"] == ""
+    assert s["last"]["model"] == "claude-opus-5-5"            # as before: the last request, whatever became of it
+    log.write("request", model="z-ai/glm-5.3", tier="standard", provider="nanogpt", status=200)
+    [s] = (await call(app, "GET", "/api/state"))[1]["sessions"]
+    assert s["refused"] is None and s["answered"]["model"] == "z-ai/glm-5.3"

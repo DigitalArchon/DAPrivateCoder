@@ -689,7 +689,7 @@ class Proxy:
         if provider == "nanogpt":
             raise Refused(403, "No NanoGPT API key is stored. Run `daprivatecoder key set` in a terminal, then try again.")
         tab = {"private": "Private", "tee": "TEE"}.get(self.profile.kind, "Standard")
-        raise Refused(403, f"No {NAMES[provider]} API key is stored: add it in DA Private Coder's window (Models, "
+        raise Refused(403, f"No {NAMES[provider]} API key is stored: add it in DA Private Coder's window (Settings, "
                            f"{tab}), or run `daprivatecoder key set --provider {provider}`, then try again.")
 
     def _private(self, model: str):

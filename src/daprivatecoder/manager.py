@@ -392,10 +392,34 @@ class Manager:
         from . import launcher
         records = usagelog.read(config.state_dir() / "requests.log")
         checks = _reply_checks(records)
+        # each session's last request, its last one a model answered, the requests refused here (sent nowhere)
+        # since then, and what it was started with (its "session" line: provider and models)
         last: dict[str, dict] = {}
+        answered: dict[str, dict] = {}
+        refused: dict[str, list[dict]] = {}
+        began: dict[str, dict] = {}
         for r in records:
-            if r.get("kind") == "request" and r.get("session"):
-                last[r["session"]] = r
+            sid = r.get("session")
+            if not sid:
+                continue
+            if r.get("kind") == "session":
+                began[sid] = r
+            elif r.get("kind") == "request":
+                last[sid] = r
+                if r.get("status") == 200:
+                    answered[sid] = r
+                    refused.pop(sid, None)
+                elif not _sent(r):
+                    refused.setdefault(sid, []).append(r)
+
+        def said(r: dict) -> dict:
+            return {"t": r.get("t", "")[:19].replace("T", " "), "model": r.get("model", ""),
+                    "asked_for": r.get("asked_for", ""), "sent": _sent(r), "status": r.get("status"),
+                    "error": str(r.get("error") or "")[:300], "provider": r.get("provider", ""),
+                    "service": r.get("service", ""),
+                    # what the TEE model's attestation was of ("gateway": RedPill's), for the window
+                    "attested": r.get("attested", ""), **_reply_of(r, checks)}
+
         out = []
         for pid, path in launcher.live_sessions():
             try:
@@ -403,16 +427,20 @@ class Manager:
             except (OSError, ValueError):
                 continue
             editors = [(n, Path(p)) for n, p in info.get("editors") or []]
-            r = last.get(info.get("session"))
+            sid = info.get("session")
+            r, ok, no, start = last.get(sid), answered.get(sid), refused.get(sid) or [], began.get(sid) or {}
+            models = start.get("models") if isinstance(start.get("models"), list) else []
             out.append({"pid": pid, "profile": info.get("profile", ""), "kind": info.get("kind", ""),
                         "folder": info.get("folder", ""), "editor": ", ".join(n for n, _ in editors),
                         "started": info.get("started"),
-                        "last": {"t": r.get("t", "")[:19].replace("T", " "), "model": r.get("model", ""),
-                                 "asked_for": r.get("asked_for", ""), "sent": _sent(r), "status": r.get("status"),
-                                 "error": str(r.get("error") or "")[:300], "provider": r.get("provider", ""),
-                                 "service": r.get("service", ""),
-                                 # what the TEE model's attestation was of ("gateway": RedPill's), for the window
-                                 "attested": r.get("attested", ""), **_reply_of(r, checks)} if r else None,
+                        # what it runs: the provider and the models it started with (default, opus, quick)
+                        "provider": start.get("provider", ""), "models": [m for m in models if isinstance(m, str)][:3],
+                        "began_on": info.get("began_on") or "",
+                        "last": said(r) if r else None,
+                        "answered": said(ok) if ok else None,
+                        # refused since the last answer: the latest, and how many (the model each asked for)
+                        "refused": {**said(no[-1]), "count": len(no),
+                                    "models": sorted({x.get("model", "") for x in no})} if no else None,
                         "stops": gate.Gate(info.get("profile", ""), editors, info.get("folder", "")).why()})
         return sorted(out, key=lambda s: s.get("started") or 0, reverse=True)
 

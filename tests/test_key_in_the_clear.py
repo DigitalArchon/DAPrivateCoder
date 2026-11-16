@@ -1,7 +1,7 @@
 """A key that would go over plain http to another machine on your network (where anyone on it can read it) is asked
 about first, No the default, and a No is kept for that address (the cross-app standard, Nov 2026, as SealedLore's
 keys_in_the_clear): until you say Yes it is refused before anything is sent, in words naming the address and the
-ways out. The window asks where your provider's address is typed (Models, Standard); `daprivatecoder key set` asks
+ways out. The window asks where your provider's address is typed (Settings, Standard); `daprivatecoder key set` asks
 in a terminal. https, this computer itself and an onion service need no question."""
 
 import json
