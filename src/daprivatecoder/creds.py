@@ -40,8 +40,9 @@ from .providers import PROVIDERS
 
 SERVICE = "daprivatecoder"
 USER = "nanogpt"            # NanoGPT's key: private and TEE sessions, web search, and a standard one on NanoGPT
-# where DA Vibe Manager keeps the same key, for `daprivatecoder key set --from-vibe-manager`
-VIBE_MANAGER = ("davibemanager", "provider:NanoGPT")
+# where DA Vibe Manager keeps its providers' keys, for `daprivatecoder key set --from-vibe-manager`: its keyring
+# service, and the entry of the provider called {} (vibe_manager_key finds which of them is NanoGPT's)
+VIBE_MANAGER = ("davibemanager", "provider:{}")
 
 
 class KeyringUnavailable(Exception):
@@ -344,10 +345,45 @@ def forget_address(setting: str) -> None:
     _known.pop((SERVICE, user), None)
 
 
-def vibe_manager_key() -> str | None:
-    """The NanoGPT key DA Vibe Manager stored, if it did: asked each time (stored there since)."""
-    _known.pop(VIBE_MANAGER, None)
-    return _get(*VIBE_MANAGER)
+def _vibe_manager_provider(base_url: str) -> str | None:
+    """The name of DA Vibe Manager's provider whose key was entered for `base_url`'s origin, from its settings
+    file; None when there is none (or no settings file to say). There a provider is NanoGPT by its address, not its
+    name, and its key is held to the addresses it was entered for (its Provider.key_for; an older file has none,
+    and the key goes where the provider's addresses are)."""
+    import os
+    import tomllib
+    from pathlib import Path
+
+    want = origin(base_url)
+    path = Path(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")) / "davibemanager" / "config.toml"
+    try:
+        listed = tomllib.loads(path.read_text("utf-8")).get("providers")
+    except (OSError, ValueError):
+        return None
+    for p in listed if isinstance(listed, list) else []:
+        if not isinstance(p, dict) or not isinstance(p.get("name"), str):
+            continue
+        held = p.get("key_for")
+        if not isinstance(held, list):
+            held = [origin(url) for url in (p.get("base_url"), p.get("builder_url")) if isinstance(url, str) and url]
+        if want and want in held:
+            return p["name"]
+    return None
+
+
+def vibe_manager_key(base_url: str = "") -> str | None:
+    """The NanoGPT key DA Vibe Manager stored, if it did: asked each time (stored there since). The key of its
+    provider that was entered for `base_url` (where NanoGPT's key goes here; NanoGPT's own address when not said),
+    whatever that provider is called there. Until Nov 2026 it was the entry of the provider *called* NanoGPT: one of
+    that name pointed at another server gave that server's key to nano-gpt.com, and NanoGPT under another name
+    wasn't found."""
+    from .providers import NANOGPT_BASE_URL
+    name = _vibe_manager_provider(base_url or NANOGPT_BASE_URL)
+    if name is None:
+        return None
+    entry = (VIBE_MANAGER[0], VIBE_MANAGER[1].format(name))
+    _known.pop(entry, None)
+    return _get(*entry)
 
 
 def forget() -> None:

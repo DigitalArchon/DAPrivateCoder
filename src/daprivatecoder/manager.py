@@ -147,7 +147,7 @@ class Manager:
         key = {**_key_state("nanogpt", cfg.base_url if cfg else ""), "vibe_manager": False}
         if not key["stored"] and not key["error"]:
             try:
-                key["vibe_manager"] = bool(creds.vibe_manager_key())
+                key["vibe_manager"] = bool(creds.vibe_manager_key(cfg.base_url if cfg else ""))
             except creds.KeyringUnavailable:
                 pass
         out["key"] = key
@@ -316,10 +316,11 @@ class Manager:
         creds.answer_in_the_clear(*self._provider_of(provider), allow)
 
     def import_key(self) -> None:
-        key = creds.vibe_manager_key()
+        provider, base_url = self._provider_of("nanogpt")
+        key = creds.vibe_manager_key(base_url)
         if not key:
             raise UserError("DA Vibe Manager has no NanoGPT key in your keyring.")
-        creds.set_key(key, *self._provider_of("nanogpt"))
+        creds.set_key(key, provider, base_url)
 
     def clear_key(self, provider: str = "nanogpt") -> None:
         creds.delete_key(*self._provider_of(provider))

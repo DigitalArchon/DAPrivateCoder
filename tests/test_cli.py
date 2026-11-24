@@ -59,11 +59,41 @@ def test_a_key_no_header_can_carry_is_refused_and_never_said(ring, monkeypatch, 
     assert failed and said.startswith("Not searched:") and "no API key has" in said and "abc" not in said
 
 
-def test_the_key_can_come_from_vibe_manager(ring, capsys):
+def _vibe_manager_settings(tmp_path, text: str) -> None:
+    folder = tmp_path / "config" / "davibemanager"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "config.toml").write_text(text)
+
+
+def test_the_key_can_come_from_vibe_manager(ring, tmp_path, capsys):
     assert cli.main(["key", "set", "--from-vibe-manager"]) == 1 and "no NanoGPT key" in capsys.readouterr().err
     ring.store[("davibemanager", "provider:NanoGPT")] = "sk-from-dvm"
+    _vibe_manager_settings(tmp_path, '[[providers]]\nname = "NanoGPT"\nbase_url = "https://nano-gpt.com/api/v1"\n'
+                                     'key_for = ["https://nano-gpt.com:443"]\n')
     creds.forget()
     assert cli.main(["key", "set", "--from-vibe-manager"]) == 0 and creds.get_key() == "sk-from-dvm"
+
+
+def test_vibe_managers_nanogpt_key_is_found_by_its_address_not_its_name(ring, tmp_path):
+    """There a provider is NanoGPT by its address. One *called* NanoGPT but pointed at another server gave that
+    server's key to nano-gpt.com, and NanoGPT under another name wasn't found (until Nov 2026)."""
+    ring.store[("davibemanager", "provider:NanoGPT")] = "sk-ENTERED-FOR-ANOTHER-HOST"
+    ring.store[("davibemanager", "provider:Nano")] = "sk-nano-real"
+    _vibe_manager_settings(tmp_path, '[[providers]]\nname = "NanoGPT"\nbase_url = "https://llm.example/v1"\n'
+                                     'key_for = ["https://llm.example:443"]\n\n'
+                                     '[[providers]]\nname = "Nano"\nbase_url = "https://nano-gpt.com/api/v1"\n'
+                                     'key_for = ["https://nano-gpt.com:443"]\n')
+    assert creds.vibe_manager_key() == "sk-nano-real"
+    # an older settings file says nothing of where a key was entered for: it goes where its provider's addresses are
+    _vibe_manager_settings(tmp_path, '[[providers]]\nname = "NanoGPT"\nbase_url = "https://llm.example/v1"\n\n'
+                                     '[[providers]]\nname = "Nano"\nbuilder_url = "https://nano-gpt.com/api/v1"\n')
+    assert creds.vibe_manager_key() == "sk-nano-real"
+    # none of its providers has a key for NanoGPT, or its settings can't be read: nothing is taken
+    _vibe_manager_settings(tmp_path, '[[providers]]\nname = "NanoGPT"\nbase_url = "https://llm.example/v1"\n')
+    assert creds.vibe_manager_key() is None
+    _vibe_manager_settings(tmp_path, 'providers = "broken\n')
+    assert creds.vibe_manager_key() is None
+    assert creds.vibe_manager_key("https://llm.example/v1") is None
 
 
 def test_the_editor_switch(tmp_path, monkeypatch, capsys):

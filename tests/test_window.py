@@ -207,6 +207,15 @@ def test_the_page_takes_the_token_out_of_the_address_bar_and_exchanges_a_code_fo
     assert 'fetch("/api/launch", { method: "POST"' in script and "launchToken(LAUNCH).then" in script
 
 
+def vibe_manager_has_nanogpt(tmp_path) -> None:
+    """DA Vibe Manager's settings file, saying its provider NanoGPT's key was entered for NanoGPT's own address:
+    which of its keys is NanoGPT's is read from there (creds.vibe_manager_key)."""
+    folder = tmp_path / "config" / "davibemanager"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "config.toml").write_text('[[providers]]\nname = "NanoGPT"\nbase_url = "https://nano-gpt.com/api/v1"\n'
+                                        'key_for = ["https://nano-gpt.com:443"]\n')
+
+
 async def test_setting_it_up_from_the_window(window, ring, tmp_path):
     app, started, settings, quit_called = window
     status, st = await call(app, "GET", "/api/state")
@@ -218,6 +227,7 @@ async def test_setting_it_up_from_the_window(window, ring, tmp_path):
     status, st = await call(app, "POST", "/api/key", {"key": "not a key"})
     assert status == 400 and "isn't an API key" in st["error"]
     ring.store[("davibemanager", "provider:NanoGPT")] = "sk-dvm"
+    vibe_manager_has_nanogpt(tmp_path)
     st = (await call(app, "POST", "/api/key", {"from": "vibe-manager"}))[1]
     assert st["key"]["stored"] and st["key"]["ending"] == "-dvm"
     st = (await call(app, "POST", "/api/commands", {}))[1]
@@ -245,7 +255,7 @@ async def test_a_key_no_header_can_carry_is_refused_and_never_said(window, ring)
     assert not st["key"]["stored"] and "no API key has" in st["key"]["error"] and "abc" not in st["key"]["error"]
 
 
-async def test_a_key_stored_in_the_window_is_kept_for_its_address_and_said_when_that_changes(window, ring):
+async def test_a_key_stored_in_the_window_is_kept_for_its_address_and_said_when_that_changes(window, ring, tmp_path):
     from dataclasses import replace
 
     from daprivatecoder import config
@@ -254,6 +264,7 @@ async def test_a_key_stored_in_the_window_is_kept_for_its_address_and_said_when_
     st = (await call(app, "POST", "/api/key", {"key": "sk-nano-123456"}))[1]
     assert st["key"]["stored"] and ring.store[("daprivatecoder", "nanogpt_origin")] == "https://nano-gpt.com:443"
     ring.store[("davibemanager", "provider:NanoGPT")] = "sk-dvm"
+    vibe_manager_has_nanogpt(tmp_path)
     await call(app, "POST", "/api/key", {"from": "vibe-manager"})
     assert ring.store[("daprivatecoder", "nanogpt_origin")] == "https://nano-gpt.com:443"
     # NanoGPT's base_url edited by hand in the settings file: Setup says why the key isn't used, and asks for it

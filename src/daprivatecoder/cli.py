@@ -115,7 +115,7 @@ def _key(args) -> int:
     if args.from_vibe_manager:
         if provider != "nanogpt":
             raise CliError("DA Vibe Manager's key is NanoGPT's.")
-        key = creds.vibe_manager_key() or ""
+        key = creds.vibe_manager_key(base_url) or ""
         if not key:
             raise CliError("DA Vibe Manager has no NanoGPT key in your keyring.")
     elif sys.stdin.isatty():
