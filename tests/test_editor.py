@@ -69,3 +69,28 @@ def test_switch_keeps_a_backup_and_refuses_a_file_it_cant_read(tmp_path):
     assert path.read_text() == '{"editor.fontSize": 14,, }'
     fresh = tmp_path / "Fresh" / "settings.json"
     assert editor.switch(fresh, WRAPPER) and editor.current(fresh) == WRAPPER
+
+
+@pytest.mark.parametrize("text", SAMPLES + ['{\r\n    "editor.fontSize": 14\r\n}\r\n', "\n\n",
+                                            '{\n    "a": 1, // one\n}\n'])
+def test_off_gives_the_file_back_as_it_was_before_on(tmp_path, text):
+    """Taking the entry out left an empty file as "{}", dropped a trailing comma, and a file of CRLF lines, read as
+    text, was written back with LF ones (until Nov 2026). Off gives back the file as it was, kept beside it, while the
+    file is as on left it."""
+    path = tmp_path / "settings.json"
+    path.write_bytes(text.encode("utf-8"))
+    assert editor.switch(path, WRAPPER) and editor.current(path) == WRAPPER
+    on = path.read_bytes()
+    if "\r\n" in text:
+        assert on.count(b"\n") == on.count(b"\r\n")                       # its own line ends, the new line's too
+    assert editor.switch(path, None)
+    assert path.read_bytes() == text.encode("utf-8")
+
+
+def test_off_after_the_file_was_edited_takes_out_the_entry_alone(tmp_path):
+    path = tmp_path / "settings.json"
+    path.write_text('{\n    "a": 1,\n}\n')
+    editor.switch(path, WRAPPER)
+    path.write_text(path.read_text().replace('"a": 1', '"a": 2'))          # changed by hand since
+    editor.switch(path, None)
+    assert loads(path.read_text()) == {"a": 2} and editor.current(path) is None

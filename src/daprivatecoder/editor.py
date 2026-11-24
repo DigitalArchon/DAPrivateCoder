@@ -152,8 +152,9 @@ def set_value(text: str, key: str, value) -> str:
         if k == key:
             return text[:vs] + rendered + text[ve:]
     pair = f"{json.dumps(key)}: {rendered}"
+    nl = "\r\n" if "\r\n" in text else "\n"            # the file's own line ends
     if not text.strip():
-        return "{\n    " + pair + "\n}\n"
+        return "{" + nl + "    " + pair + nl + "}" + nl
     s = _mask(text)
     close = s.rfind("}")
     if close < 0 or s.find("{") < 0:
@@ -161,7 +162,7 @@ def set_value(text: str, key: str, value) -> str:
     p = close - 1
     while p >= 0 and s[p] in _SPACE:
         p -= 1
-    joint = "\n    " if s[p] in "{," else ",\n    "
+    joint = (nl if s[p] in "{," else "," + nl) + "    "
     return text[:p + 1] + joint + pair + text[p + 1:]
 
 
@@ -275,31 +276,42 @@ def _write(path: Path, text: str) -> None:
 def switch(path: Path, wrapper: str | None) -> bool:
     """Name `wrapper` as the extension's process wrapper in the settings at `path` (None: name none).
     Whether the file changed."""
+    backup = path.with_name(path.name + ".daprivatecoder-backup")
+    # read as it is, its line ends too: read as text, a file of CRLF lines was written back with LF ones (until Nov 2026)
+    existed = path.exists()
     try:
-        text = path.read_text(encoding="utf-8") if path.exists() else ""
-    except OSError as e:
+        text = path.read_bytes().decode("utf-8") if existed else ""
+    except (OSError, UnicodeDecodeError) as e:
         raise EditorError(f"{path} couldn't be read: {e}") from None
     try:
         before = loads(text)
     except EditorError as e:
         raise EditorError(f"{path} {e}, so it wasn't changed. Set {KEY} in the editor's Settings instead.") from None
+    want = dict(before)
+    if wrapper is None:
+        want.pop(KEY, None)
+    else:
+        want[KEY] = wrapper
     new = set_value(text, KEY, wrapper) if wrapper is not None else remove_key(text, KEY)
+    if wrapper is None and KEY in before:
+        # off, with the file as on left it: the file as it was before, kept beside it. Taking the entry out left
+        # an empty file as "{}", a value of null gone, and a trailing comma dropped (until Nov 2026)
+        try:
+            kept = backup.read_bytes().decode("utf-8")
+            if set_value(kept, KEY, before[KEY]) == text and loads(kept) == want:
+                new = kept
+        except (OSError, UnicodeDecodeError, EditorError):
+            pass
     if new == text:
         return False
     try:
         after = loads(new)
     except EditorError:
         after = None
-    want = dict(before)
-    if wrapper is None:
-        want.pop(KEY, None)
-    else:
-        want[KEY] = wrapper
     if after != want:
         raise EditorError(f"Editing {path} in place didn't give the settings it should, so it wasn't changed. "
                           f"Set {KEY} in the editor's Settings instead.")
-    if text:
-        backup = path.with_name(path.name + ".daprivatecoder-backup")
+    if existed:                                  # an empty file too: off gives it back as it was
         _write(backup, text)
     _write(path, new)
     return True
