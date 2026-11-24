@@ -775,3 +775,29 @@ def test_two_settings_changed_at_once_are_both_kept():
             t.join()
         cfg = config.load()
         assert (cfg.profile("tee").reasoning, cfg.profile("private").context) == (effort, context), i
+
+
+async def test_a_list_of_models_that_cant_be_read_says_why_in_words(window, monkeypatch):
+    """A provider of your own that never answered was "ConnectTimeout: " (httpx's timeouts say nothing), and one that
+    answered with a page rather than a list, a JSON parser's complaint (until Nov 2026)."""
+    import httpx
+    app, *_ = window
+    await call(app, "POST", "/api/profile", {"profile": "standard", "fields": {
+        "provider": "custom", "base_url": "https://my-server.example.com/v1", "model": "my-model"}})
+    answers = []
+
+    async def get(self, url, **kw):
+        answer = answers.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+    monkeypatch.setattr(httpx.AsyncClient, "get", get)
+    answers += [httpx.ConnectTimeout(""), httpx.ConnectError("[Errno 111] Connection refused"),
+                httpx.Response(200, content=b"<html>Welcome</html>")]
+    said = []
+    for _ in range(3):
+        status, body = await call(app, "GET", "/api/models?profile=standard&fresh=1")
+        said.append((status, body["error"]))
+    assert said == [(400, "https://my-server.example.com/v1 didn't answer in time when asked for its models."),
+                    (400, "https://my-server.example.com/v1 couldn't be reached to ask for its models."),
+                    (400, "https://my-server.example.com/v1 didn't answer with a list of models.")]

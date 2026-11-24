@@ -27,7 +27,7 @@ def script(*names: str) -> str:
         if m := re.search(rf"^const {name} = [{{\[]$.*?^[}}\]];$", text, re.M | re.S):
             parts.append(m.group(0))
             continue
-        m = re.search(rf"^function {name}\(.*?^}}$", text, re.M | re.S)
+        m = re.search(rf"^(?:async )?function {name}\(.*?^}}$", text, re.M | re.S)
         assert m, f"{name} isn't in app.js"
         parts.append(m.group(0))
     return "\n".join(parts)
@@ -322,3 +322,27 @@ const test = ([section, index, extra]) => {
     assert effort == [[1, 1, None]]                 # a list changed with the keyboard
     assert shifted == []                            # a row came before it: no other kind of field is given it
     assert first == [[1, 0, None]]
+
+
+def test_only_the_list_of_models_last_asked_for_is_shown():
+    """An address saved, then another: the first's list, slower to answer (one that never did, after 30 s), came after
+    the second's and put its error in its place (until Nov 2026). While a list is on its way, the tab says so."""
+    code = script("loadModels") + """
+const S = { tab: "", state: { start: "standard" }, models: {}, modelsError: {}, modelsAsked: 0, modelsLoading: {} };
+const answers = [];
+const api = (method, path) => new Promise((ok, bad) => answers.push({ ok, bad }));
+let drawn = 0;
+const render = () => { drawn += 1; };
+const test = async () => {
+  const first = loadModels("standard", true), second = loadModels("standard", true);
+  const loading = S.modelsLoading.standard;
+  answers[1].ok({ models: [{ id: "stub/alpha" }] });
+  await second;
+  answers[0].bad(new Error("ConnectTimeout: "));
+  await first;
+  return [loading, S.models.standard, S.modelsError.standard, S.modelsLoading.standard ?? null, drawn];
+};"""
+    js = code + "\ntest().then((r) => console.log(JSON.stringify(r)));"
+    done = subprocess.run([NODE, "-e", js], capture_output=True, text=True, timeout=30)
+    assert done.returncode == 0, done.stderr
+    assert json.loads(done.stdout) == [2, [{"id": "stub/alpha"}], "", None, 1]

@@ -652,12 +652,21 @@ class Manager:
         else:
             where, headers = url.rstrip("/") + "/models", {}
         headers.update(providers.auth_headers(provider, key))
-        async with httpx.AsyncClient(timeout=30, follow_redirects=False, **reading_options(url)) as client:
-            r = await client.get(where, headers=headers)
-            if r.status_code >= 300:            # said without the address's password (httpx's own error quotes it)
-                raise UserError(f"{shown(url)} answered HTTP {r.status_code} when asked for its models.")
-            listed = loads(r.content)
-            data = listed.get("data") if isinstance(listed, dict) else None
+        # what went wrong said in words: an address that never answered was "ConnectTimeout: " (httpx's timeouts say
+        # nothing), and one that answered with a page, not a list, a JSON parser's complaint (until Nov 2026)
+        try:
+            async with httpx.AsyncClient(timeout=30, follow_redirects=False, **reading_options(url)) as client:
+                r = await client.get(where, headers=headers)
+                if r.status_code >= 300:            # said without the address's password (httpx's own error quotes it)
+                    raise UserError(f"{shown(url)} answered HTTP {r.status_code} when asked for its models.")
+                listed = loads(r.content)
+                data = listed.get("data") if isinstance(listed, dict) else None
+        except httpx.TimeoutException:
+            raise UserError(f"{shown(url)} didn't answer in time when asked for its models.") from None
+        except httpx.TransportError:
+            raise UserError(f"{shown(url)} couldn't be reached to ask for its models.") from None
+        except ValueError:
+            raise UserError(f"{shown(url)} didn't answer with a list of models.") from None
         return sorted(m["id"] for m in data or [] if isinstance(m, dict) and isinstance(m.get("id"), str))
 
     async def hosts(self, profile: str, model: str) -> dict:

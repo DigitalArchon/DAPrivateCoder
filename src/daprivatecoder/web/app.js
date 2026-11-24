@@ -43,7 +43,7 @@ const $ = (sel) => document.querySelector(sel);
 // the actions under way (busy: not sent twice), what is being checked
 const S = { state: null, folder: "", tab: "", models: {}, modelsError: {}, hosts: {}, routeHost: {}, routeFp8: {},
   customUrl: "", setupOwn: "", replacing: "", checking: "", drafts: {}, busy: {}, asked: 0, shown: 0,
-  setupFirst: null, usageOpen: false, verifyOpen: null };
+  setupFirst: null, usageOpen: false, verifyOpen: null, modelsAsked: 0, modelsLoading: {} };
 // what the editor's switch runs when it runs each folder as chosen (editor.PER_FOLDER)
 const PER_FOLDER = ":folders";
 
@@ -720,7 +720,7 @@ function modelsSection(st) {
         + "requests go as they are, and this setting isn't used." : ""))),
     contextRows(tab, p, save),
     S.modelsError[tab] ? h("div", { class: "warnbox" }, `The list of models couldn't be loaded: ${S.modelsError[tab]}`) : null,
-    S.models[tab] ? null : h("div", { class: "small muted row" }, h("span", { class: "spinner" }), reading),
+    S.models[tab] && !S.modelsLoading[tab] ? null : h("div", { class: "small muted row" }, h("span", { class: "spinner" }), reading),
     searchPart(st, tab, p)));
 }
 
@@ -1169,16 +1169,23 @@ async function refresh() {
   take(n, await api("GET", "/api/state"));
 }
 
-// a profile's list of models (the one shown when not said)
+// a profile's list of models (the one shown when not said). Only the last one asked for is kept: the list of an
+// address left behind, slower to answer (one that never did, after 30 s), came after the new address's and put its
+// error in its place (until Nov 2026). While one is on its way, the tab says so (S.modelsLoading)
 async function loadModels(profile, fresh = false) {
   profile = profile || S.tab || (S.state && S.state.start) || "private";
+  const n = ++S.modelsAsked;
+  S.modelsLoading[profile] = n;
+  let models = [], error = "";
   try {
-    S.models[profile] = (await api("GET", `/api/models?profile=${encodeURIComponent(profile)}${fresh ? "&fresh=1" : ""}`)).models;
-    S.modelsError[profile] = "";
+    models = (await api("GET", `/api/models?profile=${encodeURIComponent(profile)}${fresh ? "&fresh=1" : ""}`)).models;
   } catch (e) {
-    S.models[profile] = [];
-    S.modelsError[profile] = e.message;
+    error = e.message;
   }
+  if (S.modelsLoading[profile] !== n) return;         // asked for again since: that answer is the one shown
+  delete S.modelsLoading[profile];
+  S.models[profile] = models;
+  S.modelsError[profile] = error;
   render();
 }
 
