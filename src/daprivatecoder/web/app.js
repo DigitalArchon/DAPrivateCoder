@@ -243,6 +243,8 @@ function unlisted(st, kind) {
 // why a session of `kind` can't start yet, or "" when it can
 function notReady(st, kind) {
   if (st.ready[kind]) return "";
+  // the file's error is the reason, said at the top: an API key was asked for (until Nov 2026)
+  if (st.config_error) return "Can't start yet: the settings file has an error, shown at the top of the window.";
   if (!st.claude.path) return "Can't start yet: Claude Code wasn't found. See Setup.";
   if ((st.provider_keys || {})[kind]) {
     return `Can't start yet: add your ${providerName(st, kind)} API key under Settings (the ${KINDS[kind].label} tab).`;
@@ -273,6 +275,8 @@ function renderTop(st) {
   if (st.config_error) { text = "The settings file has an error"; cls = "bad"; }
   else if (!st.claude.path) { text = "Needs Claude Code"; cls = "wait"; }
   else if (!SESSIONS.some((k) => st.ready[k])) { text = "Needs an API key"; cls = "wait"; }
+  // another kind ready made it "Ready · new sessions are Private" beside a Start that couldn't start (until Nov 2026)
+  else if (!st.ready[st.start]) { text = `${KINDS[st.start].label} sessions need an API key`; cls = "wait"; }
   else if (unlisted(st, st.start).length) {
     text = `${KINDS[st.start].label} models not listed by ${providerName(st, st.start)}`; cls = "wait";
   }
@@ -315,7 +319,8 @@ function startSection(st) {
     seg(kind, (pick) => { if (pick !== kind) act("POST", "/api/start", { session: pick }); }),
     leadOf(st, kind) ? h("p", { class: "lead" }, leadOf(st, kind)) : null,
     // what it runs, where it starts: changed in its settings, below
-    h("div", { class: "summary row" }, h("span", { class: "small" }, kindSummary(st, kind)),
+    // with the settings file in error there are no settings to go to: Change… did nothing
+    st.config ? h("div", { class: "summary row" }, h("span", { class: "small" }, kindSummary(st, kind)),
       h("button", { class: "small ghost", onclick: () => {
         // at once while its list is still to come: the page drawn again as it arrives stopped a smooth scroll where
         // it was, and the first Change… didn't reach Settings (until Nov 2026)
@@ -323,7 +328,7 @@ function startSection(st) {
         S.tab = kind; render();
         const at = document.getElementById("settings");
         if (at) at.scrollIntoView({ behavior: smooth ? "smooth" : "auto", block: "start" });
-      } }, "Change…")),
+      } }, "Change…")) : null,
     unlisted(st, kind).length ? h("div", { class: "warnbox" }, `Not listed by ${providerName(st, kind)}: `
       + `${unlisted(st, kind).map((m) => shortModel(m, kind)).join(", ")}. Choose its models in Settings (Change…).`) : null,
     warningOf(st, kind),

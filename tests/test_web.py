@@ -443,3 +443,24 @@ const test = ([list, loading]) => {
     assert known == [["stub/alpha"], "Standard models not listed by https://my.example/anthropic"]
     assert unknown == loading == [[], "Ready · new sessions are Standard"]       # no list yet: nothing is said of it
     assert listed == [[], "Ready · new sessions are Standard"]
+
+
+def test_the_header_and_start_agree_on_whether_new_sessions_can_start():
+    """Another kind ready made the header "Ready · new sessions are Private" beside a Start saying "Can't start yet";
+    and with the settings file in error Start asked for an API key (until Nov 2026)."""
+    code = script("KINDS", "SESSIONS", "PROVIDERS", "providerSaid", "providerName", "unlisted", "renderTop",
+                  "notReady") + """
+const S = { models: {}, modelsLoading: {}, modelsError: {} };
+const shown = { "#status": {}, "#status-text": {}, "#banner": { classList: { toggle: () => {} } } };
+const $ = (sel) => shown[sel];
+const test = (st) => { renderTop(st); return [shown["#status-text"].textContent, notReady(st, st.start)]; };"""
+    ok = {"claude": {"path": "/usr/bin/claude"}, "config": {"profiles": {}}, "provider_keys": {}}
+    private, standard, broken = run(code, [
+        {**ok, "ready": {"private": False, "tee": False, "standard": True}, "start": "private"},
+        {**ok, "ready": {"private": False, "tee": False, "standard": True}, "start": "standard"},
+        {**ok, "config": None, "config_error": "reasoning must be one of low, medium, high, max",
+         "ready": {"private": False, "tee": False, "standard": False}, "start": "standard"}])
+    assert private == ["Private sessions need an API key", "Can't start yet: add your NanoGPT API key in Setup."]
+    assert standard == ["Ready · new sessions are Standard", ""]
+    assert broken == ["The settings file has an error",
+                      "Can't start yet: the settings file has an error, shown at the top of the window."]
