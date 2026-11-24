@@ -137,17 +137,20 @@ def create_app(token: str, manager: Manager, desktop=None, on_quit: Callable[[],
 
     async def key(request, body):
         provider = str(body.get("provider") or "nanogpt")
+        # the tab the key box is on: a provider of your own's key is its server's, and each kind of session may
+        # have its own (until Nov 2026 every tab's box stored it for the standard one's server)
+        profile = str(body.get("profile") or "standard")
         if body.get("from") == "vibe-manager":
             await in_thread(manager.import_key)
         elif "in_the_clear" in body:
             # only a JSON true sends the key unencrypted: anything else is No, or Ask again (null)
             answer = body["in_the_clear"]
             await in_thread(manager.answer_in_the_clear, provider, True if answer is True else None if answer is None
-                            else False)
+                            else False, profile)
         elif body.get("clear"):
-            await in_thread(manager.clear_key, provider)
+            await in_thread(manager.clear_key, provider, profile)
         else:
-            await in_thread(manager.set_key, str(body.get("key") or ""), provider)
+            await in_thread(manager.set_key, str(body.get("key") or ""), provider, profile)
         return await in_thread(manager.state)
 
     async def install(request, body):

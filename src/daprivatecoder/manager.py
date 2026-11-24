@@ -292,9 +292,11 @@ class Manager:
         cfg = config.load()
         if provider == "nanogpt":
             return provider, cfg.base_url
+        if profile not in config.KINDS:
+            raise UserError(f"There's no kind of session called {profile!r}.")
         return provider, cfg.provider_url(cfg.profile(profile))
 
-    def set_key(self, key: str, provider: str = "nanogpt") -> None:
+    def set_key(self, key: str, provider: str = "nanogpt", profile: str = "standard") -> None:
         from .netpolicy import key_problem
         key = (key or "").strip()
         if not key:
@@ -306,14 +308,14 @@ class Manager:
             raise UserError("That isn't an API key: it has a space, a line break or another character no API key "
                             "has, picked up where it was copied from, perhaps. Nothing was stored: copy it again and "
                             "paste it here.")
-        creds.set_key(key, *self._provider_of(provider))
+        creds.set_key(key, *self._provider_of(provider, profile))
 
-    def answer_in_the_clear(self, provider: str, allow) -> None:
+    def answer_in_the_clear(self, provider: str, allow, profile: str = "standard") -> None:
         """Your answer for a provider's key going over plain http to another machine on your network (the window's
         question): True sends it, False doesn't and isn't asked again for that address, None asks again."""
         if allow not in (True, False, None):
             raise UserError("The answer must be yes, no, or ask again.")
-        creds.answer_in_the_clear(*self._provider_of(provider), allow)
+        creds.answer_in_the_clear(*self._provider_of(provider, profile), allow)
 
     def import_key(self) -> None:
         provider, base_url = self._provider_of("nanogpt")
@@ -322,8 +324,8 @@ class Manager:
             raise UserError("DA Vibe Manager has no NanoGPT key in your keyring.")
         creds.set_key(key, provider, base_url)
 
-    def clear_key(self, provider: str = "nanogpt") -> None:
-        creds.delete_key(*self._provider_of(provider))
+    def clear_key(self, provider: str = "nanogpt", profile: str = "standard") -> None:
+        creds.delete_key(*self._provider_of(provider, profile))
 
     # ------------------------------------------------------------------ commands and the editor
 

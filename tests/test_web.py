@@ -167,7 +167,7 @@ def test_the_key_fields_ask_for_the_key_in_plain_words():
     your provider's API key", seen on the lab VMs, Nov 14 2026)."""
     text = APP_JS.read_text(encoding="utf-8")
     assert 'keyControls("nanogpt", k, "nanogpt", "NanoGPT",' in text
-    assert "keyControls(`provider:${p.provider}`, pk, p.provider, keyName(p.provider)," in text
+    assert "keyControls(`provider:${tab}:${p.provider}`, pk, p.provider, keyName(p.provider)," in text
     code = script("PROVIDERS", "providerSaid", "keyName", "keyControls") + """
 const h = (tag, attrs, ...children) => ({ tag, attrs, children });
 const S = { drafts: {}, replacing: "" };

@@ -339,9 +339,11 @@ function check(done, what, detail, ...actions) {
 
 // a key in the keyring: stored (Replace, Remove: a second click), or a field to paste it in. `slot` keeps
 // the Replace field open across renders (S.replacing)
-function keyControls(slot, state, provider, label, said) {
+// `profile`: the tab a provider's box is on, whose address the key is for (a provider of your own's: each kind of
+// session may have its own server); the standard one's when not said
+function keyControls(slot, state, provider, label, said, profile) {
   const draft = `key:${slot}`;
-  const saveKey = () => act("POST", "/api/key", { key: keyInput.value, provider }, said)
+  const saveKey = () => act("POST", "/api/key", { key: keyInput.value, provider, profile }, said)
     .then((done) => { if (done) { delete S.drafts[draft]; if (S.replacing === slot) S.replacing = ""; render(); } });
   const keyInput = h("input", { type: "password", placeholder: `Paste your ${label} API key`, autocomplete: "off",
     value: S.drafts[draft] || "", oninput: (e) => { S.drafts[draft] = e.target.value; },
@@ -351,7 +353,7 @@ function keyControls(slot, state, provider, label, said) {
   const replacing = h("div", { class: `row${S.replacing === slot ? "" : " hidden"}` }, keyInput, saveButton);
   // removing takes a second click: a slip would stop every session until the key is pasted again
   const remove = h("button", { class: "small ghost", onclick: () => {
-    if (remove.dataset.sure) act("POST", "/api/key", { clear: true, provider }, "The key was removed from your keyring.");
+    if (remove.dataset.sure) act("POST", "/api/key", { clear: true, provider, profile }, "The key was removed from your keyring.");
     else {
       remove.dataset.sure = "1"; remove.textContent = "Click again to remove it";
       setTimeout(() => { delete remove.dataset.sure; remove.textContent = "Remove"; }, 4000);
@@ -603,12 +605,12 @@ function providerRows(st, tab, p, save) {
   const pk = (st.provider_keys || {})[tab];
   if (pk && !choosing) {
     const own = Boolean(PROVIDERS[p.provider] && PROVIDERS[p.provider].own);
-    const keys = keyControls(`provider:${p.provider}`, pk, p.provider, keyName(p.provider), "The key is stored in your keyring.");
+    const keys = keyControls(`provider:${tab}:${p.provider}`, pk, p.provider, keyName(p.provider), "The key is stored in your keyring.", tab);
     rows.push(h("div", { class: "model-row" }, h("label", {}, "API key"), h("div", { class: "col" },
       h("div", { class: "row" }, keys.stored ? h("span", { class: "small muted" }, `Stored (ending ${pk.ending})`) : null,
         ...keys.controls),
       keys.extra, !keys.stored && own ? h("div", { class: "small muted" }, "Only if the provider needs one.") : null)));
-    const clear = inTheClear(pk, p.provider);
+    const clear = inTheClear(pk, p.provider, tab);
     if (clear) rows.push(h("div", { class: "model-row" }, h("span", {}), clear));
     // a saved key held to the address it was stored for, not this one (creds.KeyElsewhere): it says which, and the
     // field above takes a key for this one
@@ -620,8 +622,8 @@ function providerRows(st, tab, p, save) {
 // A key that would go over plain http to another machine on your network (creds.py, the cross-app standard): asked
 // once for that address, No the first button and the one focused, and a No kept, so it isn't asked at every save;
 // "Ask me again" takes it back. Until you say Yes the key isn't sent there.
-function inTheClear(pk, provider) {
-  const answer = (value, said) => act("POST", "/api/key", { provider, in_the_clear: value }, said);
+function inTheClear(pk, provider, profile) {
+  const answer = (value, said) => act("POST", "/api/key", { provider, profile, in_the_clear: value }, said);
   const where = pk.clear_host || "that address";
   if (pk.in_the_clear === "ask") {
     const no = h("button", { class: "small primary", onclick: () => answer(false, "The key isn't sent there.") }, "No, don't send it");

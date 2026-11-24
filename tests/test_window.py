@@ -725,3 +725,27 @@ async def test_a_sessions_refused_requests_are_said_apart_from_its_answers(windo
     log.write("request", model="z-ai/glm-5.3", tier="standard", provider="nanogpt", status=200)
     [s] = (await call(app, "GET", "/api/state"))[1]["sessions"]
     assert s["refused"] is None and s["answered"]["model"] == "z-ai/glm-5.3"
+
+
+async def test_a_key_box_stores_the_key_for_its_own_tabs_server(window, ring):
+    """Each kind of session may run on a provider of your own at its own address. Every tab's key box posted no
+    tab, so the key was stored for the standard one's server: the TEE tab's key went to that server, and the TEE
+    one's still had none (until Nov 2026)."""
+    from daprivatecoder import config
+    app, *_ = window
+    config.config_path().parent.mkdir(parents=True, exist_ok=True)
+    config.config_path().write_text(
+        'base_url = "https://nano-gpt.com/api/v1"\n'
+        '[profiles.standard]\nkind = "standard"\nprovider = "custom"\nbase_url = "https://my-server.example.com/v1"\n'
+        'model = "my-model"\n'
+        '[profiles.tee]\nkind = "tee"\nprovider = "custom"\nbase_url = "https://llm.chutes.ai/v1"\n'
+        'model = "zai-org/GLM-5.2-TEE"\n')
+    await call(app, "POST", "/api/key", {"key": "sk-my-server", "provider": "custom", "profile": "standard"})
+    st = (await call(app, "POST", "/api/key", {"key": "cpk-chutes", "provider": "custom", "profile": "tee"}))[1]
+    assert st["provider_keys"]["tee"]["stored"] and st["provider_keys"]["standard"]["stored"]
+    assert ring.store[("daprivatecoder", "custom:my-server.example.com")] == "sk-my-server"
+    assert ring.store[("daprivatecoder", "custom:llm.chutes.ai")] == "cpk-chutes"
+    st = (await call(app, "POST", "/api/key", {"clear": True, "provider": "custom", "profile": "tee"}))[1]
+    assert not st["provider_keys"]["tee"]["stored"] and st["provider_keys"]["standard"]["stored"]
+    status, st = await call(app, "POST", "/api/key", {"key": "sk-x", "provider": "custom", "profile": "nope"})
+    assert status == 400 and "no kind of session" in st["error"]
