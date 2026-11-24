@@ -1885,7 +1885,7 @@ async def test_a_tee_request_with_no_reply_at_all_is_never_logged_as_being_check
     of it for ever. Its request is then not shown to have reached the attested enclave (the window says so)."""
     seen: list = []
     said, log = await _ask(_tee_proxy(tmp_path, seen, refuse=402), tmp_path, checked=False, stream=False)
-    assert "balance is too low" in said[0]
+    assert "your balance with NanoGPT is too low" in said[0]
     (request,) = [e for e in log if e["kind"] == "request" and e.get("tier")]     # the line of what was sent
     assert request["status"] == 402 and request["tier"] == "tee" and request["attested"] == "enclave"
     assert "reply" not in request and "ref" not in request

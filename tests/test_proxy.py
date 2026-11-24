@@ -433,7 +433,7 @@ async def test_a_standard_session_on_openrouter_uses_its_key_and_its_way_of_rout
     assert r.status_code == 200 and fake.calls[-1][0] == "private/kimi-k3" and fake.keys == ["sk-nano"]
     p, _ = make(profile, plain=FakePlain(), provider_url="https://openrouter.ai/api/v1", provider_key=lambda: None)
     r = await call(p, "POST", "/v1/messages", message("z-ai/glm-5.3"))
-    assert r.status_code == 403 and "No OpenRouter API key" in r.text
+    assert r.status_code == 403 and "No API key for OpenRouter is stored" in r.text
 
 
 TEE = Profile("tee", "tee", "TEE/glm-5.3", "TEE/kimi-k3", "TEE/glm-5.3-flash", "TEE/glm-5.3-flash", "low")
@@ -626,7 +626,7 @@ async def test_a_request_the_provider_refuses_is_told_by_its_status_and_asked_ag
             assert ("x-should-retry" in r.headers) == (not retry), (status, stream)
     p, fake = make(fake=Refusing(nanogpt_refused(402)))
     said = (await call(p, "POST", "/v1/messages", message("private/kimi-k3"))).json()["error"]["message"]
-    assert "NanoGPT balance is too low for this request" in said and "Top it up" in said
+    assert "your balance with NanoGPT is too low for this request" in said and "Top it up" in said
 
 
 async def test_a_request_the_provider_refuses_is_logged_once_as_sent(tmp_path):

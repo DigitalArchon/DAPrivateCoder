@@ -78,7 +78,7 @@ async def test_the_anthropic_key_is_read_from_the_keyring_for_anthropics_address
     creds.delete_key("anthropic", providers.ANTHROPIC_BASE_URL)
     p, _ = make(ANTHROPIC, handler=anthropic_server(seen), provider_url=providers.ANTHROPIC_BASE_URL)
     r = await call(p, "POST", "/v1/messages", message("claude-sonnet-5"))
-    assert r.status_code == 403 and "No Anthropic API key is stored" in r.text and len(seen) == 1
+    assert r.status_code == 403 and "No API key for Anthropic is stored" in r.text and len(seen) == 1
 
 
 def test_an_anthropic_profile_is_standard_and_its_address_is_anthropics_whatever_the_file_says():

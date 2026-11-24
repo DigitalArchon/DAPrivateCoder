@@ -266,7 +266,7 @@ def upstream_refusal(model: str, e: BaseException, provider: str, answering: boo
     if isinstance(e, ModelRetired):
         return Refused(400, said, "invalid_request_error")
     if status == 402:
-        return Refused(402, f"{model}: your {name} balance is too low for this request, so it wasn't run. Top it up, "
+        return Refused(402, f"{model}: your balance with {name} is too low for this request, so it wasn't run. Top it up, "
                             f"then try again. ({name} said: {words})", "billing_error")
     if status in (401, 403):
         # never a 401 to Claude Code: it would take its own login for the one refused
@@ -706,7 +706,7 @@ class Proxy:
         if provider == "nanogpt":
             raise Refused(403, "No NanoGPT API key is stored. Run `daprivatecoder key set` in a terminal, then try again.")
         tab = {"private": "Private", "tee": "TEE"}.get(self.profile.kind, "Standard")
-        raise Refused(403, f"No {NAMES[provider]} API key is stored: add it in DA Private Coder's window (Settings, "
+        raise Refused(403, f"No API key for {NAMES[provider]} is stored: add it in DA Private Coder's window (Settings, "
                            f"{tab}), or run `daprivatecoder key set --provider {provider}`, then try again.")
 
     def _private(self, model: str):

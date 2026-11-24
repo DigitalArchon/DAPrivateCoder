@@ -173,7 +173,7 @@ def test_a_key_goes_only_to_the_address_it_was_stored_for(ring, monkeypatch, cap
     said = str(refused.value)
     assert "stored for https://nano-gpt.com," in said and "evil.example" in said and "123456" not in said
     assert "key set" in said and isinstance(refused.value, creds.KeyringUnavailable)
-    assert cli.main(["status"]) == 0 and "NanoGPT key: The NanoGPT API key in your keyring was stored for" in \
+    assert cli.main(["status"]) == 0 and "NanoGPT key: The API key for NanoGPT in your keyring was stored for" in \
         capsys.readouterr().out
     assert ring.store[("daprivatecoder", "nanogpt")] == "sk-nano-123456"                   # never deleted
     # stored again, for the address it should go to now: there, and no longer to the old one
@@ -214,7 +214,7 @@ def test_nanogpts_key_reaches_no_search_at_an_address_edited_since_it_was_stored
     http = httpx.AsyncClient(transport=httpx.MockTransport(lambda r: asked.append(r) or httpx.Response(500)))
     said, failed = asyncio.run(search.SearchServer("zero-retention", "https://search.example/api/v1", http=http).search(
         {"query": "python asyncio timeout"}))
-    assert failed and said.startswith("Not searched: The NanoGPT API key") and "stored for https://nano-gpt.com" in said
+    assert failed and said.startswith("Not searched: The API key for NanoGPT") and "stored for https://nano-gpt.com" in said
     assert asked == []
 
 

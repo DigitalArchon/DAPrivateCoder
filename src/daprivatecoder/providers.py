@@ -49,7 +49,8 @@ OWN = "custom"
 @dataclass(frozen=True)
 class Provider:
     id: str                         # as the settings file and the window name it
-    name: str                       # in a sentence ("No {name} API key is stored")
+    name: str                       # in a sentence, after a preposition or as its subject ("No API key for {name} is stored"):
+                                    # a provider of your own is "your provider", which "the {name} key" misreads
     label: str                      # in the window's Provider list
     api: str = "openai"             # APIS: how Claude Code's requests go to it
     auth: str = "bearer"            # AUTHS: Authorization: Bearer <key>, or Anthropic's x-api-key: <key>

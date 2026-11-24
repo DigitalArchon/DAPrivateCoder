@@ -135,8 +135,8 @@ so nothing was sent"; opened again, each goes on where it was. `claude-private` 
 start at all while it's closed, and the editor's Claude Code in a folder chosen for it says so in the
 conversation. Nothing reaches NanoGPT without it open.
 
-A request NanoGPT or the provider refuses is said as it is: an empty balance as "your NanoGPT
-balance is too low for this request", which Claude Code doesn't ask again (it would ten times, calling
+A request NanoGPT or the provider refuses is said as it is: an empty balance as "your balance
+with NanoGPT is too low for this request", which Claude Code doesn't ask again (it would ten times, calling
 it a temporary server-side issue); a busy or failing provider, it does.
 
 ## Models and cost

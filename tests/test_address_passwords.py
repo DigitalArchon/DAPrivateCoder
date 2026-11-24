@@ -237,3 +237,35 @@ def test_an_address_that_cant_be_read_is_refused_without_its_password():
         with pytest.raises(netpolicy.InsecureURL) as refused:
             netpolicy.check_url(url)
         assert "hunter2" not in str(refused.value) and "alice" not in str(refused.value)
+
+
+def test_what_is_said_of_a_provider_of_your_own_reads_as_a_sentence(tmp_path, monkeypatch):
+    """Its name in a sentence is "your provider": "The your provider API key", "your your provider balance" and
+    "No your provider API key is stored" were said of one (until Nov 2026)."""
+    from daprivatecoder import proxy
+    creds.set_key("sk-own-1", "custom", "http://192.168.1.5:8080/v1")
+    with pytest.raises(creds.KeyElsewhere) as held:
+        creds.get_key("custom", "https://192.168.1.5:8080/v1")       # the same server's entry, another origin
+    assert "The API key for your provider in your keyring" in str(held.value)
+
+    class Broke(Exception):
+        status_code = 402
+    said = str(proxy.upstream_refusal("big", Broke("no funds"), "custom"))
+    assert "your balance with your provider is too low" in said and "your your" not in said
+
+
+def test_a_key_kwallet_only_said_no_such_password_of_is_looked_for(ring, monkeypatch):
+    """KWallet answers a cancelled unlock prompt as it answers "no such password": the key was taken as removed."""
+    from keyring.errors import PasswordDeleteError
+    creds.set_key("sk-nano-1")
+
+    def cancelled(service, user):
+        raise PasswordDeleteError("Password not found")
+    monkeypatch.setattr(ring, "delete_password", cancelled)
+    with pytest.raises(creds.KeyringUnavailable, match="couldn't remove the key"):
+        creds.delete_key()
+    monkeypatch.undo()
+    assert creds.get_key() == "sk-nano-1"
+    creds.delete_key()
+    creds.delete_key()                          # truly not there: no error
+    assert creds.get_key() is None

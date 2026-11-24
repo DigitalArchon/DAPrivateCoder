@@ -172,7 +172,7 @@ def _held_to(user: str, provider: str, base_url: str) -> None:
         return
     name = NAMES.get(provider, provider)
     raise KeyElsewhere(
-        f"The {name} API key in your keyring was stored for {_said(kept or '') or 'another address'}, and would "
+        f"The API key for {name} in your keyring was stored for {_said(kept or '') or 'another address'}, and would "
         f"go to {where} now, so it wasn't sent: a key goes only to the address it was stored for. If that is where "
         "it should go, store the key again for it (in DA Private Coder's window, or with daprivatecoder key set); "
         "otherwise put the address back as it was.")
@@ -190,13 +190,19 @@ def _keep(user: str, value: str) -> None:
 
 def _drop(user: str) -> None:
     try:
-        _backend().delete_password(SERVICE, user)
-    except PasswordDeleteError:
-        pass
+        backend = _backend()
+        try:
+            backend.delete_password(SERVICE, user)
+        except PasswordDeleteError:
+            # "no such password" from the Secret Service, and from KWallet; but KWallet says the same when its
+            # unlock prompt was cancelled, so the key is looked for: still there, and it wasn't removed (DA
+            # Toolkit's creds.delete_secret; until Nov 2026 the key was taken as gone)
+            if backend.get_password(SERVICE, user) is not None:
+                raise
     except KeyringUnavailable:
         raise
     except Exception as e:  # noqa: BLE001 - locked, say: said to the user as it is
-        raise KeyringUnavailable(f"Your keyring couldn't remove the key: {e}") from e
+        raise KeyringUnavailable(f"Your keyring couldn't remove the key: {e or type(e).__name__}") from e
     _known.pop((SERVICE, user), None)
 
 
