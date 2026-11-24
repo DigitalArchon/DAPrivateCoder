@@ -378,6 +378,44 @@ async def test_a_standard_session_never_follows_a_redirect_and_passes_errors_bac
     assert r.status_code == 402 and r.json()["error"]["message"] == "no credit"
 
 
+class BreaksOff(httpx.AsyncByteStream):
+    """A provider's reply that begins, then breaks off (`error`: a reset, a timeout)."""
+
+    def __init__(self, first: bytes, error: Exception):
+        self.first, self.error = first, error
+
+    async def __aiter__(self):
+        yield self.first
+        raise self.error
+
+    async def aclose(self):
+        pass
+
+
+@pytest.mark.parametrize("error", [httpx.ReadError("connection reset by peer"), httpx.ReadTimeout("timed out")])
+async def test_a_reply_passed_on_that_breaks_off_is_said_and_logged_as_failed(error, tmp_path):
+    """A provider's reply passed on as it came, broken off mid-stream: its error went up through the proxy's server (a
+    traceback in proxy-errors.log), Claude Code's connection was dropped without its end, and the request was logged
+    as answered (200, no error). It ends as Anthropic ends a stream with an error now, and is logged as failed."""
+    first = b'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":7}}}\n\n'
+    log = UsageLog(tmp_path / "requests.log", "s1")
+    p, _ = make(NANO, log=log, handler=lambda request: httpx.Response(
+        200, stream=BreaksOff(first, error), headers={"content-type": "text/event-stream"}))
+    r = await call(p, "POST", "/v1/messages", message("anthropic/claude-opus-5.5"))
+    events = parse(r.content)
+    assert [n for n, _ in events] == ["message_start", "error"]
+    said = events[-1][1]["error"]
+    assert said["type"] == "api_error" and said["message"].startswith("NanoGPT's reply broke off before it was finished: ")
+    assert said["message"].endswith("Asking again may work.") and str(error) in said["message"]
+    [rec] = read(tmp_path / "requests.log")
+    assert rec["status"] == 502 and rec["error"].startswith("NanoGPT's reply broke off") and rec["bytes_in"] == len(first)
+    # a reply that isn't a stream is cut where it broke, and logged so too
+    p, _ = make(NANO, log=log, handler=lambda request: httpx.Response(
+        200, stream=BreaksOff(b'{"type": "message", "con', error), headers={"content-type": "application/json"}))
+    r = await call(p, "POST", "/v1/messages", message("anthropic/claude-opus-5.5", stream=False))
+    assert r.content == b'{"type": "message", "con' and read(tmp_path / "requests.log")[-1]["status"] == 502
+
+
 @pytest.mark.parametrize("location, refused", [
     ("http://nano-gpt.com/api/v1/models", "insecure connection"), ("https://192.168.1.1/admin", "local network"),
     ("/api/v1/models", None)])

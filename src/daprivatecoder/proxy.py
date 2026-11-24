@@ -51,7 +51,7 @@ from .llm.anthropic_bridge import (VISION_PROMPT, ImageDescriber, estimate_token
                                    not_messages, sse, to_openai)
 from .llm.client import RANK, LLMClient, is_claude, is_private_mode, is_tee, private_id
 from .llm.errors import error_words, said as one_line, shown_error
-from .llm.secure_http import ACCEPT_ENCODING, loads
+from .llm.secure_http import ACCEPT_ENCODING, ProviderError, loads
 from .llm.private_mode import (Attestation, Enclave, PrivateModeClient, list_private_models, offers_private_mode,
                                relay_said, relay_url)
 from .netpolicy import check_url, key_problem, scrubbed, shown
@@ -321,6 +321,18 @@ async def answered(events):
             if close is not None:
                 await close()
     return rest()
+
+
+def broke_off(name: str, e: BaseException) -> str:
+    """Why a reply passed on as it came stopped coming (a reset, a timeout, an answer past what is read), for the log
+    and for Claude Code: the provider's words without a password in an address."""
+    return f"{name}'s reply broke off before it was finished: {scrubbed(str(e)) or type(e).__name__}"
+
+
+def stream_error(said: str) -> bytes:
+    """An error as Anthropic tells one mid-stream: Claude Code says so, and may ask again."""
+    return ("event: error\ndata: " + json.dumps({"type": "error", "error": {
+        "type": "api_error", "message": f"{said}. Asking again may work."}}) + "\n\n").encode()
 
 
 def _error_text(raw: bytes) -> str:
@@ -1401,23 +1413,32 @@ class Proxy:
             n = 0
             usage = UsageReader()
             whole = b"" if "json" in resp.headers.get("content-type", "") else None
+            broken = ""
             try:
-                async for chunk in resp.aiter_bytes():     # decoded here: Claude Code gets plain bytes
-                    n += len(chunk)
-                    if whole is None:
-                        usage.feed(chunk)
-                    elif len(whole) < 8 << 20:
-                        whole += chunk
-                    yield chunk
+                try:
+                    async for chunk in resp.aiter_bytes():     # decoded here: Claude Code gets plain bytes
+                        n += len(chunk)
+                        if whole is None:
+                            usage.feed(chunk)
+                        elif len(whole) < 8 << 20:
+                            whole += chunk
+                        yield chunk
+                except (httpx.HTTPError, ProviderError) as e:
+                    # the provider's reply broke off (a reset, a timeout): until Nov 2026 its error went up through the
+                    # server, a traceback in its error output, Claude Code's connection dropped without its end, and the
+                    # request logged as answered
+                    broken = broke_off(name, e)
+                    if "event-stream" in resp.headers.get("content-type", ""):
+                        yield stream_error(broken)
             finally:
                 await resp.aclose()
-                if whole:
+                if whole and not broken:
                     try:
                         usage.usage = anthropic_usage(loads(whole).get("usage"))
                     except (ValueError, AttributeError):
                         pass
-                self._record("request", **rec, status=resp.status_code, bytes_in=n,
-                             seconds=round(time.monotonic() - started, 2),
+                self._record("request", **rec, status=502 if broken else resp.status_code, bytes_in=n,
+                             seconds=round(time.monotonic() - started, 2), **({"error": broken[:300]} if broken else {}),
                              **({"usage": await self._priced(model, usage.usage, "standard")} if usage.usage else {}))
         return StreamingResponse(stream(), status_code=resp.status_code, headers=out_headers)
 
