@@ -578,6 +578,36 @@ async def test_requests_that_arent_json_objects_are_refused():
     assert not fake.calls
 
 
+@pytest.mark.parametrize("odd", [
+    {"messages": ["hi"]}, {"messages": "hi"}, {"messages": [{"role": "assistant", "content": ["hi"]}]},
+    {"max_tokens": "lots"}, {"tool_choice": "auto", "tools": [{"name": "Bash"}]}, {"tools": ["Bash"]},
+])
+async def test_a_request_that_isnt_the_messages_apis_is_refused_in_words_or_passed_on_never_a_500(odd, tmp_path):
+    """A message that is no object, a setting of another kind than it should be. Translated, it was told as a failing
+    server's and the vision helper's, in Python's words ("Couldn't prepare the request for z-ai/glm-5.3: : 'str'
+    object has no attribute 'get'", a 502): a 400 in words now, nothing sent. Passed on (a Claude model, NanoGPT's
+    Anthropic endpoint), a message that is no object was a 500 and a traceback (drop_our_thinking asked it for its
+    role): it goes on as it came, for the provider to refuse."""
+    plain, seen = FakePlain(), []
+    p, _ = make(TRANSLATED, plain=plain, log=UsageLog(tmp_path / "requests.log", "s1"), **on_openrouter())
+    r = await call(p, "POST", "/v1/messages", {**message("z-ai/glm-5.3"), **odd})
+    assert r.status_code == 400 and r.json()["error"]["type"] == "invalid_request_error" and not plain.calls
+    assert r.json()["error"]["message"] == ("The request for z-ai/glm-5.3 isn't one Anthropic's Messages API takes (its "
+                                            "messages, tools or settings aren't what they should be), so nothing was sent.")
+    assert [e["status"] for e in read(tmp_path / "requests.log")] == [400]
+
+    def nanogpt(request):
+        seen.append(json.loads(request.content))
+        return httpx.Response(400, json={"type": "error", "error": {"type": "invalid_request_error", "message": "no"}})
+    for model in ("anthropic/claude-opus-5.5", "z-ai/glm-5.3"):
+        p, _ = make(NANO, handler=nanogpt)
+        p._caps["nanogpt"] = {"z-ai/glm-5.3": {"tools": True}}
+        r = await call(p, "POST", "/v1/messages", {**message(model, stream=False), **odd})
+        assert r.status_code == 400 and r.json()["error"]["message"] == "no", model
+        if model.startswith("anthropic/"):
+            assert all(seen[-1][k] == v for k, v in odd.items()), "as Claude Code wrote it"
+
+
 def test_the_upstream_url_doesnt_double_v1():
     assert upstream_url("https://nano-gpt.com/api/v1", "/v1/messages", "beta=true") == "https://nano-gpt.com/api/v1/messages?beta=true"
     assert upstream_url("https://nano-gpt.com/api", "/v1/messages") == "https://nano-gpt.com/api/v1/messages"

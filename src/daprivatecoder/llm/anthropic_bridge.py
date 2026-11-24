@@ -319,6 +319,14 @@ async def to_openai(body: dict, images: ImageDescriber, native: bool = False) ->
     return messages, tools or None, params
 
 
+def not_messages(model: str) -> str:
+    """What Claude Code is told of a request that can't be read as one of the Messages API's (a message that is no
+    object, a setting of another kind than it should be): in words, with nothing sent. Until Nov 2026 it was told in
+    Python's ("Couldn't prepare the request for glm: 'str' object has no attribute 'get'"), as a failing server's."""
+    return (f"The request for {model} isn't one Anthropic's Messages API takes (its messages, tools or settings aren't "
+            "what they should be), so nothing was sent.")
+
+
 # what an image counts for in a count made here: about what a screenshot costs a model that sees (Anthropic counts
 # width × height / 750, some 1,600 at most), and more than its description costs one that doesn't
 IMAGE_TOKENS = 1500

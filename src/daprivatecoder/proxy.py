@@ -47,8 +47,8 @@ from . import providers as providers_mod
 from .config import Profile
 from .llm import capabilities, privacy, routes
 from .llm.dcap import since_boot
-from .llm.anthropic_bridge import (VISION_PROMPT, ImageDescriber, estimate_tokens, for_messages, has_images, message, sse,
-                                   to_openai)
+from .llm.anthropic_bridge import (VISION_PROMPT, ImageDescriber, estimate_tokens, for_messages, has_images, message,
+                                   not_messages, sse, to_openai)
 from .llm.client import RANK, LLMClient, is_claude, is_private_mode, is_tee, private_id
 from .llm.errors import error_words, said as one_line, shown_error
 from .llm.secure_http import ACCEPT_ENCODING, loads
@@ -102,7 +102,9 @@ def drop_our_thinking(data: dict) -> bool:
     found = False
     for m in data.get("messages") or []:
         content = m.get("content") if isinstance(m, dict) else None
-        if m.get("role") != "assistant" or not isinstance(content, list):
+        # a message that is no object has none of ours: it goes on as it came, for the provider to refuse (m.get was
+        # asked of it until Nov 2026: a 500 here, and a traceback)
+        if not isinstance(m, dict) or m.get("role") != "assistant" or not isinstance(content, list):
             continue
         kept = [b for b in content if not (isinstance(b, dict) and b.get("type") == "thinking"
                                            and b.get("signature") == SIGNATURE)]
@@ -1236,9 +1238,11 @@ class Proxy:
             messages, tools, params = await to_openai(data, self._images(tier), native=native)
         except Refused:
             raise
-        except Exception as e:  # noqa: BLE001 - Claude Code shows the reason (an image's description failed, say)
-            raise upstream_refusal(f"Couldn't prepare the request for {model}: {self.profile.vision_model}", e,
-                                   self._provider_of(self.profile.vision_model or model)) from e
+        except Exception as e:  # noqa: BLE001 - a request that isn't the Messages API's, said in words
+            # never the vision helper's failure: that is a note in the request (ImageDescriber.text_for). Until Nov
+            # 2026 it was told as the helper's all the same, by its name, in Python's words and as a failing server's
+            # (502): "Couldn't prepare the request for glm: : 'str' object has no attribute 'get'"
+            raise Refused(400, not_messages(model), "invalid_request_error") from e
         checking = is_auto_mode_check(data)
         wanted = effort_of(data, self.profile.check_effort if checking else self.profile.reasoning)
         effort = await self._effort(model, tier, wanted)
