@@ -6,8 +6,10 @@ do what the commands do (cli.py), on the same files."""
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import os
+import threading
 import time
 from dataclasses import asdict, replace
 from pathlib import Path
@@ -101,12 +103,25 @@ def prefs_path() -> Path:
     return config.config_dir() / "window.json"
 
 
+def _writes(method):
+    """A change to the settings, the folders' choices or the window's preferences, made one at a time. Each reads its
+    file, changes it and writes it whole, and the server answers each request on a thread of its own: two changes at
+    once (Effort on one tab and Context on another, in quick succession) both read the file as it was, and the second
+    written took the first back out (until Nov 2026)."""
+    @functools.wraps(method)
+    def one_at_a_time(self, *args, **kwargs):
+        with self._writing:
+            return method(self, *args, **kwargs)
+    return one_at_a_time
+
+
 class Manager:
     def __init__(self, ui_notice: str = "", can_choose_folder: bool = False):
         self.ui_notice = ui_notice
         self.can_choose_folder = can_choose_folder
         self.tray = False            # whether closing the window keeps DA Private Coder open, in the tray (app.py)
         self._models: dict[tuple, tuple[float, list[dict]]] = {}
+        self._writing = threading.RLock()          # _writes: one change of a file at a time
         self.log = usagelog.UsageLog(config.state_dir() / "requests.log", "window")
 
     # ------------------------------------------------------------------ what there is
@@ -336,6 +351,7 @@ class Manager:
             raise UserError(f"{', '.join(map(str, taken))} is someone else's program, so it was left as it is.")
         return done
 
+    @_writes
     def set_editor(self, name: str, on: bool) -> None:
         """The editor's switch: on, its Claude Code runs as each folder says (set_folder); off, as usual."""
         found = dict(editor.editors())
@@ -347,6 +363,7 @@ class Manager:
             raise UserError(f"{name}'s Claude Code already runs through another program ({value}): it was left as it is.")
         editor.switch(path, editor.wrapper_path() if on else None)
 
+    @_writes
     def set_folder(self, folder: str, profile: str) -> None:
         """How the editor's Claude Code runs in `folder` (and the folders in it): on `profile`, or as
         usual ("")."""
@@ -357,6 +374,7 @@ class Manager:
             raise UserError(f"{folder or 'That'} isn't a folder.")
         folders.save(folders.with_folder(self._folders(), folder, profile))
 
+    @_writes
     def set_other(self, profile: str) -> None:
         """How the editor's Claude Code runs in every folder not chosen: as usual (""), or on `profile`."""
         if profile:
@@ -371,6 +389,7 @@ class Manager:
         except folders.FoldersError as e:
             raise UserError(str(e)) from None
 
+    @_writes
     def open_in_editor(self, name: str, folder: str, profile: str, popen=None) -> None:
         """`folder` in editor `name`, its Claude Code on `profile`: the folder chosen so, the editor's switch
         on, and the editor opened on it."""
@@ -451,6 +470,7 @@ class Manager:
 
     # ------------------------------------------------------------------ settings
 
+    @_writes
     def save_profile(self, name: str, fields: dict) -> None:
         cfg = config.load()
         profile = cfg.profile(name)
@@ -478,6 +498,7 @@ class Manager:
                 change.setdefault(key, value)
         config.save(cfg.with_profile(replace(profile, **change)))
 
+    @_writes
     def save_route(self, name: str, model: str, route) -> None:
         """Which of the provider's hosts runs `model` in profile `name` (None or auto: its own choice)."""
         cfg = config.load()
@@ -494,6 +515,7 @@ class Manager:
             chosen[model] = route
         config.save(cfg.with_profile(replace(profile, routes=chosen)))
 
+    @_writes
     def set_tee_names(self, on: bool) -> None:
         """Enclave checks' "Name the provider behind each TEE reply" (config.py tee_name_upstreams): saved in the
         settings file, which every running session's proxy reads before each TEE reply's check, so it holds from
@@ -501,6 +523,7 @@ class Manager:
         cfg = config.load()
         config.save(replace(cfg, tee_name_upstreams=bool(on)))
 
+    @_writes
     def setup_provider(self, provider: str, base_url: str = "") -> None:
         """Setup's provider: NanoGPT (as before: every kind of session on it), or another, whose kind of session is
         set to it (SETUP_KIND: Tinfoil's private one, Chutes' TEE one, any other's standard one), with its models,
@@ -521,6 +544,7 @@ class Manager:
         prefs["setup"] = provider
         self._save_prefs(prefs)
 
+    @_writes
     def set_start(self, session: str) -> None:
         if session not in SESSIONS:
             raise UserError(f"A session is one of {', '.join(SESSIONS)}.")
@@ -528,6 +552,7 @@ class Manager:
         prefs["start"] = session
         self._save_prefs(prefs)
 
+    @_writes
     def set_theme(self, theme: str) -> None:
         if theme not in THEMES:
             raise UserError(f"The colours are one of {', '.join(THEMES)}.")
@@ -725,6 +750,7 @@ class Manager:
 
     # ------------------------------------------------------------------ opening Claude Code
 
+    @_writes
     def open(self, folder: str, profile: str = "private", popen=None) -> None:
         folder = os.path.expanduser((folder or "").strip())
         if not folder:
@@ -740,6 +766,7 @@ class Manager:
         prefs["recent"] = [folder] + [f for f in prefs["recent"] if f != folder][:RECENT - 1]
         self._save_prefs(prefs)
 
+    @_writes
     def forget_folder(self, folder: str) -> None:
         prefs = self.prefs()
         prefs["recent"] = [f for f in prefs["recent"] if f != folder]

@@ -749,3 +749,29 @@ async def test_a_key_box_stores_the_key_for_its_own_tabs_server(window, ring):
     assert not st["provider_keys"]["tee"]["stored"] and st["provider_keys"]["standard"]["stored"]
     status, st = await call(app, "POST", "/api/key", {"key": "sk-x", "provider": "custom", "profile": "nope"})
     assert status == 400 and "no kind of session" in st["error"]
+
+
+def test_two_settings_changed_at_once_are_both_kept():
+    """Each change reads the settings file, changes it and writes it whole, and the server answers each request on a
+    thread of its own: Effort on one tab and Context on another, changed in quick succession, both read the file as it
+    was, and the second written took the first back out (until Nov 2026)."""
+    import threading
+    m = manager.Manager()
+    efforts, contexts = ("low", "medium", "high", "max"), config.CONTEXTS
+    for i in range(12):
+        effort, context = efforts[i % 4], contexts[i % 3]
+        m.save_profile("tee", {"reasoning": efforts[(i + 1) % 4]})
+        m.save_profile("private", {"context": contexts[(i + 1) % 3]})
+        both = threading.Barrier(2)
+
+        def change(name, fields):
+            both.wait()
+            m.save_profile(name, fields)
+        threads = [threading.Thread(target=change, args=("tee", {"reasoning": effort})),
+                   threading.Thread(target=change, args=("private", {"context": context}))]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        cfg = config.load()
+        assert (cfg.profile("tee").reasoning, cfg.profile("private").context) == (effort, context), i
