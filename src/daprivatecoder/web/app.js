@@ -229,6 +229,17 @@ function warningOf(st, kind) {
   return null;
 }
 
+// The models of a kind's profile its provider's list doesn't have, once that list is there: a provider changed in
+// Settings keeps the models of the one before where it has none of its own to give (Anthropic, a provider of your
+// own), and a session on them was refused by the provider at its first request, under a window that said Ready
+// (until Nov 2026)
+function unlisted(st, kind) {
+  const p = st.config && st.config.profiles[kind];
+  const list = S.models[kind];
+  if (!p || !list || !list.length || S.modelsLoading[kind] || S.modelsError[kind]) return [];
+  return [...new Set([p.model, p.opus_model, p.fast_model])].filter((m) => m && !list.some((x) => x.id === m));
+}
+
 // why a session of `kind` can't start yet, or "" when it can
 function notReady(st, kind) {
   if (st.ready[kind]) return "";
@@ -262,6 +273,9 @@ function renderTop(st) {
   if (st.config_error) { text = "The settings file has an error"; cls = "bad"; }
   else if (!st.claude.path) { text = "Needs Claude Code"; cls = "wait"; }
   else if (!SESSIONS.some((k) => st.ready[k])) { text = "Needs an API key"; cls = "wait"; }
+  else if (unlisted(st, st.start).length) {
+    text = `${KINDS[st.start].label} models not listed by ${providerName(st, st.start)}`; cls = "wait";
+  }
   else text = `Ready · new sessions are ${KINDS[st.start].label}`;
   bar.className = `status ${cls}`;
   $("#status-text").textContent = text;
@@ -310,6 +324,8 @@ function startSection(st) {
         const at = document.getElementById("settings");
         if (at) at.scrollIntoView({ behavior: smooth ? "smooth" : "auto", block: "start" });
       } }, "Change…")),
+    unlisted(st, kind).length ? h("div", { class: "warnbox" }, `Not listed by ${providerName(st, kind)}: `
+      + `${unlisted(st, kind).map((m) => shortModel(m, kind)).join(", ")}. Choose its models in Settings (Change…).`) : null,
     warningOf(st, kind),
     h("div", { class: "row" }, folder,
       st.can_choose_folder ? h("button", { onclick: () => guarded(async () => {

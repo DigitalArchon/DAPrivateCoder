@@ -419,3 +419,27 @@ const test = async () => {
     assert done.returncode == 0, done.stderr
     assert json.loads(done.stdout) == [[{"provider": "custom", "base_url": "https://my.example/v1"}], ["custom set up"],
                                        "", 1]
+
+
+def test_models_their_provider_doesnt_list_are_said_rather_than_ready():
+    """A provider changed in Settings keeps the models of the one before where it has none of its own to give
+    (Anthropic, a provider of your own): a session on them was refused by the provider at its first request, under a
+    window that said Ready (until Nov 2026). Once the provider's list is there, the models it doesn't have are said."""
+    code = script("KINDS", "SESSIONS", "PROVIDERS", "providerSaid", "providerName", "unlisted", "renderTop") + """
+const S = { models: {}, modelsLoading: {}, modelsError: {} };
+const shown = { "#status": {}, "#status-text": {}, "#banner": { classList: { toggle: () => {} } } };
+const $ = (sel) => shown[sel];
+const profiles = { standard: { provider: "custom-anthropic", base_url_shown: "https://my.example/anthropic",
+  model: "stub/alpha", opus_model: "claude-opus-5-5", fast_model: "stub/alpha" } };
+const st = { config: { profiles }, claude: { path: "/usr/bin/claude" }, ready: { standard: true }, start: "standard" };
+const test = ([list, loading]) => {
+  S.models = list ? { standard: list.map((id) => ({ id })) } : {};
+  S.modelsLoading = loading ? { standard: 1 } : {};
+  renderTop(st);
+  return [unlisted(st, "standard"), shown["#status-text"].textContent];
+};"""
+    known, unknown, loading, listed = run(code, [[["claude-opus-5-5", "claude-sonnet-5"], False], [None, False],
+                                                 [["claude-opus-5-5"], True], [["claude-opus-5-5", "stub/alpha"], False]])
+    assert known == [["stub/alpha"], "Standard models not listed by https://my.example/anthropic"]
+    assert unknown == loading == [[], "Ready · new sessions are Standard"]       # no list yet: nothing is said of it
+    assert listed == [[], "Ready · new sessions are Standard"]
