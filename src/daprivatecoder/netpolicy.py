@@ -91,6 +91,7 @@ def is_secure(url: str) -> bool:
     try:
         parsed = urlparse(url)
         host = parsed.hostname
+        parsed.port                     # raises on a port no address can have
     except ValueError:
         return False
     if parsed.scheme == "https":
@@ -107,8 +108,13 @@ def check_url(url: str, what: str = "This address") -> str:
     try:
         parsed = urlparse(url)
         host = parsed.hostname
-    except ValueError as e:              # one urlparse can't take (http://[::1]@evil.example/)
-        raise InsecureURL(f"{what} isn't an address DA Private Coder can use ({e}): {shown(url)[:80]!r}") from None
+        # a port no address can have (":+443", ":4_43", ":99999"): Python can't read it and httpx can, so the
+        # address was taken and a key just stored for it was then said to be another address's (DA Toolkit's
+        # netguard.problem reads it; until Nov 2026 this didn't)
+        parsed.port
+    except ValueError:                   # one urlparse can't take (http://[::1]@evil.example/). Its own words
+        # aren't said: they quote the host part whole, a password written into it too
+        raise InsecureURL(f"{what} isn't an address DA Private Coder can use: {shown(url)[:80]!r}") from None
     if parsed.scheme not in ("http", "https") or not host:
         raise InsecureURL(f"{what} must be a full https:// URL (got {shown(url)[:80]!r})")
     if not is_secure(url):

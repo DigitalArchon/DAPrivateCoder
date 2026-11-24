@@ -215,3 +215,25 @@ def test_what_is_said_of_the_address_never_has_its_password(ring, capsys, tmp_pa
     log = usagelog.UsageLog(tmp_path / "requests.log", "s")
     log.write("request", error=f"Client error '401 Unauthorized' for url '{ENDPOINT}/models'")
     assert "hunter2" not in (tmp_path / "requests.log").read_text()
+
+
+@pytest.mark.parametrize("port", ["+443", "4_43", "４４３", "99999", "abc", "-1"])
+def test_a_port_no_address_can_have_is_refused(port):
+    """Python can't read such a port and httpx reads some ("+443" as 443): the address was taken, and a key
+    just stored for it was then said to be another address's (until Nov 2026)."""
+    from daprivatecoder import netpolicy
+    url = f"https://evil.example:{port}/v1"
+    with pytest.raises(netpolicy.InsecureURL, match="isn't an address DA Private Coder can use"):
+        netpolicy.check_url(url)
+    assert not netpolicy.is_secure(url)
+    assert netpolicy.check_url("https://good.example:8443/v1") and netpolicy.check_url("https://good.example:/v1")
+
+
+def test_an_address_that_cant_be_read_is_refused_without_its_password():
+    """urlparse's own words quote the host part whole ("netloc 'alice:hunter2@ho℀st.example' contains invalid
+    characters under NFKC normalization"): they were said, password and all (until Nov 2026)."""
+    from daprivatecoder import netpolicy
+    for url in ("https://alice:hunter2@ho℀st.example/v1", "https://alice:hunter2@host.example:+443/v1"):
+        with pytest.raises(netpolicy.InsecureURL) as refused:
+            netpolicy.check_url(url)
+        assert "hunter2" not in str(refused.value) and "alice" not in str(refused.value)
