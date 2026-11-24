@@ -387,3 +387,35 @@ const test = ([provider, profiles]) => [setupDone({ config: { profiles } }, prov
                        "sessions on Anthropic: change that in Settings, in each kind's tab.") and back[1] == []
     assert alone[0] == "NanoGPT is set up."
     assert own[:2] == ["Your provider is set up for Standard sessions.", [["standard", True]]]
+
+
+def test_setups_own_provider_address_is_saved_by_enter_and_then_put_away():
+    """Setup's address of a provider of your own, once saved, stayed with its Save, and a second Save sent no provider
+    ("There's no provider called ''"); Enter in the field did nothing (until Nov 2026)."""
+    code = script("KINDS", "SESSIONS", "PROVIDERS", "providerSaid", "keyName", "SETUP_KINDS", "needsSetup", "setupWhat",
+                  "searchNeedsNanogpt", "check", "keyControls", "setupSection") + """
+const h = (tag, attrs, ...children) => ({ tag, attrs: attrs || {}, value: (attrs || {}).value, children: children.flat(),
+  querySelector: () => ({ append: () => {} }) });
+const S = { drafts: { setupUrl: "https://my.example/v1" }, replacing: "", setupOwn: "custom" };
+const sent = [], said = [];
+let drawn = 0;
+const act = (method, path, body) => { sent.push(body); return Promise.resolve(true); };
+const render = () => { drawn += 1; };
+const toast = (text) => said.push(text);
+const setupDone = (st, provider) => `${provider} set up`;
+const setupRest = () => [];
+const find = (node, tag) => node && typeof node === "object" ? (node.tag === tag ? node
+  : node.children.map((c) => find(c, tag)).find(Boolean)) : null;
+const st = { config_error: "", claude: { path: "/usr/bin/claude" }, setup_ready: false, setup: "nanogpt",
+  key: { stored: false }, editors: [] };
+const test = async () => {
+  const field = find(setupSection(st), "input");
+  field.attrs.onkeydown({ key: "Enter" });
+  await new Promise((r) => setTimeout(r, 0));
+  return [sent, said, S.setupOwn, drawn];
+};"""
+    js = code + "\ntest().then((r) => console.log(JSON.stringify(r)));"
+    done = subprocess.run([NODE, "-e", js], capture_output=True, text=True, timeout=30)
+    assert done.returncode == 0, done.stderr
+    assert json.loads(done.stdout) == [[{"provider": "custom", "base_url": "https://my.example/v1"}], ["custom set up"],
+                                       "", 1]

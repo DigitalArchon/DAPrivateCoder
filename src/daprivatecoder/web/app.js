@@ -422,12 +422,18 @@ function setupSection(st) {
   const rows = [pickRow];
   if (S.setupOwn) {
     const spec = PROVIDERS[S.setupOwn];
+    // once saved, drawn again: the address and its Save stayed, and a second Save sent no provider ("There's no
+    // provider called ''"); Enter in the field did nothing (until Nov 2026)
+    const go = () => act("POST", "/api/setup", { provider: S.setupOwn, base_url: url.value.trim() })
+      .then((done) => {
+        if (!done) return;
+        toast(setupDone(S.state, S.setupOwn), "ok", 3000);
+        S.setupOwn = ""; delete S.drafts.setupUrl; render();
+      });
     const url = h("input", { type: "text", class: "mono", placeholder: spec.placeholder, value: S.drafts.setupUrl || "",
-      oninput: (e) => { S.drafts.setupUrl = e.target.value; } });
+      oninput: (e) => { S.drafts.setupUrl = e.target.value; }, onkeydown: (e) => { if (e.key === "Enter") go(); } });
     rows.push(h("div", { class: "model-row" }, h("label", {}, "Address"), h("div", { class: "row" }, url,
-      h("button", { class: "small primary", onclick: () => act("POST", "/api/setup", { provider: S.setupOwn, base_url: url.value.trim() })
-        .then((done) => { if (done) { toast(setupDone(S.state, S.setupOwn), "ok", 3000); S.setupOwn = ""; delete S.drafts.setupUrl; } }) },
-      "Save"))));
+      h("button", { class: "small primary", onclick: go }, "Save"))));
   }
   let keyRow;
   if (chosen === "nanogpt" || S.setupOwn) {
