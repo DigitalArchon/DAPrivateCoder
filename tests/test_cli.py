@@ -296,3 +296,37 @@ def test_every_entry_point_writes_no_core_dump(run, tmp_path):
                           env=env, timeout=60, check=False)
     assert done.returncode == 0, done.stderr
     assert done.stdout.splitlines()[-1] == "0 True 0"
+
+
+def test_a_folders_file_that_cant_be_read_is_said_plainly_and_changes_no_editor(tmp_path, monkeypatch, capsys):
+    """`editor status`, `folder` and `on` were tracebacks with a folders' file that can't be read, and `on` had already
+    switched every editor on (until Nov 2026)."""
+    from daprivatecoder import folders
+    settings = tmp_path / "VSCodium" / "settings.json"
+    settings.parent.mkdir()
+    settings.write_text('{\n    "a": 1\n}\n')
+    monkeypatch.setattr(editor, "EDITORS", (("VSCodium", str(settings)),))
+    monkeypatch.setattr(editor, "wrapper_path", lambda: "/opt/pc/claude-editor")
+    folders.path().parent.mkdir(parents=True, exist_ok=True)
+    folders.path().write_text('{"folders": ["x"]}')
+    for argv in (["editor", "status"], ["editor", "folder", str(tmp_path), "private"], ["editor", "on"]):
+        assert cli.main(argv) == 1, argv
+        err = capsys.readouterr().err
+        assert "isn't as DA Private Coder writes it" in err and "Traceback" not in err, argv
+    assert editor.current(settings) is None
+
+
+def test_a_count_or_port_no_one_means_is_refused(capsys):
+    """`log -n 0` showed every request and `-n -3` all but the first three; `serve --port 99999` was a traceback (until
+    Nov 2026)."""
+    import socket
+    for argv in (["log", "-n", "0"], ["log", "-n", "-3"], ["serve", "--port", "99999"]):
+        with pytest.raises(SystemExit) as stop:
+            cli.main(argv)
+        assert stop.value.code == 2, argv
+    assert "1 or more" in capsys.readouterr().err
+    with socket.socket() as taken:
+        taken.bind(("127.0.0.1", 0))
+        taken.listen(1)
+        assert cli.main(["serve", "--port", str(taken.getsockname()[1])]) == 1
+    assert "daprivatecoder:" in capsys.readouterr().err

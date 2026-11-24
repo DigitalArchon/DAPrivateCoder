@@ -199,6 +199,9 @@ def _editor(args) -> int:
         f = folders.load()
         folders.save(folders.Folders(f.folders, other))
     wrapper = editor.wrapper_path() if args.action == "on" else None
+    # the folders' file read before any editor is changed: one that can't be read stopped `editor on` after it had
+    # switched every editor on, with a traceback (until Nov 2026)
+    listed = _folders_said() if wrapper else ""
     for name, path in found:
         value = editor.current(path)
         if editor.owner(value) == "other":
@@ -207,7 +210,7 @@ def _editor(args) -> int:
         changed = editor.switch(path, wrapper)
         print(f"{name}: {'changed' if changed else 'already so'} ({path})")
     if wrapper:
-        print("Claude Code in the editor now runs as each folder says (in a new conversation):\n" + _folders_said()
+        print("Claude Code in the editor now runs as each folder says (in a new conversation):\n" + listed
               + "\nTo choose a folder: daprivatecoder editor folder PATH private|tee|standard|usual"
               "\nTo switch back: daprivatecoder editor off")
     else:
@@ -506,6 +509,28 @@ def _serve(args) -> int:
     return 0
 
 
+def _count(text: str) -> int:
+    """-n: how many, at least one (0 showed every request, and -3 all but the first three, until Nov 2026)."""
+    try:
+        n = int(text)
+    except ValueError:
+        n = 0
+    if n < 1:
+        raise argparse.ArgumentTypeError(f"a number of requests, 1 or more (not {text!r})")
+    return n
+
+
+def _port(text: str) -> int:
+    """--port: one a socket can have (99999 was a traceback, until Nov 2026)."""
+    try:
+        n = int(text)
+    except ValueError:
+        n = -1
+    if not 0 <= n <= 65535:
+        raise argparse.ArgumentTypeError(f"a port from 0 to 65535 (not {text!r})")
+    return n
+
+
 def _parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="daprivatecoder", description="Claude Code on NanoGPT's end-to-end encrypted "
                                  "private models. Start it with: claude-private")
@@ -531,11 +556,11 @@ def _parser() -> argparse.ArgumentParser:
     c.add_argument("--profile", default=PRIVATE)
     c.set_defaults(func=_check)
     lg = sub.add_parser("log", help="what each session asked of which model, and what it cost")
-    lg.add_argument("-n", type=int, default=30, help="how many requests (default 30)")
+    lg.add_argument("-n", type=_count, default=30, help="how many requests (default 30)")
     lg.set_defaults(func=_log)
     s = sub.add_parser("serve", help="the proxy itself (claude-private starts one for each session)")
     s.add_argument("--profile", default=PRIVATE)
-    s.add_argument("--port", type=int, default=0, help="on its own: the port on 127.0.0.1 (default: any free one)")
+    s.add_argument("--port", type=_port, default=0, help="on its own: the port on 127.0.0.1 (default: any free one)")
     s.add_argument("--fd", type=int, help=argparse.SUPPRESS)
     s.add_argument("--parent", type=int, help=argparse.SUPPRESS)
     s.add_argument("--config", help=argparse.SUPPRESS)
@@ -566,10 +591,11 @@ def main(argv: list[str] | None = None) -> int:
     if argv[:1] == ["claude"]:
         return _claude(argv[1:])
     args = _parser().parse_args(argv)
-    from . import creds, editor
+    from . import creds, editor, folders
     try:
         return args.func(args) or 0
-    except (ConfigError, CliError, creds.KeyringUnavailable, editor.EditorError) as e:
+    # the folders' file that can't be read, and a port taken (serve), were tracebacks (until Nov 2026)
+    except (ConfigError, CliError, creds.KeyringUnavailable, editor.EditorError, folders.FoldersError, OSError) as e:
         return _fail("daprivatecoder", e)
     except KeyboardInterrupt:
         return 130
