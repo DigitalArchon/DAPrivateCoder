@@ -346,3 +346,20 @@ const test = async () => {
     done = subprocess.run([NODE, "-e", js], capture_output=True, text=True, timeout=30)
     assert done.returncode == 0, done.stderr
     assert json.loads(done.stdout) == [2, [{"id": "stub/alpha"}], "", None, 1]
+
+
+def test_the_tab_shown_asks_for_its_list_of_models_once():
+    """Settings' tab follows Start's kind until one is picked, and choosing that kind showed its tab without asking for
+    its list: "Loading NanoGPT's TEE models…" stayed for good (until Nov 2026)."""
+    text = APP_JS.read_text(encoding="utf-8")
+    models_section = re.search(r"^function modelsSection\(.*?^}$", text, re.M | re.S).group(0)
+    assert "wantModels(tab);" in models_section
+    code = script("wantModels") + """
+const S = { models: { private: [] }, modelsLoading: {} };
+const asked = [];
+const loadModels = (tab) => asked.push(tab);
+const later = [];
+const setTimeout = (fn) => later.push(fn);
+const test = (tabs) => { asked.length = 0; for (const t of tabs) wantModels(t); later.splice(0).forEach((fn) => fn());
+  return asked.slice(); };"""
+    assert run(code, [["private"], ["tee", "tee", "tee"], ["standard"]]) == [[], ["tee"], ["standard"]]

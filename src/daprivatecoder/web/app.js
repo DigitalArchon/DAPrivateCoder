@@ -303,8 +303,12 @@ function startSection(st) {
     // what it runs, where it starts: changed in its settings, below
     h("div", { class: "summary row" }, h("span", { class: "small" }, kindSummary(st, kind)),
       h("button", { class: "small ghost", onclick: () => {
-        S.tab = kind; if (!S.models[kind]) loadModels(kind); render();
-        const at = document.getElementById("settings"); if (at) at.scrollIntoView({ behavior: "smooth", block: "start" });
+        // at once while its list is still to come: the page drawn again as it arrives stopped a smooth scroll where
+        // it was, and the first Change… didn't reach Settings (until Nov 2026)
+        const smooth = Boolean(S.models[kind]);
+        S.tab = kind; render();
+        const at = document.getElementById("settings");
+        if (at) at.scrollIntoView({ behavior: smooth ? "smooth" : "auto", block: "start" });
       } }, "Change…")),
     warningOf(st, kind),
     h("div", { class: "row" }, folder,
@@ -652,6 +656,7 @@ function modelsSection(st) {
   if (!p) return null;
   const save = (fields, said = "Saved. New sessions use it.") => act("POST", "/api/profile", { profile: tab, fields }, said)
     .then((done) => { if (done && ("provider" in fields || "base_url" in fields)) { S.hosts = {}; loadModels(tab, true); } return done; });
+  wantModels(tab);
   const list = S.models[tab] || [];
   const routed = new Set();
   const rows = ROLES.flatMap(([key, label, hint]) => {
@@ -687,7 +692,7 @@ function modelsSection(st) {
     : `Loading NanoGPT's ${tab === "tee" ? "TEE" : "private"} models…`;
   // tabs, not the kind of session new ones start as (Start's): which kind's settings are shown here
   return h("div", { class: "section", id: "settings" }, h("h3", {}, "Settings for each kind of session"),
-    tabs(tab, (pick) => { S.tab = pick; S.customUrl = ""; if (!S.models[pick]) loadModels(pick); render(); }),
+    tabs(tab, (pick) => { S.tab = pick; S.customUrl = ""; render(); }),
     h("div", { class: "tab-body" },
     h("div", { class: "row" }, chipOf(tab), tab === st.start ? h("span", { class: "small muted" }, "New sessions start as this kind.") : null),
     // what this kind gives away, said here only when Start, above, doesn't already
@@ -1167,6 +1172,15 @@ function pageOrder(setupFirst) {
 async function refresh() {
   const n = ++S.asked;
   take(n, await api("GET", "/api/state"));
+}
+
+// the list of models of the tab shown, asked for unless it is there or on its way (not while drawing). The tab follows
+// Start's kind until one is picked, and choosing that kind showed its tab without asking for its list: "Loading
+// NanoGPT's TEE models…" stayed for good (until Nov 2026)
+function wantModels(tab) {
+  if (S.models[tab] || S.modelsLoading[tab]) return;
+  S.modelsLoading[tab] = -1;
+  setTimeout(() => loadModels(tab), 0);
 }
 
 // a profile's list of models (the one shown when not said). Only the last one asked for is kept: the list of an
