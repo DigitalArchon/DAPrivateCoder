@@ -232,6 +232,20 @@ def own_dialogs() -> None:
         set_for_self("GTK_USE_PORTAL", "0")
 
 
+def stop_on_signals(server) -> None:
+    """In the browser, the signals that end DA Private Coder (Ctrl+C, SIGTERM, a logout's SIGHUP) ask the server to stop,
+    as Quit does, so the window's server ends and the recent files list is put back; a second one stops without waiting for open requests. Until Nov 2026 Ctrl+C was a
+    KeyboardInterrupt in the main thread's join of the server's thread, which Python 3.12 then takes for ended: the
+    process left with that thread killed and none of this done, and SIGTERM and SIGHUP had no handler at all (DA
+    Toolkit's stop_on_signals). The app window has its own (on_started)."""
+    def stop(signum, frame) -> None:
+        if server.should_exit:
+            server.force_exit = True
+        server.should_exit = True
+    for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sig, stop)
+
+
 def main(argv: list[str] | None = None) -> None:
     import uvicorn
 
@@ -291,7 +305,7 @@ def main(argv: list[str] | None = None) -> None:
     launches = Launches()
     app = create_app(token, manager, desktop, on_quit=lambda: quit_all(), launches=launches)
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", http="h11",
-                                           ws="none", loop="asyncio", lifespan="off"))
+                                           ws="none", loop="asyncio", lifespan="off", timeout_graceful_shutdown=3))
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
     while not server.started:
@@ -306,6 +320,7 @@ def main(argv: list[str] | None = None) -> None:
 
     try:
         if use_browser:
+            stop_on_signals(server)
             told = f"{NAME} is running. Open this address (keep it to yourself: it opens the app):\n{url}"
             if args.no_open or sys.stdout.isatty():
                 print(told, flush=True)
