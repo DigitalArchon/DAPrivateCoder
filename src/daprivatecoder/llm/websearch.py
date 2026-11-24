@@ -16,7 +16,7 @@ import httpx
 
 from ..netpolicy import InsecureURL, check_url, shown
 from .client import reading_options
-from .secure_http import loads
+from .secure_http import ProviderError, loads
 
 # Best first, from DA-Assistant's measurement (2026-09-21: three queries, eight results each, scored
 # by primary sources): perplexity 10/16 with ~1,300 clean characters per result; valyu 5/16, clean
@@ -43,10 +43,18 @@ _DOMAIN = re.compile(r"^(?=.{1,253}$)([a-z0-9-]+\.)+[a-z]{2,}$")
 
 
 def clean_sites(sites) -> list[str]:
-    """Domains to search within, from what a model wrote ("https://github.com/mpv-player/" -> github.com)."""
+    """Domains to search within, from what a model wrote ("https://github.com/mpv-player/" -> github.com). An entry
+    that is no domain is left out, and so is one no address can be read from ("[docs.sophos.com]", which a URL
+    parser takes for a bad IPv6 address and raises on, or something that isn't text at all): until Nov 2026 one
+    such entry failed the whole search with the parser's own error (DA Toolkit's clean_sites)."""
     out = []
     for s in sites if isinstance(sites, list) else []:
-        host = urlsplit(s if "//" in str(s) else f"//{s}").hostname or ""
+        if not isinstance(s, str):
+            continue
+        try:
+            host = urlsplit(s if "//" in s else f"//{s}").hostname or ""
+        except ValueError:
+            continue
         if _DOMAIN.match(host) and host not in out:
             out.append(host)
     return out[:10]
@@ -104,7 +112,8 @@ async def web_search(base_url: str, api_key: str, query: str, provider: str = "p
     client = http or httpx.AsyncClient(timeout=TIMEOUT, **reading_options(base_url))
     try:
         r = await client.post(search_url(base_url), json=body, headers={"Authorization": f"Bearer {api_key}"})
-    except httpx.HTTPError as e:
+    except (httpx.HTTPError, ProviderError) as e:     # or an answer that isn't read (secure_http.capped_body):
+        # until Nov 2026 that one went past the tool's own "The search failed" as a protocol error
         # the address as it may be said: the tool's reply goes to the model, and a password written into
         # NanoGPT's address is kept in the keyring alone (as DA Vibe Manager's 414a0dc)
         raise SearchError(f"could not reach {shown(search_url(base_url))}: {e}") from e
