@@ -811,3 +811,20 @@ async def test_the_colours_chosen_come_back_in_the_state_the_page_is_drawn_from(
     assert status == 200 and st["theme"] == "light" and st["version"]
     text = (Path(manager.__file__).parent / "web" / "app.js").read_text(encoding="utf-8")
     assert "S.state.theme = e.target.value; applyTheme(e.target.value);" in text
+
+
+async def test_a_folder_opened_is_remembered_once_and_an_address_refused_is_said_as_typed(window, tmp_path):
+    """A folder opened as "~/project/" and as "~/project" was in Recent folders twice; and an address refused in
+    Settings began with the settings file's path and "[profiles.standard]: base_url" (until Nov 2026)."""
+    app, *_ = window
+    project = Path(os.environ["HOME"]) / "project"
+    project.mkdir()
+    await call(app, "POST", "/api/open", {"folder": "~/project/"})
+    st = (await call(app, "POST", "/api/open", {"folder": "~/project"}))[1]
+    assert st["recent"] == [str(project)]
+    for typed, said in (("http://example.com/v1", "That address uses plain http to example.com, which isn't on this "
+                                                  "machine"),
+                        ("", "Give your provider's address first.")):
+        status, body = await call(app, "POST", "/api/profile", {"profile": "standard", "fields": {
+            "provider": "custom", "base_url": typed}})
+        assert status == 400 and body["error"].startswith(said), body

@@ -404,6 +404,7 @@ class Manager:
         folder = os.path.expanduser((folder or "").strip())
         if not folder:
             raise UserError("Choose the folder to work in first.")
+        folder = os.path.normpath(folder)        # one folder once in Recent folders, typed with a "/" at its end or not
         if not os.path.isdir(folder):
             raise UserError(f"{folder} isn't a folder.")
         command = editor.open_command(name)
@@ -492,6 +493,17 @@ class Manager:
                 if not isinstance(fields[key], str):
                     raise UserError(f"{key} must be text.")
                 change[key] = fields[key].strip()
+        if "base_url" in change and providers.PROVIDERS.get(change.get("provider", profile.provider)) and \
+                providers.get(change.get("provider", profile.provider)).own_address:
+            # said of the address typed, as the field has it: the settings file's error began with the file's path and
+            # "[profiles.standard]: base_url" (until Nov 2026)
+            from .netpolicy import InsecureURL, check_url
+            if not change["base_url"]:
+                raise UserError("Give your provider's address first.")
+            try:
+                check_url(change["base_url"], "That address")
+            except InsecureURL as e:
+                raise UserError(str(e)) from None
         if change.get("provider", profile.provider) != profile.provider or \
                 change.get("base_url", profile.base_url) != profile.base_url:
             change["routes"] = {}           # one provider's hosts mean nothing to another
@@ -772,6 +784,8 @@ class Manager:
         folder = os.path.expanduser((folder or "").strip())
         if not folder:
             raise UserError("Choose the folder to work in first.")
+        # one folder once in Recent folders, typed with a "/" at its end or not (it was there twice, until Nov 2026)
+        folder = os.path.normpath(folder)
         config.load().profile(profile)                     # said now if there's no such profile
         command = commands.target_argv() + (["claude-private"] if profile == "private"
                                             else ["claude", "--profile", profile])
