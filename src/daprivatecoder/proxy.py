@@ -50,7 +50,7 @@ from .llm.dcap import since_boot
 from .llm.anthropic_bridge import (VISION_PROMPT, ImageDescriber, estimate_tokens, for_messages, has_images, message, sse,
                                    to_openai)
 from .llm.client import RANK, LLMClient, is_claude, is_private_mode, is_tee, private_id
-from .llm.errors import error_words, shown_error
+from .llm.errors import error_words, said as one_line, shown_error
 from .llm.secure_http import ACCEPT_ENCODING, loads
 from .llm.private_mode import (Attestation, Enclave, PrivateModeClient, list_private_models, offers_private_mode,
                                relay_said, relay_url)
@@ -252,6 +252,14 @@ def effort_unsupported(error: str) -> bool:
         "not supported", "unsupported", "unrecognized", "unknown parameter", "not allowed", "extra inputs"))
 
 
+def _their_words(e: BaseException) -> str:
+    """The provider's own message alone ("Invalid session"), one line and cut short; "" where it gave none (DA Vibe
+    Manager's gateway._their_words)."""
+    body = getattr(e, "body", None)
+    message = body.get("message") if isinstance(body, dict) else body if isinstance(body, str) else None
+    return one_line(message) if isinstance(message, str) else ""
+
+
 def upstream_refusal(model: str, e: BaseException, provider: str, answering: bool = False) -> Refused:
     """What Claude Code is told of a request for `model` that failed on its way to the provider (or,
     `answering`, while it answered), by the provider's HTTP status. Asked again only when that may
@@ -269,8 +277,16 @@ def upstream_refusal(model: str, e: BaseException, provider: str, answering: boo
         return Refused(402, f"{model}: your balance with {name} is too low for this request, so it wasn't run. Top it up, "
                             f"then try again. ({name} said: {words})", "billing_error")
     if status in (401, 403):
-        # never a 401 to Claude Code: it would take its own login for the one refused
-        return Refused(403, f"{model}: {name} refused the request (HTTP {status}): {words}")
+        # never a 401 to Claude Code: it would take its own login for the one refused. In words, not statuses: until
+        # Nov 2026 the user read "API Error: 403 … refused the request (HTTP 401): Error code: 401 - Invalid session",
+        # and nothing of where the key is entered (DA Vibe Manager's c0dfab1)
+        theirs = _their_words(e) or words
+        if status == 401:
+            flag = "" if provider == "nanogpt" else f" --provider {provider}"
+            return Refused(403, f"The API key for {name} wasn't accepted, so {model} wasn't asked anything. Check the "
+                                f"key in DA Private Coder's window (Settings), or enter it again with `daprivatecoder "
+                                f"key set{flag}`. ({name} said: {theirs})")
+        return Refused(403, f"{model} wasn't run for this API key: {name} refused it. ({name} said: {theirs})")
     if status == 429:
         return Refused(429, said, "rate_limit_error", retry=True)
     if status is not None and 400 <= status < 500:

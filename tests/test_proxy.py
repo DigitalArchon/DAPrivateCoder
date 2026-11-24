@@ -976,6 +976,39 @@ async def _provider_errors(*answers):
     return out
 
 
+async def test_a_key_the_provider_refuses_is_told_in_words_never_as_statuses():
+    """A key a provider refuses read in Claude Code as "API Error: 403 z-ai/glm-5.3: OpenRouter refused the request
+    (HTTP 401): Error code: 401 - Invalid session": two statuses, neither the user's to read, and nothing of where the
+    key is entered. Now what happened and what to do, with the provider's own message (DA Vibe Manager's c0dfab1);
+    still a 403 to Claude Code, which takes a 401 for its own login. A provider of your own reads as a sentence."""
+    from daprivatecoder.proxy import upstream_refusal
+
+    (key, key_earlier), (barred, barred_earlier) = await _provider_errors(
+        httpx.Response(401, json={"error": {"message": "Invalid session", "type": "invalid_api_key",
+                                            "code": "invalid_api_key", "status": 401}}),
+        httpx.Response(403, json={"error": {"message": "This model isn't available on your plan"}}))
+    for error in (key, key_earlier):
+        told = upstream_refusal("z-ai/glm-5.3", error, "openrouter")
+        assert told.status == 403 and not told.retry
+        assert str(told) == ("The API key for OpenRouter wasn't accepted, so z-ai/glm-5.3 wasn't asked anything. Check "
+                             "the key in DA Private Coder's window (Settings), or enter it again with `daprivatecoder "
+                             "key set --provider openrouter`. (OpenRouter said: Invalid session)")
+        assert "`daprivatecoder key set`. (NanoGPT said: Invalid session)" in str(upstream_refusal("glm", error, "nanogpt"))
+        assert str(upstream_refusal("glm", error, "custom")).startswith("The API key for your provider wasn't accepted")
+    for error in (barred, barred_earlier):
+        told = upstream_refusal("z-ai/glm-5.3", error, "openrouter")
+        assert told.status == 403 and not told.retry
+        assert str(told) == ("z-ai/glm-5.3 wasn't run for this API key: OpenRouter refused it. (OpenRouter said: This "
+                             "model isn't available on your plan)")
+    plain = (await _provider_errors(httpx.Response(401, text="no")))[0][0]
+    assert str(upstream_refusal("glm", plain, "nanogpt")).endswith("(NanoGPT said: no)")
+    # a private model's refusal (the relay's, its body as text) the same way, through the proxy
+    p, fake = make(fake=Refusing(nanogpt_refused(401, "Invalid session")))
+    r = await call(p, "POST", "/v1/messages", message("private/kimi-k3"))
+    assert r.status_code == 403 and r.json()["error"]["message"].startswith("The API key for NanoGPT wasn't accepted")
+    assert "HTTP 401" not in r.json()["error"]["message"] and "(NanoGPT said: Invalid session)" in r.json()["error"]["message"]
+
+
 async def test_claude_code_is_told_what_the_provider_answered_labelled_short_whichever_openai_wrote_it():
     """llm/errors.py (DA Toolkit's): the lock's openai (3.46, as every release since 3.38) writes only the body's
     message into an error's text, nothing of a body that isn't JSON, so Claude Code was told "glm: Error code: 400"
