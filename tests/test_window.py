@@ -801,3 +801,13 @@ async def test_a_list_of_models_that_cant_be_read_says_why_in_words(window, monk
     assert said == [(400, "https://my-server.example.com/v1 didn't answer in time when asked for its models."),
                     (400, "https://my-server.example.com/v1 couldn't be reached to ask for its models."),
                     (400, "https://my-server.example.com/v1 didn't answer with a list of models.")]
+
+
+async def test_the_colours_chosen_come_back_in_the_state_the_page_is_drawn_from(window):
+    """The theme's answer was {"ok": true}: the page, drawn again from the state it had, took the colours back until
+    its next look 20 s later (until Nov 2026)."""
+    app, *_ = window
+    status, st = await call(app, "POST", "/api/theme", {"theme": "light"})
+    assert status == 200 and st["theme"] == "light" and st["version"]
+    text = (Path(manager.__file__).parent / "web" / "app.js").read_text(encoding="utf-8")
+    assert "S.state.theme = e.target.value; applyTheme(e.target.value);" in text

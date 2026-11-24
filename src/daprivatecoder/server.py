@@ -179,7 +179,9 @@ def create_app(token: str, manager: Manager, desktop=None, on_quit: Callable[[],
 
     async def theme(request, body):
         await in_thread(manager.set_theme, str(body.get("theme") or ""))
-        return {"ok": True}
+        # the state, with the theme in it: the page drew itself again in the one it had before, until its next look
+        # 20 s later (until Nov 2026)
+        return await in_thread(manager.state)
 
     async def models(request, body):
         return {"models": await manager.models(str(request.query_params.get("profile") or "private"),

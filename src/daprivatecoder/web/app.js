@@ -1155,7 +1155,12 @@ function usageSection(st) {
 function appSection(st) {
   return h("div", { class: "section" }, h("h3", {}, "This app"),
     h("div", { class: "row small" }, "Colours:",
-      h("select", { onchange: (e) => { applyTheme(e.target.value); act("POST", "/api/theme", { theme: e.target.value }, "Saved."); } },
+      // kept in the state the page is drawn from, too: drawn again before it was saved (a tab clicked), the page took
+      // the colours back (until Nov 2026)
+      h("select", { onchange: (e) => {
+        S.state.theme = e.target.value; applyTheme(e.target.value);
+        act("POST", "/api/theme", { theme: e.target.value }, "Saved.");
+      } },
         [["dark", "Dark"], ["light", "Light"], ["system", "Match my system"]].map(([v, l]) => h("option", { value: v, selected: st.theme === v }, l)))),
     h("div", { class: "paths" },
       st.config ? h("div", {}, "Settings: ", h("span", { class: "mono" }, st.config.path)) : null,
