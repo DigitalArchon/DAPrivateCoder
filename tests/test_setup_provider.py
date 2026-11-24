@@ -82,3 +82,16 @@ async def test_a_standard_session_on_nanogpt_or_openrouter_treats_claude_names_a
             assert r.status_code == 200 and plain.calls[-1][0] == NANO.fast_model, provider
         r = await call(p, "POST", "/v1/messages", message("claude-opus-5-5"))
         assert r.status_code == 400 and "anthropic/… for Claude" in r.json()["error"]["message"], provider
+
+
+async def test_setup_follows_its_kind_to_the_provider_settings_moved_it_to(window, ring):
+    """Setup's Tinfoil, then the private profile moved back to NanoGPT in Settings: Setup still asked for Tinfoil's key,
+    which nothing used, and stayed to do with it stored (until Nov 2026). It is NanoGPT's now, and its key is asked."""
+    await window_call(window, "POST", "/api/setup", {"provider": "tinfoil"})
+    st = (await window_call(window, "POST", "/api/profile", {"profile": "private", "fields": {"provider": "nanogpt"}}))[1]
+    assert st["setup"] == "nanogpt" and st["setup_key"]["provider"] == "nanogpt" and st["setup_ready"] is False
+    st = (await window_call(window, "POST", "/api/key", {"key": "sk-nano-123456"}))[1]
+    assert st["setup_ready"] is True and st["ready"]["private"] is True
+    await window_call(window, "POST", "/api/setup", {"provider": "anthropic"})
+    st = (await window_call(window, "POST", "/api/profile", {"profile": "standard", "fields": {"provider": "openrouter"}}))[1]
+    assert st["setup"] == "openrouter" and st["setup_key"]["provider"] == "openrouter"

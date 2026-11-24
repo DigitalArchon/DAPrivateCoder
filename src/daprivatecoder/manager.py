@@ -213,6 +213,14 @@ class Manager:
         # Setup's provider and its key: NanoGPT's, or the one another provider's session runs on (setup_provider), so
         # a key of Anthropic's, Tinfoil's or Chutes' alone gets through Setup
         chosen = out.get("setup") if out.get("setup") in providers.PROVIDERS else "nanogpt"
+        if chosen != "nanogpt" and cfg:
+            # the kind Setup set, moved to another provider in Settings since: Setup is that one's, whose key the kind
+            # needs now. It asked for the first one's key, which nothing used, and stayed to do with it stored (until
+            # Nov 2026)
+            kind = SETUP_KIND.get(chosen, "standard")
+            now = cfg.profile(kind).provider
+            if now != chosen and (now == "nanogpt" or SETUP_KIND.get(now, "standard") == kind):
+                chosen = now
         out["setup"] = chosen
         spec = providers.get(chosen)
         if chosen == "nanogpt":

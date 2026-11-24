@@ -414,8 +414,10 @@ function setupSection(st) {
     h("select", { onchange: (e) => {
       const v = e.target.value;
       if (PROVIDERS[v].own) { S.setupOwn = v; render(); }
-      else { S.setupOwn = ""; act("POST", "/api/setup", { provider: v }, v === "nanogpt" ? "NanoGPT is set up."
-        : `${PROVIDERS[v].name} is set up for ${KINDS[SETUP_KINDS[v] || "standard"].label} sessions.`); }
+      else {
+        S.setupOwn = "";
+        act("POST", "/api/setup", { provider: v }).then((done) => { if (done) toast(setupDone(S.state, v), "ok", 6000); });
+      }
     } }, Object.keys(PROVIDERS).map((v) => h("option", { value: v, selected: v === (S.setupOwn || chosen) }, PROVIDERS[v].label))));
   const rows = [pickRow];
   if (S.setupOwn) {
@@ -423,8 +425,8 @@ function setupSection(st) {
     const url = h("input", { type: "text", class: "mono", placeholder: spec.placeholder, value: S.drafts.setupUrl || "",
       oninput: (e) => { S.drafts.setupUrl = e.target.value; } });
     rows.push(h("div", { class: "model-row" }, h("label", {}, "Address"), h("div", { class: "row" }, url,
-      h("button", { class: "small primary", onclick: () => act("POST", "/api/setup", { provider: S.setupOwn, base_url: url.value.trim() },
-        "Your provider is set up for Standard sessions.").then((done) => { if (done) { S.setupOwn = ""; delete S.drafts.setupUrl; } }) },
+      h("button", { class: "small primary", onclick: () => act("POST", "/api/setup", { provider: S.setupOwn, base_url: url.value.trim() })
+        .then((done) => { if (done) { toast(setupDone(S.state, S.setupOwn), "ok", 3000); S.setupOwn = ""; delete S.drafts.setupUrl; } }) },
       "Save"))));
   }
   let keyRow;
@@ -452,6 +454,26 @@ function setupSection(st) {
     keyRow = searchRow;
   }
   return h("div", { class: "section" }, h("h3", {}, "Setup"), ...rows, keyRow, ...setupRest(st));
+}
+
+// What Setup's provider, once saved, did: the kind it set runs on it, and that kind's list of models is its provider's
+// now (the list shown was the one before: Tinfoil's models "no longer listed" among NanoGPT's, until Nov 2026).
+// NanoGPT chosen moves no kind back from the provider it was set to: those still on another are said, where "NanoGPT
+// is set up" alone read as if every kind were back on it (Nov 2026)
+function setupDone(st, provider) {
+  if (provider !== "nanogpt") {
+    const kind = SETUP_KINDS[provider] || "standard";
+    S.hosts = {};
+    delete S.models[kind];
+    loadModels(kind, true);
+    return `${PROVIDERS[provider].own ? "Your provider" : PROVIDERS[provider].name} is set up for ${KINDS[kind].label} sessions.`;
+  }
+  const profiles = (st.config && st.config.profiles) || {};
+  const elsewhere = SESSIONS.filter((k) => profiles[k] && profiles[k].provider !== "nanogpt")
+    .map((k, i) => `${KINDS[k].label} sessions ${i ? "" : "still run "}on ${providerName(st, k)}`);
+  if (!elsewhere.length) return "NanoGPT is set up.";
+  const said = elsewhere.length > 1 ? `${elsewhere.slice(0, -1).join(", ")} and ${elsewhere[elsewhere.length - 1]}` : elsewhere[0];
+  return `NanoGPT is set up. ${said}: change that in Settings, in each kind's tab.`;
 }
 
 // Setup's rows that aren't a key: Claude Code, the terminal commands, and an editor not found
@@ -655,7 +677,11 @@ function modelsSection(st) {
   const p = st.config && st.config.profiles[tab];
   if (!p) return null;
   const save = (fields, said = "Saved. New sessions use it.") => act("POST", "/api/profile", { profile: tab, fields }, said)
-    .then((done) => { if (done && ("provider" in fields || "base_url" in fields)) { S.hosts = {}; loadModels(tab, true); } return done; });
+    .then((done) => {
+      // the list before is another provider's: not shown meanwhile as this one's
+      if (done && ("provider" in fields || "base_url" in fields)) { S.hosts = {}; delete S.models[tab]; loadModels(tab, true); render(); }
+      return done;
+    });
   wantModels(tab);
   const list = S.models[tab] || [];
   const routed = new Set();

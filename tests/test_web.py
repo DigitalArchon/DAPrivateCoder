@@ -363,3 +363,27 @@ const setTimeout = (fn) => later.push(fn);
 const test = (tabs) => { asked.length = 0; for (const t of tabs) wantModels(t); later.splice(0).forEach((fn) => fn());
   return asked.slice(); };"""
     assert run(code, [["private"], ["tee", "tee", "tee"], ["standard"]]) == [[], ["tee"], ["standard"]]
+
+
+def test_setup_says_what_it_set_and_what_still_runs_elsewhere():
+    """Setup's provider saved: the kind it set lists its new provider's models (the list before was shown, Tinfoil's
+    models "no longer listed" among NanoGPT's), and NanoGPT chosen says which kinds still run on another provider,
+    where "NanoGPT is set up" alone read as if every kind were back on it (until Nov 2026)."""
+    code = script("KINDS", "SESSIONS", "PROVIDERS", "providerSaid", "providerName", "SETUP_KINDS", "setupDone") + """
+const S = { hosts: { x: 1 }, models: { private: [{ id: "private/glm-5-3" }], standard: [] } };
+const asked = [];
+const loadModels = (kind, fresh) => asked.push([kind, fresh]);
+const test = ([provider, profiles]) => [setupDone({ config: { profiles } }, provider), asked.splice(0), Object.keys(S.models)];"""
+    def on(provider):
+        return {"provider": provider}
+    nano = {"private": on("nanogpt"), "tee": on("nanogpt"), "standard": on("nanogpt")}
+    tinfoil, back, alone, own = run(code, [
+        ["tinfoil", {**nano, "private": on("tinfoil")}],
+        ["nanogpt", {**nano, "private": on("tinfoil"), "tee": on("chutes"), "standard": on("anthropic")}],
+        ["nanogpt", nano],
+        ["custom", {**nano, "standard": {"provider": "custom", "base_url_shown": "https://my.example/v1"}}]])
+    assert tinfoil == ["Tinfoil is set up for Private sessions.", [["private", True]], ["standard"]]
+    assert back[0] == ("NanoGPT is set up. Private sessions still run on Tinfoil, TEE sessions on Chutes and Standard "
+                       "sessions on Anthropic: change that in Settings, in each kind's tab.") and back[1] == []
+    assert alone[0] == "NanoGPT is set up."
+    assert own[:2] == ["Your provider is set up for Standard sessions.", [["standard", True]]]
