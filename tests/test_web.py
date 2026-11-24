@@ -219,7 +219,8 @@ const applyTheme = () => {}, renderTop = () => {};
 const [setupSection, startSection, sessionsSection, editorSection, modelsSection, verifySection, appSection,
   usageSection] = ["setup", "start", "sessions", "editor", "models", "verify", "app", "usage"].map((n) => () => n);
 """
-    code = script("needsSetup", "pageOrder", "render") + stubs + """
+    code = script("needsSetup", "pageOrder", "render", "FIELDS", "fieldAt", "fieldBack") + stubs + """
+const document = { activeElement: null };
 const ready = { config_error: "", claude: { path: "/usr/bin/claude" }, setup_ready: true };
 const test = (opened) => {
   S.setupFirst = null; drawn.length = 0;
@@ -285,3 +286,39 @@ const test = (c) => c.summary ? kindSummary({ config: { profiles } }, c.summary)
     assert private.startswith("NanoGPT · glm-5-3 · Opus: kimi-k3-1-pro · Quick: deepseek-v4-1-flash · effort low")
     assert drawn[0] == "seg" and drawn[1] == "tabs" and drawn[2]["role"] == "tab" and drawn[2]["aria-selected"] == "true"
     assert use == [False, True, True, True]
+
+
+def test_a_field_keeps_the_focus_and_its_cursor_when_the_page_is_drawn_again():
+    """The page is drawn anew whenever something arrives: the list of models, as the window opened, took the focus
+    from the project folder being typed, and the rest of the path went nowhere; a list changed with the keyboard lost
+    it too (until Nov 2026). The field drawn in the same place is given the focus back, and the cursor where it was."""
+    code = script("FIELDS", "fieldAt", "fieldBack") + """
+class El {
+  constructor(tag, kids = [], type = "") {
+    Object.assign(this, { tagName: tag, children: kids, type, focused: false });
+    if (tag === "INPUT") Object.assign(this, { selectionStart: 0, selectionEnd: 0 });
+  }
+  matches() { return ["INPUT", "SELECT", "TEXTAREA"].includes(this.tagName); }
+  contains(el) { return el === this || this.children.some((c) => c.contains(el)); }
+  all() { return this.children.flatMap((c) => [c, ...c.all()]); }
+  querySelectorAll() { return this.all().filter((e) => e.matches()); }
+  focus() { this.focused = true; }
+  setSelectionRange(a, b) { Object.assign(this, { selectionStart: a, selectionEnd: b }); }
+}
+// Start (a folder field, a button), then Settings (its lists); drawn again, Settings may have gained a row
+const draw = (extra) => new El("MAIN", [new El("DIV", [new El("INPUT", [], "text"), new El("BUTTON")]),
+  new El("DIV", [new El("SELECT"), ...(extra ? [new El("SELECT")] : []), new El("SELECT"), new El("INPUT", [], "radio")])]);
+const test = ([section, index, extra]) => {
+  const before = draw(false), after = draw(extra);
+  const el = before.children[section].querySelectorAll()[index];
+  if (el.tagName === "INPUT") el.setSelectionRange(9, 9);
+  fieldBack(after, fieldAt(before, el));
+  const got = after.all().filter((e) => e.focused);
+  return got.map((e) => [after.children.indexOf(after.children.find((s) => s.contains(e))),
+    after.children.find((s) => s.contains(e)).querySelectorAll().indexOf(e), e.selectionStart ?? null]);
+};"""
+    folder, effort, shifted, first = run(code, [[0, 0, False], [1, 1, False], [1, 2, True], [1, 0, False]])
+    assert folder == [[0, 0, 9]]                    # the folder being typed, the cursor where it was
+    assert effort == [[1, 1, None]]                 # a list changed with the keyboard
+    assert shifted == []                            # a row came before it: no other kind of field is given it
+    assert first == [[1, 0, None]]

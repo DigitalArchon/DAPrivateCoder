@@ -1128,8 +1128,33 @@ function render() {
   if (S.setupFirst === null) S.setupFirst = needsSetup(st);
   const sections = { setup: setupSection, start: startSection, sessions: sessionsSection, editor: editorSection,
     models: modelsSection, verify: verifySection, app: appSection, usage: usageSection };
+  const focused = fieldAt($("#page"), document.activeElement);
   $("#page").replaceChildren(...pageOrder(S.setupFirst).map((name) => sections[name](st)).flat().filter(Boolean));
   $("#page").scrollTop = scroll;
+  fieldBack($("#page"), focused);
+}
+
+// The field with the focus, by where it is (its section, and its place among that section's fields), and where in
+// its text the cursor was: the page is drawn anew, and a field drawn again in its place is given them back. The
+// list of models arriving as the window opened took the focus from the project folder being typed, and the rest of
+// the path went nowhere; a list changed with the keyboard lost it too (until Nov 2026).
+const FIELDS = "input, select, textarea";
+function fieldAt(page, el) {
+  if (!el || !el.matches || !el.matches(FIELDS) || !page.contains(el)) return null;
+  const sections = [...page.children];
+  const section = sections.find((s) => s.contains(el));
+  if (!section) return null;
+  let start = null, end = null;
+  try { start = el.selectionStart ?? null; end = el.selectionEnd ?? null; } catch { /* a field without a cursor */ }
+  return { section: sections.indexOf(section), index: [...section.querySelectorAll(FIELDS)].indexOf(el),
+    tag: el.tagName, type: el.type || "", start, end };
+}
+function fieldBack(page, at) {
+  const section = at && page.children[at.section];
+  const el = section ? section.querySelectorAll(FIELDS)[at.index] : null;
+  if (!el || el.tagName !== at.tag || (el.type || "") !== at.type) return;
+  el.focus({ preventScroll: true });
+  if (at.start !== null) try { el.setSelectionRange(at.start, at.end); } catch { /* a field without a cursor */ }
 }
 
 // The window's sections, in order: Setup first if it was still needed when the window opened, else near the end;
